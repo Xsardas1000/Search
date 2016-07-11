@@ -1,0 +1,1385 @@
+Scalable Linear Causal Inference for Irregularly Sampled Time Series with
+
+Long Range Dependencies
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+0
+1
+
+ 
+ 
+]
+
+G
+L
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+6
+3
+3
+3
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Francois W. Belletti
+Computer Science Dept.
+
+UC Berkeley
+
+Evan R. Sparks
+
+Michael J. Franklin
+
+Alexandre M. Bayen
+
+Joseph E. Gonzalez
+
+Computer Science Dept.
+
+Computer Science Dept.
+
+EECS Dept.
+
+Computer Science Dept.
+
+UC Berkeley
+
+UC Berkeley
+
+Inst. of Transportation Studies
+
+UC Berkeley
+
+belletti@berkeley.edu
+
+sparks@cs.berkeley.edu
+
+franklin@berkeley.edu
+
+jegonzal@berkeley.edu
+
+UC Berkeley
+
+bayen@berkeley.edu
+
+Abstract
+
+Linear causal analysis is central to a wide range
+of important application spanning ﬁnance, the
+physical sciences, and engineering. Much of the
+existing literature in linear causal analysis oper-
+ates in the time domain. Unfortunately, the direct
+application of time domain linear causal analy-
+sis to many real-world time series presents three
+critical challenges: irregular temporal sampling,
+long range dependencies, and scale. Moreover,
+real-world data is often collected at irregular time
+intervals across vast arrays of decentralized sen-
+sors and with long range dependencies [1] which
+make naive time domain correlation estimators
+spurious [2]. In this paper we present a frequency
+domain based estimation framework which nat-
+urally handles irregularly sampled data and long
+range dependencies while enabled memory and
+communication efﬁcient distributed processing
+of time series data. By operating in the frequency
+domain we eliminate the need to interpolate and
+help mitigate the effects of long range depen-
+dencies. We implement and evaluate our new
+work-ﬂow in the distributed setting using Apache
+Spark and demonstrate on both Monte Carlo sim-
+ulations and high-frequency ﬁnancial trading that
+we can accurately recover causal structure at
+scale.
+
+1
+
+Introduction
+
+The analysis of time series is central to applications ranging
+from statistical ﬁnance [3,4] to climate studies [5] or cyber-
+physical systems such as the transportation network [6]. In
+many of these applications one is interested in estimating
+the mutual linear predictive properties of events from time
+series data corresponding to a collection of data streams
+each of which is a series of pairs (timestamp, observation).
+In most applications, observations occur at random, un-
+
+Figure 1: Frequency domain causal analysis work ﬂow for two
+irregularly sampled correlated and lagged Brownian motion incre-
+ments and the derived cross-correlogram of incremements which
+highlights their causal structure. Dotted lines represent 5th, 50th
+and 95th percentiles respectively. Frequency domain estimation
+is treated in Section 2 and LRD erasure in Section 3. Once the
+cross-correlogram has been estimated, practitioners read out the
+direction of linear causality in the asymmetry of the curve. The
+lag value for which cross-correlation reaches a maximum can be
+interpreted as the characteristic delay of causation of the two pro-
+cesses.
+
+(cid:1)
+
+ty∈Iy
+
+,(cid:0)yty
+
+evenly spaced and unaligned time stamps. In such a setting
+we therefore consider two underlying processes (Xt)t∈R
+and (Yt)t∈R that are only observed at discrete and ﬁnite
+timestamps in the form of two collections of data points:
+. We adapt our deﬁnition of causal-
+(xtx )tx∈Ix
+ity to this different theoretical framework. Let φ be a
+causal convolution kernel with delay τ (i.e. φτ (t) = 0
+whenever t < τ), (X) and (Y ) two continuous time
+stochastic processes, for instance, two Wiener processes.
+A popular instance of a causation kernel is for instance
+the exponential kernel: φ(t)τ,Θ=(α,β) = α exp(−β(t −
+τ )) if t > τ, 0 otherwise. We assume for instance that (Xt)
+is an Ornstein-Uhlenbeck process or a Brownian motion
+(Wiener process) [7] and
+
+ˆ
+
+dYt = dW Y
+
+t +
+
+s∈R
+
+φ(s)τ,ΘdX(t−s)
+
+(1)
+
+where W Y and W X are two independent Brownian mo-
+tions whose increments are classically referred to as the in-
+novation process. In the following, the parameter τ will be
+
+referred to as lag. We will consider that (Y ) is lagging with
+characteristic delay τ behind (X) which is causing it.
+We adopt the cross-correlogram based causality estimation
+approach developed in [8], in order to be consistent with
+Granger’s deﬁnition of causality as linear predictive ability
+of (dXs<t) and (dYs<t) for the random variable dXt [9].
+Let (X) and (Y ) be two Wiener processes. We consider
+that (X) has a causal effect on (Y ) if (dXs<t) is a more
+accurate linear predictor of dYt in square norm error than
+(dYs<t) is an accurate linear predictor of dXt. In other
+words (X) causes (Y ) if and only if
+
+(cid:104)
+(dXt − E(dXt|dYs, s < t))2(cid:105)
+
+(dYt − E(dYt|dXs, s < t))2(cid:105)
+
+(cid:104)
+
+>
+
+E
+
+E
+
+.
+
+(2)
+
+In order to quantify the magnitude of this statistical cau-
+sation, Huth and Abergel introduced in [8] the Lead-Lag
+Ratio (LLR) between (X) and (Y ) as
+
+(cid:80)
+(cid:80)
+
+LLRX⇒Y =
+
+h>0 ρ2
+h<0 ρ2
+
+XY (h)
+XY (h)
+
+(3)
+
+where ρXY (·) is the cross-correlation between the second
+order stationary processes (X) and (Y ). The analysis con-
+ducted in [8] proved (X) causes (Y ) is equivalent to
+
+LLRX⇒Y < 1
+
+thereby yielding an indicator of causation intensity be-
+tween processes which depends φτ,Θ through (1).
+
+1.1 Challenges with real world data:
+
+Unfortunately, in practical applications, time series data
+sets often present three main challenges that hinder the es-
+timation of even linear causal dependencies:
+
+• Irregular Sampling: Observations are collected at
+irregular intervals both within and across processes
+complicating the application of standard causal infer-
+ence techniques that rely on evenly spaced timestamps
+that align across processes.
+
+• Long Range Dependencies (LRD): Long range de-
+pendencies can result in increased and non vanishing
+variance in correlation estimates.
+
+• Scale: Real-world time series are often very large and
+high dimensional and are therefore often stored in dis-
+tributed fashion and require communication over lim-
+ited channels to process.
+
+In the following we show as in [8] that naive interpolation
+of irregularly sampled data may yields spurious causality
+inference measurements. We also prove that eliminating
+
+LRD is crucial in order to obtain consistent correlation es-
+timates. Unfortunately, standard time domain LRD erasure
+requires sorting the data chronologically and is therefore
+costly in the distributed setting. These costs are further ex-
+acerbated by time domain fractional differentiation which
+scales quadratically with the numbers of samples.
+To address these three critical challenge we propose a
+Fourier transform based approach to causal inference. Pro-
+jecting on a Fourier basis can be done with a simple sum
+operator for irregularly sampled data as described in [10].
+A novel and salient byproduct of our estimation technique
+is that there is no need to sort the data chronologically or
+gather the data of different sensors on the same computing
+node. We use Fourier transforms as a signal compressing
+representation where cross-correlations and causal depen-
+dencies can be estimated with sound statistical methods all
+while minimizing memory and communication overhead.
+In contrast to sub-sampling in which aliasing obscures
+short-range interactions, our methods does not introduce
+aliasing enabling the study of sort-range interactions. An
+exciting aspect of compressing by Fourier transforms is that
+it only affects the variance of the cross-correlogram with-
+out destroying the opportunity to study inter-dependencies
+at a small time scale.
+In section 2 we show that leveraging the frequency domain
+representation we present communication avoiding consis-
+tent spectral estimators [11] for cross-dependencies. We
+ﬁrst compress the time series by projecting without interpo-
+lation or reordering directly onto a reduced Fourier basis,
+thereby locally compressing the data. Spectral estimation
+then occurs in the frequency domain prior to being trans-
+lated back into the time domain with an inverse Fourier
+transform. The resulting output can be used to compute
+unbiased Lead-Lag Ratios and thereby identify statistical
+causation.
+In section 3, we provide a method to approximately erase
+LRD in the frequency domain, which has tremendous com-
+putational advantages as opposed to time domain based
+methods. Our analysis of LRD erasure as fractional pole
+elimination in frequency domain guarantees the causal es-
+timates we obtain are not spurious unlike those calculated
+naively on LRD processes [1, 2]. Finally, we apply these
+methods to synthetic data and several terabytes of real ﬁ-
+nancial market trade tables.
+In section 4, we present a novel analysis of the trade-off
+between estimator variance and communication bandwidth
+which precisely assesses the cost of compressing time se-
+ries prior to analyzing them. A three-fold analysis estab-
+lishes the statistical soundness of the contributions that ad-
+dress the three issues mentioned above. Studying data on
+compressed representations comes at an expected cost. In
+our setting this supplementary variance can be decreased
+in an iterative manner and with bounded memory cost on a
+
+single machine. These properties cannot be replicated to the
+best of our knowledge by time domain based sub-sampling.
+
+2
+
+Interpolation and spurious lead-lag
+
+In this section, we ﬁrst review existing techniques for in-
+terpolated time-domain estimation of second-order statis-
+tics in the context of sparse and random sampling along the
+time axis. Interpolating data is a usual solution in order to
+be able to use classic time series analysis [10, 12–14]. Un-
+fortunately it is not always suitable, as it can create spurious
+causality estimates and implies a supplementary memory
+burden.
+
+2.1 Second order statistics and interpolated data
+
+In order to infer a linear model from cross-correlogram es-
+timates by solving the Yule-Walker equations [15] or to
+compute a LLR (Eq. (3)) one needs to estimate the cross-
+correlation structure of two time series. Let (X) and (Y ) be
+two centered stochastic processes whose cross-covariance
+structure is stationary:
+
+γXY (h) = E (Xt−hYt) .
+
+(4)
+
+If data is sampled regularly (xn∆t, yn∆t)n=0...N−1 a con-
+sistent estimator for γXY (h) is:
+
+N−1(cid:88)
+
+(cid:92)γxy (h) =
+
+1
+
+N − h − 1
+
+x(n−h)∆tyn∆t
+
+(5)
+
+(we use (cid:98)A to denote an estimator for A). Classically, cross-
+
+correlation estimates can subsequently be computed as
+
+n=h
+
+(cid:92)ρXY (h) =
+
+(cid:92)γXY (h)
+
+(cid:113) (cid:92)γXX (0) (cid:92)γY Y (0)
+
+(6)
+
+ty∈Iy
+
+using any consistent cross-covariance estimator.
+Interpolating irregular records:
+The standard consistent estimator Eq. (5) cannot be com-
+puted when (x) and (y) do not share common timestamps.
+A classical way to circumvent the irregular sampling is-
+sue is therefore to interpolate the records (xtx)tx∈Ix
+and
+onto the set of timestamps (n∆t)n=0...N−1
+n=0...N−1
+
+(cid:1)
+(cid:0)yty
+therefore yielding two approximations (cid:0)(cid:93)xn∆t
+(cid:1)
+and ((cid:103)yn∆t)n=0...N−1 that can be studied as a synchronous
+(cid:80)N−1
+(cid:94)x(n−h)∆t(cid:103)yn∆t.
+
+timate is then
+While there are many interpolation techniques, a com-
+monly used method is last observation carried forward
+(LOCF). Note that interpolation may require substantial ad-
+ditional memory to render each time series at the resolu-
+tion of interactions which can be millisecond scale in many
+
+multivariate time series. An adapted cross-covariance es-
+
+(cid:92)(cid:94)γxy (h) =
+
+N−h−1
+
+n=h
+
+1
+
+crucial applications such as studying stock market interac-
+tions.
+We now consider the causality inference framework intro-
+duced in [8] and show how the LOCF interpolation tech-
+nique creates spurious causality estimates.
+Bias in LLR with irregularly sampled data: The LLR
+can be computed by several methods. Cross-correlation
+measurements on a symmetric centered interval are sufﬁ-
+cient statistics for this estimator. Therefore one can use syn-
+chronous cross-correlation estimates on interpolated data in
+order to compute the LLR. Carrying the last observation
+forward (LOCF) has been proven to create a bias in lag es-
+timation in [8]. The LOCF interpolation method introduces
+a causality estimation bias in which a process sampled at
+a higher frequency will be seen as causing another process
+which is sampled less frequently although these correspond
+to Brownian motions with simultaneously correlated incre-
+ments.
+
+2.2
+
+Interpolation-free causality assessment
+
+The Hayashi-Yoshida (HY) estimator was introduced in
+[16] to address this spurious causality estimation issue. The
+HY estimator of cross-correlation does not require data in-
+terpolation and has been proven to be consistent with pro-
+cesses sampled on a quantized grid of values [17] in the
+context of High Frequency statistics in ﬁnance.
+Correlation of Brownian motions: HY is adapted to
+measuring cross-correlations between irregularly sampled
+Brownian motions. Considering the successor operator
+s for the series of timestamps of a given process, let
+be the set of intervals delim-
+[t, s(t)]t∈Ix
+ited by consecutive observations of x and y respectively.
+The Hayashi-Yoshida covariance estimator over the covari-
+ation of (X) and (Y ) [7] is deﬁned as
+
+and [t, s(t)]t∈Iy
+
+HY[0,t](x, y) =
+
+t∈Ix,t(cid:48)∈Iy:ov(t,t(cid:48))
+
+(xs(t) − xt) · (ys(t(cid:48)) − yt(cid:48))
+
+(7)
+where ov(t, t(cid:48)) is true if and only if [t, s(t)] and [t(cid:48), s(t(cid:48))]
+overlap. The estimator can be trivially normalized so as to
+yield a correlation estimate.
+HY and fractional Brownian motions: No interpolation
+is required with HY but unfortunately this estimator is only
+designed to handle full differentiation of standard Brow-
+nian motions. Figure 2 shows how HY fails to estimate
+cross-correlation of increments on a fractional Brownian
+motion whereas the technique we present succeeds. In the
+following, we show how our frequency domain based anal-
+ysis naturally handles irregular observations and is able
+to fractionally differentiate the underlying continuous time
+process. This is in particular necessary when one studies
+factional Brownian motions with correlated increments. In
+the interest of concision, we refer the reader to [18] for the
+
+(cid:88)
+
+Pf (X) =
+
+T
+
+Xte−if tdt
+
+(8)
+
+An inconsistent estimator for the cross-spectrum is:
+
+Therefore, in order to estimate this function one may infer
+what corresponds to its frequency domain representation
+and then compute the inverse Fourier transform of the re-
+sult.
+Projecting onto Reduced Fourier Basis: We ﬁrst project
+(X) and (Y ) onto the elements of the Fourier basis of fre-
+quencies (l∆f )l=0...P , namely the pair (Pl∆f (X))l=0...P
+and (Pl∆f (Y ))l=0...P . By projecting onto a single rela-
+tively small set of orthonormal functions, we are able to
+compress and effectively re-align the observations (x) and
+(y). In practice using only a few thousand basis functions
+we are able to accurately recover the cross-correlogram. Fi-
+nally, this computation is sufﬁciently fast to execute inter-
+actively on a single laptop and can be easily expressed us-
+ing the map-reduce framework.
+Estimating the Cross-spectra: Computing projections
+onto a reduce Fourier basis enables exploratory data anal-
+ysis through the study of the cross-spectrum of (X) and
+(Y )
+
+Pl∆f (X) × Pl∆f (Y )
+
+(cid:16)
+(cid:17)
+(cid:18) (cid:92)Pl∆f (x) × (cid:92)Pl∆f (y)
+(cid:19)
+
+l=0...P
+
+.
+(10)
+
+(IXY (l∆f ))l=0...P =
+
+(cid:16) (cid:92)IXY (l∆f )
+(cid:17)
+
+=
+
+l=0...P
+
+l=0...P
+
+.
+(11)
+Local averaging of Eq. (11) with respect to frequencies
+is widely used [10, 11, 15] in cross-spectral analysis to
+identify the characteristic frequencies at which stochastic
+processes interact although they are observed at irregular
+times. Unfortunately, to compute characteristics delays or
+LLR (crucial steps in linear causal inference) we still need
+to estimate the cross-correlogram.
+Estimating the Cross-correlogram: To estimate the
+cross-correlogram we can take the inverse Fourier trans-
+form of the cross-spectrum (IXY (l∆f ))l=0...P which
+translates frequency analysis back into the time domain:
+
+γP
+XY (h) =
+
+1
+P
+
+IXY (l∆f ) eil∆f h.
+
+(12)
+
+Using the following consistent estimator:
+
+(cid:100)γP
+
+XY (h) =
+
+(cid:99)Ixy (l∆f ) eil∆f h
+
+(13)
+
+of the cross-covariance we can directly compute a con-
+sistent estimator of the cross-correlation using equation
+Eq. (6). The cross-correlation between (X) and (Y ) can
+now be estimated in the time domain with a discrete grid
+Gh of lag values ranging from −L∆h to L∆h with a reso-
+lution ∆h. As expected, aliasing will occur if the user spec-
+iﬁes a resolution in the cross-correlation estimate that is
+
+Figure 2: LRD Erasure: Monte Carlo simulation (100 samples)
+of two fractional Brownian motions with Hurst exponent 0.8 and
+simultaneously correlated increments. Spurious slowly vanishing
+cross-correlation hinders the HY estimation but does not affect
+our estimation with LRD erasure (see Section 3) as evident by
+nearly zero cross-correlation for non-zero lag.
+
+deﬁnition of a fractional Brownian motion.
+
+2.3 Fourier transforms for irregularly sampled data
+
+Our alternative approach to estimating cross-correlograms
+is based on the deﬁnition of the Fourier transform of a
+stochastic process. Considering a continuous time stochas-
+tic process (Xt)t∈[0...T ] and a frequency f ∈ [0 . . . 2π], the
+Fourier projection of (X) for the frequency f is deﬁned as
+
+ˆ
+
+t=0
+
+where i is the imaginary number. Much attention has
+been focused on the beneﬁts of the FFT algorithm which
+has been designed for the very particular base of ordered
+and regularly sampled observations. Our key insight is to
+go back to the very deﬁnition of the Fourier transform
+as an integral and express it empirically in summation
+form [10, 11]. Moreover, if the process (X) is observed at
+times (t1, . . . , tN ), one can estimate the Fourier projection
+by
+
+N(cid:88)
+
+(cid:99)Pf (x) =
+
+xtn e−if tn .
+
+(9)
+
+n=1
+
+Therefore we propose the following simple framework for
+frequency domain based linear causal inference:
+
+1. Project (x) and (y) on to a reduced Fourier basis.
+2. Estimate the cross-spectrum of (X) and (Y ) in the
+
+frequency domain.
+
+3. Apply the inverse Fourier transform to the cross-
+spectrum to recover the cross-correlogram and infer
+the linear causal structure.
+
+The intuition behind this estimation method is a change of
+basis that allows us to compute cross-covariance estimates
+without needing to address the irregularity of timestamps.
+Indeed the power spectrum f (·) is the element-wise Fourier
+transform of
+
+(cid:20) γXX (·) γY X (·)
+
+γXY (·)
+
+γY Y (·)
+
+(cid:21)
+
+.
+
+γ (·) =
+
+P(cid:88)
+
+l=0
+
+P(cid:88)
+
+l=0
+
+1
+P
+
+much higher than the average sampling frequency of the
+time series [10].
+In contrast to more cumbersome time domain synchroniza-
+tion relying on interpolation based methods (LOCF) or in-
+terval matching based estimations (HY), our method ele-
+gantly addresses time synchronization in the frequency do-
+main. While earlier work [10,11] has considered the appli-
+cation of frequency domain analytics to irregularly sampled
+data, our method is the ﬁrst to translate back to the time do-
+main to recover a consistent estimator of correlation. Alter-
+natively, Lomb-Scargle periodogram [19, 20] also enables
+the frequency domain analysis of irregularly observed data
+but suffers from the supplementary cost of a least square
+regression. To the best of our knowledge we are the ﬁrst
+to use frequency domain projections to compute the cross-
+correlogram in order to infer linear causal structure.
+2.4 The statistical cost of compression
+
+Central to the communication and memory performance of
+our technique is the ability to use a small number of Fourier
+projections relative to the number of observations and still
+accurately recover the cross-correlogram.
+Cross-correlogram Estimator Consistency: We can char-
+acterize the statistical properties of the cross-spectral esti-
+mator [10, 11, 15]. In particular, it is well known that for
+two distinct non-zero frequencies f1 and f2 the estima-
+tors (cid:92)IXY (f1) and (cid:92)IXY (f2) are asymptotically independent.
+Consequently, to obtain an estimator with variance O(V )
+V frequencies. We con-
+the user will need to project on 1
+ﬁrm this result numerically in Figure 6. The element-wise
+product of Fourier transforms is converted into the time
+domain by the inverse Fourier transform to yield a cross-
+correlogram. With very large datasets in which N >> 1
+V
+we obtain the suitable compression property of our algo-
+rithm.
+Issues with Non-smooth Cross-correlograms: As ex-
+pected, deterministic lags or seasonal components can re-
+sult in Fourier compression artifacts in the inverse Fourier
+transform. However, statistical estimation and removal of
+these deterministic components is standard in time series
+analysis [11, 15]. In the context of estimating non-trivial
+stochastic causal relationships (e.g., social networks, pairs
+of stock prices the ﬁnancial markets, cyberphysical sys-
+tems) random perturbations affect the causation delay. In
+these settings, the theoretical cross-correlation function is
+smooth. As a consequence, a few Fourier projections suf-
+ﬁce to accurately represent the cross-correlogram in fre-
+quency domain.
+
+2.5 Example of time domain exploratory data
+
+analysis through the frequency domain
+
+The time domain exploratory analysis we enable makes
+lead-lag relationships self-explanatory as shown in Fig-
+
+LOCF cross-correlation
+
+Fourier cross-correlation
+
+Figure 3: Cross-correlograms of LOCF interpolated data versus
+estimation via compression in frequency domain. The latter esti-
+mate does not present any spurious asymmetry due to the uneven
+sampling frequencies
+
+ure 1. We show in the following that it is not hindered by
+biases related to the fact that one process is sampled more
+seldom than the other.
+Numerical assessment of frequency domain based cor-
+relation measurements: We demonstrate, through simu-
+lation, that the spurious causation issue that plagues the
+LOCF interpolation [8] does not appear in our proposed
+method. We consider two synthetic correlated Brownian
+motions that do not feature any lead-lag and compare the
+estimation of LLR provided by two time domain interpola-
+tion methods and our approach. After having sampled these
+at random timestamps, in Table 1 and Figure 3 we compare
+the cross-correlation and LLR estimates obtained by LOCF
+interpolation and our proposed frequency domain analysis
+technique conﬁrming that our method does not introduce
+spurious causal estimation bias.
+
+N1
+N2
+
+1
+4.5
+10
+
+LOCF interpolation LLR Fourier transform LLR
+
+Avg +- std
+
+0.998 + −0.135
+6.863 + −1.678
+7.277 + −1.854,
+
+Avg +- std
+
+1.021 + −0.166
+1.053 + −0.320
+1.107 + −0.391
+
+Table 1: Comparison of LLR ratios with LOCF and Fourier
+transforms (1000 projections)
+for simultaneously correlated
+Brownian motions with different sampling frequencies. The LLR
+ratios should all be 1, one can observe the bias in the LOCF
+method.
+
+3 The Long Range Dependence (LRD) Issue
+
+A stochastic process is said to be long range dependent
+if it features cross-correlation magnitudes whose sum is
+inﬁnite [1]. Many issues arise in that case with correla-
+tion estimates becoming spurious. This phenomenon was
+ﬁrst discover when Granger studied the concept of cointe-
+gration between Brownian motions (integrated time series)
+[2]. On sorted Brownian motion data, this effect can be ad-
+dressed by differentiating the time series, namely comput-
+ing (∆Xt)t∈Z = (Xt − Xt−1)t∈Z. For fractional Brown-
+ian motion and LRD time series, the fractional differentia-
+(cid:81)h−1
+tion operator needs to be computed. It is deﬁned as
+j=0 (α − j) (−Xt−h)h
+
+(cid:32) ∞(cid:88)
+
+(cid:33)
+
+(∆αXt)t∈Z =
+
+h=0
+
+h!
+
+(14)
+Therefore, to study the cross-correlation structure of two
+integrated or fractionally integrated time series, one would
+have to compute (∆Xt)t∈Z or (∆αXt)t∈Z. The latter re-
+quires chronologically sorted data and synchronous times-
+tamps and has a quadratic time complexity with respect to
+the number of samples.
+
+.
+
+t∈Z
+
+3.1 Erasing memory in the frequency domain
+
+Erasing memory is of prime importance, in the case of the
+study of Brownian motions and fractional Brownian mo-
+tions alike. As pointed out in [1], LRD arises in many sys-
+tems, in particular those managed by humans, because of
+their ability to learn from previous events and therefore
+keep of memory of these in their future actions. From a
+computational and statistical point of view, it is challeng-
+ing to erase.
+Equivalence between differentiation in time domain
+and element-wise multiplication in frequency domain:
+Let (Xt)t∈[0,T ] be a continuous process whose fractional
+differentiate of degree α, dαX is Lebesgue-integrable with
+probability 1. If Xt vanishes at the boundaries of the inter-
+val, classically, almost surely,
+
+ˆ
+
+ˆ
+
+Pf (dαX) =
+
+T
+
+e−if tdαXt = (if )α
+
+T
+
+e−if tXtdt
+
+t=0
+
+t=0
+
+by a stochastic integration by part. Therefore, an estimate
+for Pf (dαx) is
+
+(cid:92)Pf (dαX) = (if )α (cid:92)Pf (X).
+
+Erasing memory through fractional pole elimination:
+The power spectrum of a fractional Brownian motion [18]
+with Hurst exponent H is asymptotically
+f 2H+1 for f <<
+1. This is the characteristic spectral signature of a long
+range dependent time series. H can therefore be estimated
+by the classical periodogram method for an individual time
+
+1
+
+series by conducting a linear regression on the magnitude
+of the power spectrum about 0 in a log/log scale [21].
+Wavelets are another family of orthogonal basis enabling
+a similar estimation [22]. One can therefore see the frac-
+tional differentiation operator of order H + 1/2 as a means
+to compensate for a pole of order 2H + 1 in square mag-
+nitude in 0. Multiplying the Fourier transform of the signal
+by (if )H+1/2 eliminates the issue. It does not require any
+preprocessing of the data, no interpolation or re-ordering
+and we will show below that it has tremendous computa-
+tional advantages in the context of distributed computing
+in terms of communication avoidance.
+An approximation of differentiation in the case of
+discrete observations: It is noteworthy though that this
+method is intrinsically approximate in the practical context
+of discrete sampling. Indeed the multiplication rule for dif-
+ferentiation in frequency domain we proved in the context
+of stochastic processes does not directly apply in the con-
+text of discrete observations. In order to ensure the sound-
+ness of the novel technique we designed, we conduct sev-
+eral numerical experiments.
+
+3.2 Testing frequency domain LRD erasure
+
+The example below considers two fractional Brownian mo-
+tions (X) and (Y ) Brownian motions with Hurst expo-
+nent H = 0.4 [1]. We compare the empirical distribu-
+tions of cross-correlation estimates obtained over 100 tri-
+als with and without LRD erasure in frequency domain. In
+Figure 4 we showcase an experiment with 9998 uniformly
+random observations for (X) and 6000 uniformly random
+observations for (Y ). While naive cross-correlation esti-
+mations lead to many spurious cross-correlation estimates
+with signiﬁcantly high magnitudes of estimated correlation
+values for processes that are in fact independent, (90% of
+the empirical distribution between −0.9 and 0.9) the conﬁ-
+dence interval we obtain with our novel frequency domain
+erasure method by fractional pole elimination is narrower
+(90% of the empirical distribution between −0.05 and
+0.05) and enables reliable analysis. The next section will
+expose the computational advantages of such a frequency
+domain based estimation as a communication avoidance
+mechanism.
+4 Distribution
+Scalable computation is essential to practical causal in-
+ference in real-world big data sets. Our proposed fre-
+quency domain approach provides a parallel communi-
+cation avoiding mechanism to efﬁciently compress large
+time-series data sets while still enabling the estimation of
+cross-correlograms.
+
+4.1 Computational setting
+
+Cluster computing presents the opportunity to enable faster
+analysis by leveraging the scale-out compute resources in
+
+the
+
+(cid:17)
+
+f =0,∆f,...,P ∆f
+
+frequency
+
+(cid:16)(cid:99)Pf (x) =(cid:80)N
+
+covariance
+of
+Fourier
+
+of
+domain
+set
+n=1 xtne−if tn
+
+Communication cost
+rect
+Now consider
+
+aggregation with indi-
+estimates:
+projections
+which
+we aggregate on each single machine separately prior to
+sending them over the network. The number of projections
+needed to have an estimator for cross-correlation with
+V ). Therefore, the size of the message
+variance V is O( 1
+sent out by each machine over the communication medium
+is now O(d 1
+V ) and representative of O(dN ) data points.
+V (cid:28) N, our method effectively com-
+If the user chooses 1
+presses the data prior to transmitting it over the network.
+It is noteworthy that the gain offered by this algorithm is
+system independent as long as communication between
+computing cores is the main bottleneck.
+Distributed LRD erasure: The computational complex-
+ity of fractional differentiation (Eq. (14)) is O(N 2d) in
+the time domain. Furthermore, due to LRD, time domain
+fractional differentiation cannot be accomplished using the
+overlapping partitioning strategy proposed in [25]. More-
+over, in distributed system, computing the fractional differ-
+entiation of a signal would require transmitting the entire
+data set across the network. As a consequence the band-
+width needed is O(N d).
+Alternatively, fractional differentiation in the frequency do-
+main is both computationally efﬁcient and easily paralleliz-
+able. Once the Fourier transforms have been computed the
+now substantially compressed frequency domain represen-
+tation can be collected on a single machine for further anal-
+ysis. We then proceed with the elimination of fractional
+poles by a simple element-wise multiplication. No supple-
+mentary communication is needed to erase LRD and there-
+fore the size of the data transmitted across the network is
+V d) as opposed to O (N d). This remarkable im-
+just O( 1
+provement in communication requires only a modest com-
+putational cost of O( 1
+V ) projections per data point on slave
+machines.
+The compute time therefore allows an interactive experi-
+ence for the user and becomes even shorter with a dis-
+tributed implementation on several machines. For example,
+on a single processor with a 2013 MacbookPro Retina we
+were able to compute 3000 projections on 105 samples in
+roughly a minute.
+
+Time on slace
+
+O(N d2)
+O(N d 1
+V )
+
+Comm. size
+O(N d + d2)
+
+Method
+
+Time domain
+
+O(d 1
+V )
+
+Fourier projection
+Memory: A potential concern with the frequency domain
+approach is that the aggregation of the Fourier projections
+to a single device could exceed the device’s memory. The
+V d), com-
+device will have to store projections of size O( 1
+pute element-wise products with time complexity O(d2 1
+V ),
+and store the cross-correlation estimates in a memory con-
+
+Figure 4:
+Spurious cross-correlation is erased by pole elimi-
+nation in frequency domain. The empirical cross-correlation dis-
+tribution on the left is affected by high magnitude spurious es-
+timates. On the right, frequency domain fractional pole erasure
+eliminated the issue, considerably narrowing down the interval
+between the 5th and 95th percentiles.
+modern data-centers. However to leverage scale-out clus-
+ter computing it is essential to minimize communication
+across the network as network latency and bandwidth can
+be orders of magnitude slower than RAM [23, 24].
+
+4.2 Computational advantages
+
+One mechanism to distribute time domain analysis of
+time series is to construct overlapping blocks as described
+in [25]. However, this technique only works if there is
+no LRD. The need to specify the appropriate replica-
+tion padding duration at preprocessing time makes it dif-
+ﬁcult to switch between the time scales at which cross-
+dependencies are computed.
+The novel frequency domain based methods we propose
+can entirely be expressed as trivial map-reduce aggregation
+operations and do not require sorting or interpolating the
+data. Indeed, the use of projections on a subset of a Fourier
+basis only requires element-wise multiplication and then an
+aggregated sum to construct a unique concise signature in
+frequency domain for each time series that was observed.
+The amount of compression can be chosen by the user.
+This yields a ﬂexible frequency domain probing method.
+Projecting on a few elements of the Fourier basis substan-
+tially reduces communication and memory complexity as-
+sociated with the estimation of cross-correlograms. As a
+consequence, the user can dynamically adjust the number
+of projections in order to progressively reduce the variance
+of the estimator.
+
+4.3 Fourier compression as a communication
+
+avoidance algorithm
+
+The computation of Fourier projections is communication
+efﬁcient in the distributed setting. The Fourier projection
+can be calculated by locally computing the sum of the map-
+ping of multiplications by complex exponentials. Then,
+only the local partial sums need to be transmitted across
+the network to compute the projections of the entire data
+set. In this section, we study d distinct processes with N
+data points each. Let V denote the desired variance for the
+cross-correlation estimator via the frequency domain.
+
+tainer of size O(d2). In particular, the maximum size of the
+memory needed by the algorithm on the master is O( 1
+V d2)
+which is small relative to the size of the data set in our cur-
+rent setting. Indeed, we assume that N is large enough and
+therefore 1
+
+V << N.
+
+5 Causality estimation on actual data
+
+Identifying leading components on the stock market is in-
+sightful in terms of assessing which stocks move the mar-
+ket and highlights the characteristic latency of trading re-
+actions. Consider two stocks, for instance AAPL and IBM
+(shares of Apple Inc. and IBM traded in the New York stock
+exchange). The trade and quote table of Thomson Reuters
+records all bids, asks, trades in volume and price. It is there-
+fore interesting to check if there is a causation link between
+the price at which AAPL is traded as compared to that of
+IBM. In particular, if we see an increase in the price of
+the former can we expect an increase shortly after in the
+later? With which delay? Weak causation or short delay in-
+dicates an efﬁcient market with few arbitrage opportunities.
+Signiﬁcant causation and longer delays would enable high
+frequency actors to take advantage of the causal empirical
+relationship in order to conduct statistical arbitrage [3].
+
+5.1 Causal pairs of stocks
+
+One critical application of the generic method we present
+is identifying which characteristic delays the NYSE stock
+market features as well as Lead-Lag ratios between pairs
+of stocks. Lead-Lag ratios that are signiﬁcantly different
+from 1.0 indicate that changes in the price of one stock
+trigger changes in the price of another. This indicates pair
+arbitrageurs are most likely using high frequency arbitrage
+strategies on this pair of stocks.
+
+5.2 Using Full Tick data
+
+In order to highlight signiﬁcant cross-correlation between
+pairs of stocks, one needs to consider high frequency dy-
+namics. As we will show in the following, cross-correlation
+vanishes after a few milliseconds on most stocks and fu-
+tures. In these settings it is then necessary to use full res-
+olution data which in this instance comes in the form of
+Full Tick quote and trade tables (TAQ). These TAQ ta-
+bles record bids, asks and exchanges on the stock market
+as they happen. The timestamps are therefore irregular and
+not common to different pairs of stocks. Also, stock prices
+are Brownian motions and therefore feature long memory.
+This context is therefore in the very scope of data intensive
+tasks we consider. We show our novel Fourier compression
+based cross-correlation estimator provides consistent esti-
+mates in this setting.
+
+5.3 Checking the consistency of the estimator
+
+Consider ask and bid quotes during one month worth
+of data. We create a surrogate noisy lagged version of
+AAPL with a 13ms delay and 91% correlation which
+is named AAPL-LAG. We study fours pairs of time
+series: APPL/APPL-LAG, AAPL/IBM, AAPL/MSFT,
+MSFT/IBM. We study the changes in quoted prices (more
+exactly, volume averaged bid and ask prices). We ob-
+tained quote data for these stocks at millisecond time res-
+olution representing several months of trading. We re-
+moved observations with redundant timestamps. The cross-
+correlograms obtained below are computed between 10
+AM and 2PM for 61 days in January, February and March
+2012. For each process, 3000 frequencies were used in
+the Fourier basis which is several orders-of-magnitude less
+than the number of observations that we get per day which
+ranges from 5 × 104 to 1 × 105. The estimate cross-
+correlograms in Figure 5 and their empirical signiﬁcance
+intervals show that our estimator is consistent and does not
+suffer from non-vanishing variance as a result of LRD. We
+observe an 89% average peak cross-correlation with an 8ms
+delay for the surrogate pair of AAPL stocks which conﬁrms
+our estimator is reliable with empirical data. While we ob-
+serve the Fourier compression artifacts, these only occur
+because our surrogate data features a deterministic delay.
+They do not affect pairs of actual observed processes. In
+Figures 5 and 6 we highlight a taxonomy of causal rela-
+tionships and show in particular that with our deﬁnition
+of causality anchored in linear predictions, a process may
+cause another one without any signiﬁcant delay. This may
+also be symptomatic of a delay shorter than the millisecond
+resolution of our timestamps.
+
+Figure 5: Average of daily cross-correlograms pairs of stock
+trade and quote data. Compression ratio is < 5%. We retrieve
+lag and correlation accurately on surrogate data. The daily aver-
+aged cross-correlogram of AAPL and IBM is strongly asymmet-
+ric, therefore highlight that AAPL causes IBM. The symmetry
+between AAPL and MSFT shows there is no such relationship
+between them. Finally, symmetric and offset in correlation peak
+show that MSFT causes IBM with a millisecond latency.
+
+0.60.40.20.00.20.40.6Lag in seconds0.00.20.40.60.81.01.2Cross-correlation (Fourier)Lag = 0.013 sLLR = 0.088Cross-correlation quote AAPL - AAPL-LAGDaily average Jan-Mar 2012Daily average and 95 perc conf int0.40.30.20.10.00.10.20.30.4Lag in seconds0.010.000.010.020.030.040.05Cross-correlation (Fourier)Lag = 0.000 sLLR = 1.749Cross-correlation quote AAPL - IBM Daily average Jan-Mar 2012Daily average and 95 perc conf int0.40.30.20.10.00.10.20.30.4Lag in seconds0.000.020.040.060.08Cross-correlation (Fourier)Lag = 0.000 sLLR = 1.032Cross correlation quote AAPL - MSFT Daily average Jan-Mar 2012Daily average and 95 perc conf int0.30.20.10.00.10.20.3Lag in seconds0.010.000.010.020.030.040.050.060.070.08Cross-correlation (Fourier)Lag = -0.003 sLLR = 0.582Cross correlation quote MSFT - IBMDaily average Jan-Mar 2012Daily average and 95 perc conf intFigure 6: The empirical variance of cross-correlogram of JPM
+and GS computed daily over the month of January 2012 decreases
+with the number of projections we choose, a number between 103
+and 104 is comfortable. This is to be compared with the 5 × 104
+to 105 samples taken into account each day, or 3× 106 to 6× 106
+samples over the 60-trading day window of study. The standard
+deviation of each cross-correlogram is represented in Figure 8.
+
+5.4 Choosing the number of projections
+
+In order to guide practitioners in their choice of the num-
+ber of Fourier basis elements to project onto, we conduct a
+numerical experiment on actual data. We compute an em-
+pirical standard deviation of the daily cross-correlogram
+obtained in January 2012 (19 days) for JPM (JP Morgan
+Chase) and GS (Goldman Sachs) with 10, 100, 1000 and
+10000 projections. Figures 6 and 8 show that, as expected,
+the variance decreases linearly with the number of projec-
+tions and we can obtain reliable estimates with 1000 pro-
+jections.
+
+5.5 Studying causality at scale
+
+A primary goal of this work is to enable practical scalable
+causal inference for time series analysis. To evaluate scala-
+bility in a real-world setting in which 1
+V << N, we assess
+the relation between AAPL and MSFT over the course of
+3 months. In contrast to our earlier experiments (shown in
+Figure 5), we no longer average daily cross-correlograms
+in and therefore only leverage concentration in the inverse
+Fourier transform step of the procedure. With only 3000
+projections for 5 × 106 observations per time series, the
+results we obtain on Figure 7 reveals the causal relation
+between AAPL, AAPL-LAG, IBM and MSFT consistently
+with Figure 5.
+Scalability: In order to assess the scalability of the algo-
+rithm in a situation where communication is a major bottle-
+neck, we run the experiment with Apache Spark on Ama-
+zon Web Services EC2 machines of type r3.2xlarge. In Fig-
+ure 8 we show that even with a large number of projections
+(10000) the communication burden is still low enough to
+achieve speed-up proportional to the number of machines
+
+Figure 7: Compression ratio is < 1%. On the entire data set
+we retrieve results similar to 5 therefore validating the use of our
+estimation of cross-correlograms in a scalable manner thanks to
+Fourier domain compression.
+
+used.
+
+Figure 8: On the left we plot the empirical standard deviation
+of daily cross-correlograms (Figure 6) with respect to the num-
+ber of projections showing that the variability decreases rapidly.
+On the right we plot the run time performance of our algorithm
+versus the number of Apache Spark EC2 machines demonstrating
+approximately linear speedup. The small number of projections
+(104) relative to the size of the data set (107 records) avoids com-
+munication.
+
+6 Conclusion
+
+Time series analysis via the frequency domain presents
+several presents unique opportunities in terms of provid-
+ing consistent causal estimates and scaling on distributed
+systems. We proposed a communication avoiding method
+to analyze causality which does not require any sorting or
+joining of data, works naturally with irregular timestamps
+without creating spurious causal estimates and makes the
+erasure of Long-Range dependencies embarrassingly par-
+allel. Our approach is based on Fourier transforms as com-
+pression operators that do not modify the second order
+properties of stochastic processes. Applying an inverse
+Fourier transform to the resulting estimated spectra enables
+exploration of dependencies in the time domain. With the
+resulting consistent cross-correlogram, one can compute
+Lead-Lag ratios and characteristic delays between pro-
+cesses thereby infer linear causal structure. We show that
+projecting onto 3000 Fourier basis elements is sufﬁcient
+to study stock market pair causality with tens of millions
+of high frequency recordings, thereby providing insightful
+analytics in a generic and scalable manner.
+
+0.80.60.40.20.00.20.40.60.8Lag in seconds0.00.20.40.60.81.01.2Cross-correlation (Fourier)Lag = 0.013 sLLR = 11.618Cross-correlation quote AAPL - AAPL-LAGAll observations Jan-Mar 20120.60.40.20.00.20.40.6Lag in seconds0.020.000.020.040.060.080.100.12Cross-correlation (Fourier)Lag = 0.000 sLLR = 0.739Cross-correlation quote AAPL - IBMAll observations Jan-Mar 20120.40.20.00.20.4Lag in seconds0.000.050.100.150.20Cross-correlation (Fourier)Lag = 0.000 sLLR = 0.985Cross-correlation quote AAPL - MSFTAll observations Jan-Mar 20120.40.30.20.10.00.10.20.30.4Lag in seconds0.020.000.020.040.060.080.100.12Cross-correlation (Fourier)Lag = -0.005 sLLR = 0.584Cross-correlation quote MSFT - IBMAll observations Jan-Mar 2012Acknowledgments: The authors would like to thank
+Prof. David R. Brillinger for his advice on the theo-
+retical aspects of the method we presented. This mate-
+rial is based upon work supported by the National Aero-
+nautics and Space Administration under Prime Contract
+Number NAS2-03144 awarded to the University of Cal-
+ifornia, Santa Cruz, University Afﬁliated Research Cen-
+ter. This research is supported in part by NSF CISE Ex-
+peditions Award CCF-1139158, DOE Award SN10040
+de-sc0012463, and DARPA XData Award FA8750-12-2-
+0331, and gifts from Amazon Web Services, Google, IBM,
+SAP, The Thomas and Stacey Siebel Foundation, Adatao,
+Adobe, Apple Inc., Blue Goji, Bosch, Cisco, Cray, Cloud-
+era, Ericsson, Facebook, Fujitsu, Guavus, HP, Huawei, In-
+tel, Microsoft, Pivotal, Samsung, Schlumberger, Splunk,
+State Farm, Virdata and VMware.
+References
+
+[1] P. Doukhan, G. Oppenheim, and M. S. Taqqu,
+Theory and applications of long-range dependence.
+Springer Science & Business Media, 2003.
+
+[2] C. W. Granger, “Causality, cointegration, and con-
+trol,” Journal of Economic Dynamics and Control,
+vol. 12, no. 2, pp. 551–559, 1988.
+
+[3] F. Abergel, J.-P. Bouchaud, T. Foucault, C.-A.
+Lehalle, and M. Rosenbaum, Market microstructure:
+confronting many viewpoints.
+John Wiley & Sons,
+2012.
+
+[4] R. S. Tsay, Analysis of ﬁnancial time series.
+
+Wiley & Sons, 2005, vol. 543.
+
+John
+
+[5] M. Mudelsee, Climate time series analysis. Springer,
+
+2013.
+
+[6] P. Shang, X. Li, and S. Kamae, “Chaotic analysis
+of trafﬁc time series,” Chaos, Solitons & Fractals,
+vol. 25, no. 1, pp. 121–128, 2005.
+
+[7] I. Karatzas and S. Shreve, Brownian motion and
+Springer Science & Business
+
+stochastic calculus.
+Media, 2012, vol. 113.
+
+[8] N. Huth and F. Abergel, “High frequency lead/lag re-
+lationships - empirical facts,” Journal of Empirical Fi-
+nance, vol. 26, pp. 41–58, 2014.
+
+[9] C. W. Granger, “Investigating causal relations by
+econometric models and cross-spectral methods,”
+Econometrica: Journal of the Econometric Society,
+pp. 424–438, 1969.
+
+[10] E. Parzen, Time Series Analysis of Irregularly Ob-
+served Data: Proceedings of a Symposium Held at
+Texas A & M University, College Station, Texas
+February 10–13, 1983.
+Springer Science & Busi-
+ness Media, 2012, vol. 25.
+
+[11] D. R. Brillinger, Time series: data analysis and the-
+
+ory. Siam, 1981, vol. 36.
+
+[12] N. Wiener, Extrapolation, interpolation, and smooth-
+ing of stationary time series. MIT press Cambridge,
+MA, 1949, vol. 2.
+
+[13] M. Friedman, “The interpolation of time series by re-
+lated series,” Journal of the American Statistical As-
+sociation, vol. 57, no. 300, pp. 729–757, 1962.
+
+[14] P. S. Linsay, “An efﬁcient method of forecasting
+chaotic time series using linear interpolation,” Physics
+Letters A, vol. 153, no. 6, pp. 353–356, 1991.
+
+[15] P. J. Brockwell and R. A. Davis, Time Series: Theory
+and Methods. New York, NY, USA: Springer-Verlag
+New York, Inc., 1986.
+
+[16] T. Hayashi, N. Yoshida et al., “On covariance esti-
+mation of non-synchronously observed diffusion pro-
+cesses,” Bernoulli, vol. 11, no. 2, pp. 359–379, 2005.
+
+[17] M. Hoffmann, M. Rosenbaum, N. Yoshida et al.,
+“Estimation of the lead-lag parameter from non-
+synchronous data,” Bernoulli, vol. 19, no. 2, pp. 426–
+461, 2013.
+
+[18] P. Flandrin, “On the spectrum of fractional brownian
+motions,” Information Theory, IEEE Transactions on,
+vol. 35, no. 1, pp. 197–199, 1989.
+
+[19] J. D. Scargle, “Studies in astronomical time series
+analysis. ii-statistical aspects of spectral analysis of
+unevenly spaced data,” The Astrophysical Journal,
+vol. 263, pp. 835–853, 1982.
+
+[20] N. R. Lomb, “Least-squares frequency analysis of un-
+equally spaced data,” Astrophysics and space science,
+vol. 39, no. 2, pp. 447–462, 1976.
+
+[21] W. Palma, Long-memory time series: theory and
+
+methods.
+
+John Wiley & Sons, 2007, vol. 662.
+
+[22] D. B. Percival and A. T. Walden, Wavelet methods for
+Cambridge university press,
+
+time series analysis.
+2006, vol. 4.
+
+[23] D. Peleg, “Distributed computing,” SIAM Mono-
+graphs on discrete mathematics and applications,
+vol. 5, 2000.
+
+[24] V. Kumar, A. Grama, A. Gupta, and G. Karypis, In-
+troduction to parallel computing: design and analysis
+of algorithms. Benjamin/Cummings Redwood City,
+CA, 1994, vol. 400.
+
+[25] F. Belletti, E. Sparks, M. Franklin, and A. M. Bayen,
+“Embarrassingly parallel
+time series analysis for
+large scale weak memory systems,” arXiv preprint
+arXiv:1511.06493, 2015.
+
+

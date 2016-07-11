@@ -1,0 +1,1661 @@
+Thread Progress Equalization: Dynamically
+
+Adaptive Power and Performance Optimization
+
+of Multi-threaded Applications
+
+1
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+1
+2
+
+ 
+ 
+]
+
+C
+D
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+6
+4
+3
+6
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Yatish Turakhia1, Guangshuo Liu2, Siddharth Garg3, and Diana Marculescu2
+
+1Department of Electrical Engineering, Stanford University
+
+2Department of Electrical and Computer Engineering, Carnegie Mellon University
+
+3Department of Electrical and Computer Engineering, New York University
+
+Abstract—Dynamically adaptive multi-core architectures have been proposed as an effective solution to optimize performance for
+peak power constrained processors. In processors, the micro-architectural parameters or voltage/frequency of each core to be
+changed at run-time, thus providing a range of power/performance operating points for each core. In this paper, we propose Thread
+Progress Equalization (TPEq), a run-time mechanism for power constrained performance maximization of multithreaded applications
+running on dynamically adaptive multicore processors. Compared to existing approaches, TPEq (i) identiﬁes and addresses two
+primary sources of inter-thread heterogeneity in multithreaded applications, (ii) determines the optimal core conﬁgurations in
+polynomial time with respect to the number of cores and conﬁgurations, and (iii) requires no modiﬁcations in the user-level source
+code. Our experimental evaluations demonstrate that TPEq outperforms state-of-the-art run-time power/performance optimization
+techniques proposed in literature for dynamically adaptive multicores by up to 23%.
+
+Index Terms—Multi-threaded applications, Thread progress, Power-constrained performance maximization.
+
+!
+
+1 INTRODUCTION
+
+T ECHNOLOGY scaling has enabled greater integration be-
+
+cause of reduced transistor dimensions. Microprocessor
+designers have exploited the greater transistor budget to
+provision an increasing number of processing cores on the
+chip, effectively using thread-level parallelism to increase
+performance. However, the power consumption per tran-
+sistor has not been scaling commensurately with transistor
+dimensions [11]. This problem is compounded by the so-
+called “power wall,” a hard limit on the maximum power
+that a chip can draw. A critical challenge, in this context,
+is to devise techniques that maximize performance within a
+power budget. One solution to this problem is ﬁne-grained,
+dynamic adaptation at run-time. Broadly speaking, dynamic
+adaptation refers to the ability to dynamically distribute the
+available power budget amongst the cores on a multicore
+processor.
+
+The traditional approach for ﬁne-grained dynamic adap-
+tation is based on dynamic voltage and frequency scaling
+(DVFS), in which the voltage and frequency of each core
+(or group thereof) can be adjusted dynamically, providing
+a range of power/performance operating points. Moreover,
+recent work has advocated the use of micro-architectural
+adaptation, in which the micro-architectural conﬁguration
+of each core to be adjusted dynamically (issue width, re-
+order buffer size and cache capacity etc.), which is par-
+ticularly effective in the context of “dark silicon” era [11]
+where the power budget is constrained but transistors
+are abundant. Although the techniques proposed in this
+paper are described in the context of micro-architectural
+adaptation, they are equally applicable for DVFS and we
+
+provide experimental results for both dynamic adaptation
+techniques.
+
+To perform ﬁne-grained dynamic adaptation, the oper-
+ating system has to solve a challenging global optimization
+problem, i.e., how to determine the conﬁguration of each
+core so as to maximize performance within the power
+budget. The problem is challenging for three reasons: (i)
+the solution must scale efﬁciently to multicore systems
+that have tens or even hundreds of cores; (ii) there is a
+complex relationship between core conﬁgurations and the
+corresponding power/performance of the thread running
+on the core (this is particularly true for micro-architectural
+adaptation); and, (iii) for multithreaded applications, there
+is no direct performance metric to maximize,
+it is
+unclear how speeding up a single thread will affect the
+performance of the application as a whole. These are the
+challenges that we address in this paper.
+
+i.e.,
+
+For sequential (i.e., single-threaded) applications,
+
+in-
+structions per second (IPS) is a clear, measurable indicator of
+performance. Moreover, for multiprogrammed workloads,
+the IPS summed over all threads indicates net throughput,
+and is a commonly used performance metric [15], [18], [28].
+However, for multithreaded applications, the sum of IPS
+metric can be a poor indicator of performance. For example,
+a thread that is spinning on a lock or waiting at a barrier
+might execute user-mode synchronization instructions, but
+these do not correspond to useful work. The problem is
+heightened by the fact that programmers exploit parallelism
+in different ways — for example, using data-level paral-
+lelism with barrier synchronization, or task-level parallelism
+
+with local/global task queues and static/dynamic load bal-
+ancing.
+Key Contributions In this paper, we propose Thread Progress
+Equalization (TPEq), a run-time mechanism to maximize
+performance within a power budget for multithreaded ap-
+plications running on multicore processors with per-core
+dynamic adaptation. The design of TPEq is motivated by
+multithreaded applications that make frequent use of barrier
+synchronization, but also generalizes, as we later discuss, to
+other models of parallelism.
+
+We start with the observation that, to best utilize the
+available power budget, all threads that are expected to
+synchronize on a barrier should arrive at the barrier at the
+same time. If this is not the case, early threads (threads that
+arrive at a barrier earlier than others) can be slowed down
+and the power saved by doing so can be allocated to speed-
+up lagging threads (threads that arrive at a barrier later than
+others). In this context, a natural question is why threads
+arrive at barriers at different times.
+
+Empirically, we have observed two fundamental reasons
+for differences in the times at which threads arrive at bar-
+riers. First, even if each thread executes exactly the same
+sequence of instructions, threads can have different instruc-
+tions per cycle (IPC) counts. For example, the sequence of
+data accesses that one thread makes can have less spatial
+locality than another thread’s accesses, resulting in more
+cache misses and lower IPC for the ﬁrst thread. We refer to
+this as IPC heterogeneity. Second, each thread might execute
+a different number of instructions until it reaches a barrier.
+This is because the threads need not be inherently load
+balanced and depending on the input data, each thread can
+follow a different control ﬂow path until it arrives at the
+barrier. We refer to this as instruction count heterogeneity.
+
+Figure 1 shows an example of two benchmark appli-
+cations, FFT and Water.Nsq (SPLASH-2 [47]), executing on
+a homogeneous multicore processor. FFT exhibits IPC het-
+erogeneity but no instruction count heterogeneity, i.e., each
+thread executes exactly the same number of instructions be-
+tween barriers. Water.Nsq exhibits both IPC heterogeneity,
+evident from different slopes of threads in progress plot, and
+instruction count heterogeneity. Note that over the entire
+length of the application, thread T16 executes more than
+1.15× the number of instructions compared to thread T7.
+
+The goal of TPEq is to dynamically optimize the conﬁg-
+uration of each core/thread such that each thread reaches
+the barrier at the same time by simultaneously accounting
+for both IPC and instruction count heterogeneity The design
+of TPEq is based on two components that operate synergis-
+tically:
+
+2
+
+Fig. 2: Overview of TPEq approach on a dynamically adap-
+tive multicore processor.
+
+conﬁgurations, and (b) the number of instructions
+each thread executes between barriers.
+
+TPEq is evaluated in the context of the Flicker [33]
+architecture, a recently proposed multicore processor
+design that supports dynamic adaptation of the micro-
+architectural parameters of each core. We compare TPEq to
+a number of existing techniques for power/performance
+optimization of multithreaded applications.
+
+approaches, TPEq has
+
+the
+
+the TPEq optimizer provides optimal
+
+Distinguishing Features of TPEq: Compared to existing
+state-of-the-art
+following
+distinguishing features: (i) TPEq holistically accounts for
+both IPC and instruction count heterogeneity, while a
+number of other approaches only address one or the other;
+(ii) TPEq enables ﬁne-grained adaptation for multicore
+processors where each core has multiple conﬁgurations;
+(iii)
+solutions
+in polynomial
+time, as opposed to other ﬁne-grained
+optimization techniques that solve NP-hard problems and
+cannot achieve optimal results in less than exponential time;
+(iv) TPEq requires no software annotations or programmer
+speciﬁed progress metrics; and (v) TPEq generalizes to
+multithreaded applications that exploit different models of
+parallelization, including barrier synchronization, pipeline
+parallel and thread pool models with dynamic load
+balancing.
+
+• TPEq Optimizer: Given an oracle that can predict (i)
+the IPC and power consumption of each thread for
+every core conﬁguration, and (ii) the total number of
+instructions the thread must execute until the next
+barrier, we propose and an efﬁcient polynomial-time
+algorithm that optimally determines the core con-
+ﬁguration for each thread to maximize application
+performance under power constraints.
+
+• TPEq Predictors: As input to the TPEq Optimizer, we
+implement accurate run-time predictors for (a) IPC
+and power consumption of a thread for different core
+
+2 TPEQ DESIGN AND IMPLEMENTATION
+Figure 2 shows an overview of the design of TPEq. The hard-
+ware platform consists of a dynamically adaptive multi-
+core architecture where, for example, each core can have
+a variable ROB size and the fetch width. In general, we will
+assume that each of the N cores can be set in one of M
+different conﬁgurations as described in Table 1. In its current
+implementation, TPEq assumes that the number of threads
+equals the number of cores, and a static mapping of threads
+to cores [48]. We believe TPEq can be extended to the case
+
+Core 21 wideROBCore 32 wideROBCore N2 wideROBCore 14 wideROBHardwareSystem SoftwareGlobal Shared MemoryCPI Stack ReadingsCPI PredictorPower PredictorTPEqOptimizerCPI Stacks on Current ConﬁgurationsApply New Optimal ConﬁgurationsCPI Stacks on All Possible ConﬁgurationsPower on All Possible ConﬁgurationsPower Budget3
+
+(a) IPC heterogeneity only.
+
+(b) IPC and instruction count heterogeneity.
+
+Fig. 1: Progress plots for the FFT and Water.Nsquared (SPLASH-2) benchmarks with 16 threads on a 16-core architecture.
+The solid vertical lines indicate barriers. Slope corresponds to IPS of that thread and hence the ﬂat regions indicate time
+periods when the thread is stalled waiting for lagging threads to arrive.
+
+where there are more threads than cores [35], but leave that
+as a topic for future work.
+
+The TPEq run-time system consists of two components.
+The TPEq predictors monitor on-chip performance coun-
+ters and predict the future application characteristics. The
+predictions are passed on to the TPEq optimizer, which
+determines the optimal conﬁguration of each core so as
+to maximize overall system performance within a power
+budget. We now describe the design and implementation of
+TPEq.
+
+2.1 TPEq Optimizer
+The TPEq optimizer is at the heart of TPEq approach.
+Although, in practice, the optimizer takes inputs from the
+TPEq predictor, we will discuss the optimizer in the context
+of an oracle that provides the optimizer with perfect infor-
+mation and relax this assumption later.
+
+To understand how the optimizer works, assume that we
+begin at the time instant when N threads exit a barrier and
+start making progress towards the next barrier. The optimal
+conﬁguration for each core/thread needs to be decided for
+the interval between these two successive barriers. Assume
+that an oracle provides access to the following information:
+• The number of instructions each thread executes
+until it enters the next barrier is in ratio w(1) : w(2) :
+. . . : w(N ). Note that w(1), w(2), . . . , w(N ) can be
+absolute instruction counts, but we only require the
+number of instructions each thread executes relative
+to other threads.
+• The CPI of thread i (1 ≤ i ≤ N) when it executes
+on a core with conﬁguration j (1 ≤ j ≤ M) is
+CP I(i, j), and the corresponding power dissipation
+is P (i, j). We assume, for now, that for a given core
+conﬁguration, the CPI and power dissipation of each
+thread do not change with time, at least until it
+reaches the next barrier. This assumption is relaxed
+later.
+
+Under the assumptions above, TPEq tries to assign a
+conﬁguration to each core/thread so as to stay within power
+budget Pbudget, while minimizing the time taken by the
+most lagging thread to reach the next barrier. A key con-
+tribution of our work is an algorithm that optimally solves
+this problem in O(M N log N ) time.
+
+The algorithm works as follows: TPEq starts by setting
+all cores to the conﬁguration that consumes the least power
+and determines the identity of the most lagging thread for
+this setting, i.e., the thread that would reach the barrier last.
+For thread i, the number of clock cycles required to reach
+the barrier when executing on conﬁguration j would be
+w(i)CP I(i, j). We deﬁne the progress of this thread as:
+
+progress(i) =
+
+1
+
+w(i)CP I(i, j)
+
+to capture the intuition that larger values of “progress” are
+better.
+
+The conﬁguration of the most lagging thread is then
+moved up to the next level1, and the new most lagging
+thread is determined. The core conﬁguration for this new
+most lagging thread is now moved up by one level, and so
+on. This continues until there is no core whose conﬁguration
+can be increased to the next level without violating the
+power budget. The resulting core conﬁgurations are optimal
+in terms of total execution time and are then updated
+in hardware. Algorithm 1 is a formal description of this
+optimization procedure.
+
+We now provide a formal proof of optimality for this
+
+of
+
+optimality
+
+algorithm below.
+contradiction): Let C =
+Proof
+<c(1) c(2) ... c(N )> be the TPEq conﬁguration vector of
+cores for N threads, such that c(1) corresponds to the
+core conﬁguration of thread 1, c(2) corresponds to the core
+
+(by
+
+1. Without loss of generality, the conﬁgurations are, by convention,
+sorted in ascending order of power consumption. Also, we limit the
+search to Pareto optimal conﬁgurations, by simply discarding ones where
+increasing power does not lead to increased performance.
+
+01020304050607080012345678x 106Time (105 cycles)Instruction countProgress Plot:SPLASH2−FFT  T1T2T3T4T5T6T7T8T9T10T11T12T13T14T15T1605001000150002468101214x 107Time (105 cycles)Instruction countProgress Plot:PARSEC−Fluidanimate  T1T2T3T4T5T6T7T8T9T10T11T12T13T14T15T16Algorithm 1: TPEq Optimization Procedure
+1 Ptot ← 0;
+// Init. all threads to lowest core
+2 for i ∈ [1, N ] do
+
+config.
+c(i) ← 1;
+Ptot ← Ptot + P (i, c(i));
+progress(i) ←
+
+3
+4
+5
+6 end
+7 while Ptot ≤ Pbudget do
+
+1
+
+w(i)CP I(i,c(i)) ;
+
+// Determine lagging thread l
+l ← arg mini∈[1,N ],c(i)<M
+// If no such thread exists
+if l = ∅ then
+
+1
+
+w(i)CP I(i,c(i))
+
+(cid:111)
+
+;
+
+(cid:110)
+
+8
+
+9
+10
+11
+
+12
+
+13
+
+14
+15 end
+
+break;
+
+lagging thread
+
+end
+// Increase core configuration of
+c(l) ← c(l) + 1;
+// Update progress and power
+progress(l) ←
+Ptot ← Ptot − P (l, c(l) − 1) + P (l, c(l));
+
+w(l)CP I(l,c(l)) ;
+
+1
+
+// Return optimal core configurations
+
+16 return c;
+
+conﬁguration of thread 2, and so on. Let Ptot be the total
+power consumption with conﬁguration vector C, such that
+Ptot ≤ Pbudget. Let progress(i, c(i)) denote the progress of
+thread i with core conﬁguration c(i) and min progress(C)
+denote the progress of the most lagging thread with conﬁg-
+uration vector C. Since only Pareto optimal conﬁgurations
+are considered, progress(i, c(i)) > progress(i, c∗(i)) =⇒
+P (i, c(i)) > P (i, c∗(i)). Now assume a better conﬁguration
+vector C*=<c∗(1) c∗(2) ... c∗(N )> with total power P ∗
+within same power budget exists i.e min progress(C∗) >
+min progress(C) and P ∗
+
+tot ≤ Pbudget.
+
+tot
+
+4
+
+larger than c∗(j), min progress(C) ≥ progress(j, c(j)).
+This implies min progress(C) ≥ progress(j, c∗(j)) ≥
+min progress(C∗). Again, a contradiction. Therefore, TPEq
+conﬁguration is optimal.
+Min-heap Based Implementation: A naive implementation
+of the TPEq optimization algorithm (Algorithm 1) would
+use a linear array to store the progress metric of each
+thread (line 12), resulting in a O(M N 2) time complexity.
+However, note that in each iteration of Algorithm 1, we
+only update the progress of the currently slowest thread, i.e.,
+least progress. Based on this observation, we propose an im-
+proved implementation of Algorithm 1 with O(M N log N )
+that stores the progress metric of each thread in a min-heap
+data-structure. A min-heap is a binary tree where the data
+in each node is less than or equal to its children.
+In the proposed implementation, setting up the min-
+heap data structure takes O(log N ) time (line 4), determin-
+ing the currently most lagging thread takes O(1) time (line
+8), and updating the progress metric of the lagging thread
+and reinserting it back into the heap takes O(log N ) time
+(line 12). Finally, the outermost while loop iterates at most
+M N, resulting in a time complexity of O(M N log N ).
+Epoch Length In practice, the TPEq optimization routine is
+called once every epoch in order to address fast variations
+in thread characteristics. The epoch length (E, measured in
+number of clock cycles) is conﬁgurable. The epoch length
+should be short enough to quickly adapt to CPI and power
+variations, but is practically limited by the computational
+overhead of the optimization procedure. In this context, the
+polynomial time complexity of the TPEq optimizer, which
+counts for less than 1% run-time overhead for a 1 ms
+epoch, enables the use of relatively ﬁne-grained temporal
+adaptation that would be otherwise impractical.
+
+Note that since epochs are not necessarily synchro-
+nized with barriers, in practice we need a slightly updated
+progress metric from the one used in Algorithm 1. There-
+fore, the progress of a thread is measured in terms of its
+predicted progress by the end of the current epoch:
+
+progress(i) =
+
+instrCount(i)
+
+w(i)
+
++
+
+w(i)CP I(i, c(i))
+
+,
+
+(1)
+
+E
+
+First, consider a case in which TPEq does not assign a
+conﬁguration to any thread that is larger than the optimal
+conﬁguration i.e c(i) ≤ c∗(i) ∀i ∈ [1, N ]. This also implies
+that Ptot ≤ P ∗
+tot. Without loss of generality, assume that
+ﬁrst K threads have strictly larger core conﬁgurations in
+the optimal assignment i.e c(i) < c∗(i) ∀i ∈ [1, K] and
+the remaining threads have same conﬁgurations as TPEq
+c(i) = c∗(i) ∀i ∈ [K + 1, N ]. If the most lagging thread l for
+conﬁguration C was in the ﬁrst K threads, the algorithm 1
+would not terminate as it is possible to increase core conﬁg-
+uration of thread l to c∗(l) and remain within total power
+tot (and therefore, Pbudget). If l ∈ [K + 1, N ], c(l) = c∗(l)
+P ∗
+and therefore, min progress(C) ≥ min progress(C∗).
+This is a contradiction.
+
+Next, consider a case in which TPEq assigns a con-
+ﬁguration to a thread j that
+is larger than the op-
+timal conﬁguration i.e. c(j) > c∗(j). This
+implies
+progress(j, c(j)) > progress(j, c∗(j)). But since TPEq
+only accelerates the most lagging thread in each itera-
+tion and since TPEq assigned thread j to c(j), which is
+
+where the ﬁrst time represents progress made so far and the
+second term represents predicted progress in the next epoch.
+
+2.2 TPEq Predictors
+In the previous sub-section we assumed that the TPEq
+optimizer has oracular knowledge of the relative instruction
+counts of the threads. In practice, the TPEq predictors deter-
+mine these values at run-time for each thread immediately
+after a synchronization related stall. TPEq also requires pre-
+dictions for CPI and power consumption of each thread for
+every core conﬁguration once every epoch, i.e., in synchrony
+with the TPEq optimization procedure.
+
+2.2.1 Relative Instruction Count Prediction
+We start by describing the relative instruction count predic-
+tor. The instruction count predictor predicts the number of
+instructions each thread executes relative to other threads.
+Our predictor is based on the observation that the number
+of instructions each thread executes between barriers, relative to
+
+other threads, remains the same. This motivates the use of a
+history based predictor to predict relative instruction counts.
+Intuitively, we note that the difference in relative in-
+struction counts of several multithreaded workloads arise
+as a result of imbalance in the amount of computing for
+a thread, which persists across several barriers. Singh et
+al. [41] were perhaps the ﬁrst to qualitatively observe the
+locality in the data distribution in threads across successive
+barriers in many of our benchmark algorithms and provide
+insights into this characteristic. They noted that successive
+barriers correspond to very small “time-steps” in the physi-
+cal world, and that the characteristics of the physical world
+change slowly with time. Hence, the amount of work to be
+performed by a thread in one time-step, is a good predictor
+for the amount of work in the next time-step. In the progress
+plot for Water.Nsq (see Figure 1b), for instance, the number
+of water molecules per thread remain nearly constant across
+barriers. Consequently, thread T16 (T7), with most (least)
+number of water molecules, always executes the most (least)
+instructions in any inter-barrier interval.
+
+Quantitatively, we have veriﬁed this trend over all bar-
+rier synchronization based benchmarks in the SPLASH-2,
+PARSEC and Phoenix benchmarks suites (see Table 3 for
+more details) that we experimented with. In particular,
+Figure 3 shows the a scatter plot of relative instruction
+counts in barrier phase t + 1 versus the relative instruction
+counts of threads in barrier phase t across all benchmarks
+with instruction count heterogeneity (coded in different
+colors). The mean absolute relative error using a last-value-
+predictor for relative instruction counts was found to be
+only 4.2%. Liu et al. [27] have observed similar locality
+behaviour across the outermost loops of the SpecOMP par-
+allel applications, and use last-value prediction to perform
+voltage/frequency scaling for each thread. However, there
+are signiﬁcant differences between their work and ours and
+these are discussed in Section 5.
+Implementation Details The TPEq relative instruction
+count predictor keeps a running count of the number of
+user mode instructions executed by a thread. The relative
+instruction count, w(i), of each thread is updated with its
+running count at the end of any synchronization related
+stall. This technique is simple, requires no synchronization
+between threads to detect barriers and avoids the need for
+the user to indicate when barriers occur.
+
+In our scheme, if an application has only barrier related
+synchronization, all threads will update as they exit the
+barriers. In addition, the weight in any inter-barrier interval
+will automatically correspond to the average number of
+instructions per barrier executed by the thread so far. In fact,
+TPEq does not distinguish barrier related stalls from other
+synchronization stalls such as ones due to critical sections.
+For one, barriers can be implemented using other syn-
+chronization primitives as well, including locks [32], which
+we would like to capture. As well, taking into account all
+synchronization related stalls introduces certain advantages
+that will be discussed in later sections.
+
+Any synchronization related stall detection mechanism
+can be used to determine when these stalls occur. Hardware
+based thread progress metrics have been proposed [24] to
+detect threads that are spinning on locks or waiting at
+barriers. These solutions are the most general but suffer
+
+5
+
+Fig. 3: Scatter plot of predicted and actual relative instruc-
+tion counts between successive barriers for different bench-
+marks.
+
+from false positives and true negatives, resulting in incor-
+rect optimization decisions. Alternatively, software based
+solutions can be implemented, either using programmer or
+compiler inserted annotations, or by modifying the thread-
+ing library and OS synchronization primitives [8]. We adopt
+the latter approach. As in [8], we detect scenarios in which
+the threads are stalled due to synchronization and update
+our predictors with current relative instruction counts while
+exiting the stall.
+
+2.2.2 CPI and Power Prediction
+We now describe the CPI and power predictors that we use
+in TPEq which, as shown in Figure 4, are called once every
+epoch.
+
+Let CP It(i, j) be the CPI of thread i on core conﬁg-
+uration j in epoch t. The goal of the CPI predictor is to
+determine CP It+1(i, j) for all j ∈ [1, M ]. Duesterwald et
+al. [9] have shown that for predicting the CPI in the next
+epoch assuming the same core conﬁguration, i.e., charac-
+terizing temporal variability in CPI, last-value predictors
+perform on a par with exponentially-weighted mean, table-
+based and cross-metric predictors. The accuracy of last-
+value predictors improves for shorter prediction epochs. We
+choose to use a last-value predictor in TPEq because of its
+simplicity, and because we are able to afford relatively short
+epoch lengths. The last-value predictor simply implements:
+
+CP It+1(i, j) = CP It(i, j).
+
+To predict CP It+1(i, k) for all k (cid:54)= j given CP It+1(i, j)
+, we need an approach that predicts the performance on one
+core type given performance on another core type. For this,
+TPEq uses CPI stack information measured using hardware
+counters broken down into four components: compute CPI
+(base CPI in the absence of miss events), memory CPI
+(cycles lost due to misses in the memory hierarchy), branch
+CPI (cycles lost due to branch misprediction) and synchro-
+nization CPI (cycles lost due to stalls on synchronization
+instructions).
+
+With these measurements on conﬁguration j, we predict
+the CPI on conﬁguration k using a linear predictor as
+
+00.020.040.060.080.10.120.140.1600.020.040.060.080.10.120.140.16Actual Rel. Instruction CountPredicted Rel. Instruction Count  Predicted = Actual5% error6
+
+power prediction signiﬁcantly. However, we did observe
+that moving from a simple linear predictor to a quadratic
+model did improve accuracy. Thus, the TPEq power predic-
+tor predicts the power consumption for different core types
+as follows:
+
+P (i, j) = β0,j +
+
+β1,j
+
+CP I(i, j)
+
++
+
+β2,j
+
+CP I(i, j)2
+
+where β0,j, β1,j, and β2,j are ﬁxed parameters that are
+learned for each core type ofﬂine and stored for online use.
+
+2.3 Implementation Details
+The TPEq optimization and prediction routines are imple-
+mented in software. The primary hardware overhead that
+TPEq introduces is the hardware required to track the CPI
+stack components. As mentioned before, existing commer-
+cially available processors such as the Intel Pentium 4 and
+IBM POWER5 already have hardware performance counters
+to measure CPI stack components.
+
+Based on the design proposed by Eyerman et al. [12], we
+estimate the hardware overhead for TPEq as follows: (i) one
+global 32-bit register and counter per CPI stack component
+(ﬁve registers/counters in all), (ii) a shared front-end miss
+table (sFMT) with as many rows as number of outstanding
+branches supported, an ROB ID and local branch mispre-
+diction penalty counter per-row, and a shared I-cache/TLB
+miss counter, (iii) a back-end miss counter for D-cache/D-
+TLB misses; and (iv) a long latency functional unit counter.
+The counters in (ii), (iii) and (iv) are all local counters and
+only need to count up to the maximum miss penalties for
+their respective events.
+
+The TPEq prediction and optimization procedures are
+invoked by the OS in every epoch using an interrupt. The
+CPI stack values on each core are stored to shared memory,
+after which one core, designated as the leader, reads these
+values, performs CPI and power predictions and determines
+the optimal core conﬁgurations. All other cores are stalled
+in this period. Finally, the conﬁguration of each core is
+updated based on the optimal conﬁgurations and control
+is passed back to user code. In the empirical results section,
+we quantify all the execution time overheads of the TPEq
+procedures.
+
+2.4 Comparative Analysis of TPEq
+To provide more insight into our proposed approach, we
+compare TPEq qualitatively to three state-of-the-art ap-
+proaches for maximizing the performance of multi-threaded
+applications.
+Criticality Stacks (CS): Criticality Stacks [8] is a recently
+proposed metric for thread criticality that measures the
+amount of time in which a thread is active (not stalled due
+to synchronization) in each epoch divided by the number
+of other threads active in the same epoch. Intuitively, the
+most critical thread is one that is active while all others are
+stalled.
+
+TPEq incorporates a notion of criticality similar to that of
+CS through the weights w(i). Threads that spend more (less)
+time stalled will have lower (higher) w(i) values for TPEq,
+and similarly, lower (higher) criticality values in CS. The
+
+Fig. 4: CPI and power prediction overview. A detailed
+discussion of the TPEq predictors is in Section 2.2.1.
+
+follows:
+CP It(i, k) = αcomp
+
+jk CP I comp
+CP I branch
+
+(i, j) + αmem
+(i, j) + αsynch
+
+jk CP I mem
+jk CP I synch
+
+t
+
+t
+
+t
+
+(i, j)
+
+t
+
+jk
+
+(i, j).
+
++αbranch
+The pairwise α∗
+jk parameters, one for every pair of core
+conﬁgurations, are learned ofﬂine using training data ob-
+tained from a set of representative benchmarks and stored
+for online use. Note that the learned parameters are not
+benchmark speciﬁc and depend only on the core conﬁgu-
+rations.
+
+A similar linear predictor that utilizes CPI components
+was proposed by Lukefahr et al. [29], although only for big-
+little core conﬁgurations. Another CPI predictor is PIE [45],
+which makes use of information collected using hardware
+counters including the total CPI, CPI of memory instruc-
+tions, misses per instruction (MPI), and data dependencies
+between instructions. However, PIE has been proposed for
+CPI prediction between small in-order and large out-of-
+order cores, while TPEq also requires predictions between
+different out-of-order core conﬁgurations and also faces the
+challenge of predicting over future epoch. Furthermore,
+since training the TPEq predictor is automated and data-
+driven, it is easy to deploy for a large number of core
+conﬁgurations.
+
+We note that existing processors such as the Intel Pen-
+tium 4 [43] and the IBM POWER5 [26] have built-in hard-
+ware support for performance counters that measure CPI
+components. In addition, Eyerman et al. [12] have proposed
+a performance counter architecture that further improves
+upon the accuracy of these commercial implementations
+with similar hardware complexity. Their approach provides
+very accurate estimates of the CPI stack components with
+only 2% average absolute error.
+
+The TPEq power predictor uses the predicted CPI values
+for each core conﬁguration (as described above) to predict
+their power consumption. This is based on previous work
+which indicates that that CPI (or IPC) is highly correlated
+with power consumption [3], [7]; for instance, Bircher and
+John report on average only 3% error when compared to
+measured CPU power [3]. Indeed, we empirically veriﬁed
+that incorporating more ﬁne-grained data like the individ-
+ual CPI stack components did not improve the accuracy of
+
+EpochTPEq Optimization OverheadUser ModeCPIPredictionPowerPredictionTimeTPEq GlobalOptimizationComputeBranchMemorySynchCore 1 CPI StackComputeBranchMemorySynchCore N CPI StackOn Current ConﬁgurationOn Current ConﬁgurationCPI ofCore 1 =CPI ofCore N =4.0 on Conﬁg 13.5 on Conﬁg 22.7 on Conﬁg 30.8 on Conﬁg M3.0 on Conﬁg 12.8 on Conﬁg 22.3 on Conﬁg 30.7 on Conﬁg M2.0 W2.5 W3.1 W5.1 W2.1 W2.7 W3.3 W5.5 WCore 1Conﬁg 3Core NConﬁg 1TABLE 1: Microarchitectural adaptation conﬁgurations
+
+Heterogeneous (HT)
+
+Conﬁguration
+1
+2
+3
+4
+5
+
+Dispatch width
+1
+2
+2
+4
+4
+
+ROB size
+16
+32
+64
+64
+128
+
+Integer ALUs
+1
+3
+3
+6
+6
+
+Number of cores: 16, Number of threads: 16 (1 thread/core)
+Frequency: 3.5 GHz, Voltage: 1.00 V, 22nm Technology Node
+L1-I cache: 128 KB, write-back, 4-way, 4-cycle
+L1-D cache: 128 KB, write-back, 8-way, 4-cycle
+L2 cache: private 256 KB, write-back, 8-way, 8-cycle
+L3 cache: 8 MB shared/4 cores, write-back, 16-way, 30-cycle
+Cache coherence: directory-based MSI protocol
+Floating point units: 2, Complex ALUs: 1
+
+numbers will not be identical though, since the time spent
+in active state is weighted differently in the two approaches.
+Most importantly, CS is a coarse-grained optimization
+techniques, in that it only accelerates the “most-lagging”
+thread. In contrast, the TPEq optimizer performs ﬁne-
+grained optimization based on the progress metric and
+weight of every thread, and is therefore able to best utilize
+the available power budget.
+
+We note that CS is itself a generalization of Age-based
+Scheduling [22] (AGETS), in which the thread which has
+executed the least number of instructions relative to other
+threads is sped up on a faster core. Although we also
+implemented and experimented with AGETS [22], we found
+that CS outperformed AGETS across all the benchmarks we
+studied, so we do not report any data for AGETS in this
+paper.
+MaxBIPS: Maximizing sum-IPS [18] is a commonly used
+(and intuitive) objective for applications where the threads
+are independent — multiprogrammed workloads, for exam-
+ple, or multithreaded benchmarks with dynamically load
+balanced task queues and task stealing [15]. Like TPEq (and
+unlike CS), MaxBIPS can be used for ﬁne-grained optimiza-
+tion of core conﬁgurations. However, the primary problem
+with MaxBIPS in the context of multi-threaded benchmarks
+is that it has no notion of thread synchronization and does
+not take thread criticality into account.
+Bottleneck Identiﬁcation and Scheduling: Bottleneck Iden-
+tiﬁcation and Scheduling [19] (BIS) annotates critical sec-
+tions in the code and uses these annotations to determine
+and accelerate bottlenecks, i.e., performance critical threads,
+at run-time. As opposed to the previously discussed tech-
+niques, BIS does require access to source code, and, at least
+for a set of benchmarks evaluated, CS performs at least as
+well as BIS [8].
+
+Nonetheless, we believe techniques such as BIS, and
+its updated version UBA [20], are orthogonal to and can
+be used in conjunction with TPEq. For example, threads
+that have BIS-based criticality greater than a threshold can
+be assigned to the highest core conﬁguration, while the
+remaining N−1 cores conﬁgurations can be optimized using
+TPEq. We leave this as future work.
+
+3 EXPERIMENTAL SETUP
+Our empirical evaluation of TPEq is based on the Sniper [5]
+multicore simulator for x86 processors. We augment Sniper
+
+IPC
+Power (W)
+
+Conf. 1
+0.65
+3.93
+
+Conf. 2
+1.06
+5.43
+
+Conf. 3
+1.13
+5.56
+
+Conf. 4
+1.27
+6.51
+
+Conf. 5
+1.36
+6.69
+
+TABLE 2: Maximum IPC and power observed for different
+conﬁgurations using Swaptions.
+
+7
+
+Category
+Homogeneous (HO)
+
+Workload
+Blackscholes
+Canneal
+FFT
+Ocean.cont
+Radix
+Streamcluster
+Swaptions
+Barnes
+Fluidanimate
+LU.cont
+LU.ncont
+Water.nsq
+Water.sp
+Bodytrack
+Kmeans
+
+Benchmark Suite
+PARSEC
+PARSEC
+SPLASH-2
+SPLASH-2
+SPLASH-2
+PARSEC
+PARSEC
+SPLASH-2
+PARSEC
+SPLASH-2
+SPLASH-2
+SPLASH-2
+SPLASH-2
+PARSEC
+Phoenix
+
+TABLE 3: Barrier synchronization based benchmarks classi-
+ﬁed as either homogeneous or heterogeneous.
+
+with our TPEq code and our patch that enables dy-
+namic adaption of hardware parameters, including front-
+end pipeline width and reorder buffer (ROB) size, and
+scripts for the other state-of-the art techniques we compare
+against. For power estimation, we use McPAT [23], which is
+seamlessly integrated with Sniper.
+
+We model a processor with 16 cores and an 80W power
+budget. The relevant core/uncore micro-architectural pa-
+rameters are shown in Table 1. Each core can pick from one
+of ﬁve different conﬁgurations which are also listed in Ta-
+ble 1. We note that in our experiments, the issue queue and
+load-store queue are scaled automatically with ROB size,
+since in Sniper all three are governed by a single parameter
+“window size”). Table 2 shows the maximum observed IPC
+and power values over all epochs for different static core
+conﬁgurations using Swaptions benchmark. Finally, in all
+experiments, the epoch length is set to 1 ms (3.5 million
+clock cycles at the baseline clock frequency of 3.5 GHz).
+
+The workloads used in our experiments are multi-
+threaded applications from the PARSEC [2], SPLASH-2 [47]
+and Phoenix [37] benchmark suites. We have included 18
+out of 22 benchmarks in SPLASH-2 and PARSEC combined,
+excluding only the ones which we had compilation or run-
+time issues with Sniper.
+
+Table 3 shows the subset of the benchmarks that exten-
+
+Category
+Thread pool (TP)
+
+Workload
+Cholesky
+Radiosity
+
+MapReduce (MR)
+
+Pipeline Parallel (PP) Dedup
+Ferret
+Histogram
+Linear regression
+Matrix multiply
+String match
+Word count
+
+Benchmark Suite
+SPLASH-2
+PARSEC
+PARSEC
+PARSEC
+Phoenix
+Phoenix
+Phoenix
+Phoenix
+Phoenix
+
+TABLE 4: Benchmarks using alternative approaches to par-
+allelization.
+
+8
+
+(a) TPEq compared to CS and MaxBIPS
+
+(b) Beneﬁts of relative instruction count prediction (weights).
+
+Fig. 5: (a) Speed-up of TPEq and MaxBIPS using the execution time of CS as baseline. Also shown is MAXBIPS-heuristic. (b)
+Speed-up of TPEq with respect to TPEq without relative instruction count prediction (TPEq-W), i.e., where all the weights
+are set to one.
+
+sively make use of barrier synchronization for paralleliza-
+tion. These are the benchmarks for which we expect TPEq to
+perform the best, since it is designed keep barrier synchro-
+nization based parallelism in mind. These benchmarks are
+further classiﬁed as: (i) homogeneous benchmarks: threads
+execute the same number of instructions between barriers;
+(ii) heterogeneous: threads execute the same number of
+instructions between barriers relative to each other.
+
+Table 4 show the remaining benchmarks that use other
+types of parallelism. We classify these as follows: (i) thread
+pool: a number of independent tasks are organized in a
+shared or distributed queues and a thread requests a new
+task from the task queue after it completes the previous
+task; (ii) pipeline parallel: groups of threads executing dif-
+ferent stages in a software pipeline on an incoming stream
+of data, with task queues between pipeline stages and
+(iii) mapreduce: different threads independently executing
+“map” functions on incoming data before synchronizing on
+the reduce thread.
+
+We note that Bodytrack from PARSEC and kmeans from
+Phoenix that are both classiﬁed as barrier-based, actually
+use mixed modes of parallelism: barriers across iterations,
+but thread pool and mapreduce parallelism within barriers,
+respectively. Other mapreduce benchmarks used in this
+paper have a single “reduce” operation towards the end of
+execution.
+
+Although TPEq is not designed keeping the character-
+istics of the benchmarks in Table 4 in mind, we nonethe-
+less also compare CS and MaxBIPS with TPEq on these
+benchmark applications. In fact, for the thread pool and
+mapreduce benchmarks, we expect MaxBIPS to perform the
+best. However, we ﬁnd that TPEq is, in fact, competitive
+with, and in some cases outperforms, MaxBIPS for these
+benchmarks as well.
+
+Sixteen parallel threads were used for each benchmark
+except Dedup and Ferret, which allow only 14 parallel
+
+threads (we note, however, Dedup and Ferret are not barrier
+synchronization based benchmarks, which are the main
+focus of this work). For 16 parallel threads, the PARSEC
+benchmarks also launch a 17th “initialization” thread that
+executes by itself on a core at the highest power and per-
+formance conﬁguration. For a fair comparison, we report
+execution times starting from the time when parallel threads
+are ﬁrst launched to the end of program execution.
+
+4 EXPERIMENTAL EVALUATION
+We have compared TPEq with state-of-the-art techniques
+discussed in Section 2.4. We brieﬂy describe our implemen-
+tation of these techniques.
+Criticality Stacks (CS) [8]: Our CS implementation is faith-
+ful to the one reported in [8]. In every epoch, the thread
+with the highest criticality and above a threshold of 1.2 is
+accelerated on the fastest core conﬁguration, and all the
+other conﬁgurations are set to the highest homogeneous
+conﬁguration that consumes the remaining power budget.
+This thread is accelerated until its criticality value becomes
+less than 0.8 or another more critical thread above the
+threshold is found, in which case the new critical thread is
+accelerated. In addition, for a fair comparison, we ensure that
+if there is any residual power at this point, the remaining
+threads are accelerated to highest possible conﬁgurations in
+the order of decreasing thread criticality. This is the baseline
+approach over which we will compare TPEq. Although one
+can potentially devise more elaborate heuristics that look
+at the next most critical thread(s), we are not aware of any
+principled way to use CS for ﬁne-grained optimization as
+enabled by TPEq.
+MaxBIPS [18]: MaxBIPS uses the same epoch length and
+predictors (power and performance) as TPEq. The sum-
+IPS optimization is performed using an off-the-shelf ILP
+solver in Matlab [31], and the solutions are fed back to
+Sniper. Since running an ILP solver would not be a practical
+
+0.850.90.9511.051.11.151.21.251.3Blackscholes (HO)Canneal (HO)FFT (HO)Ocean.cont(HO)Radix (HO)Streamcluster (HO)Swaptions (HO)Barnes (HT)Bodytrack (HT)Fluidanimate (HT)LU.cont (HT)LU.ncont (HT)kmeans (HT) Water.nsq (HT)Water.sp (HT)GEOM. MEAN (HO) GEOM. MEAN (HT) Speedup (norm. to Criticality Stacks)  CriticalityMaxBIPSMaxBIPS−heuristicTPEq0.850.90.9511.051.11.151.21.251.3Blackscholes (HO)Canneal (HO)FFT (HO)Ocean.cont(HO)Radix (HO)Streamcluster (HO)Swaptions (HO)Barnes (HT)Bodytrack (HT)Fluidanimate (HT)LU.cont (HT)LU.ncont (HT)kmeans (HT) Water.nsq (HT)Water.sp (HT)GEOM. MEAN Speedup (norm. to TPEq−W)  TPEq−WTPEqsolution in a real implementation, we also implemented
+MaxBIPS-heuristic, a polynomial time heuristic solver for
+the MaxBIPS objective function.
+
+4.1 Power and Performance Prediction
+The TPEq predictors were trained ofﬂine on a small sub-
+set of ﬁve randomly chosen benchmarks (out of 24) with
+different input sets as used in the rest of the experiments.
+In terms of CPI prediction, we observe a mean absolute
+error of 13.7% over more than 100,000 samples collected
+over all benchmarks. Of this, 5.7% can be attributed directly
+to temporal errors from last-value prediction. The rest of the
+error comes from predicting the CPI on one core conﬁgura-
+tion based on measurements on another core conﬁguration.
+The PIE prediction mechanism [45] reports similar errors of
+9 − 13% with only two (big and little) core conﬁgurations,
+while we have ﬁve. Further PIE only predicts CPI on a
+different core conﬁguration for the current epoch, while we
+predict CPI for the next epoch.
+
+The mean absolute error in power prediction is 4.43%,
+which is competitive with the errors reported in the state-
+of-the-art [3], [7], [42]. It is important to note that although
+the CPI predictions are used for predicting power, the power
+prediction error is lower for two reasons: (i) some positive
+and negative error terms from CPI estimation of individual
+cores cancel out in total power and (ii) power also has a con-
+stant static component. Because of the inaccuracy in power
+prediction, we observe that the power consumption occa-
+sionally exceeds the 80W budget, but the average overshoot
+is only 3W for both TPEq and MaxBIPS, and slightly higher
+for CS. Furthermore, power overshoots are short-lived and
+we observed only one instance in all our experiments where
+the overshoot exceeds 3W for more than three successive
+epochs. In this (rare) event, a throttling mechanism kicks
+in to reduce power consumption. Prior work on proactive
+dynamic power management makes similar observations
+about overshoots [18], [30].
+
+4.2 Results on Barrier Synchronization Based Bench-
+marks
+Figure 5(a) compares the execution time of TPEq to the
+competing state-of-the-art techniques, MaxBIPS and CS for
+the benchmarks in Table 3. Also shown are the mean speed-
+ups (with CS as baseline) separately for the homogeneous
+(HO) and heterogeneous (HT) benchmarks.
+
+Several observations can be made: ﬁrst, we observe
+that TPEq is the best performing technique for all but one
+benchmark (out of 15). TPEq is up to 23% faster than CS
+and up to 15% faster than MaxBIPS. On average, TPEq is
+5% and 11% faster than CS for homogeneous and hetero-
+geneous benchmarks, respectively. The speed-up of TPEq
+over CS is greater for heterogeneous benchmarks since
+these benchmarks feature both IPC and instruction count
+heterogeneity, and provide greater opportunities for ﬁne-
+grained optimization of core conﬁgurations. It is instructive
+to note that the performance improvements of TPEq are over
+and above techniques that are already very competitive:
+CS has been shown to improve over both AGETS and BIS
+(all coarse-grained optimization techniques since they only
+speed-up the most critical thread), while MaxBIPS is the
+
+9
+
+only general, ﬁne-grained technique that we are aware of.
+In addition, our results are over a wide range of barrier
+synchronization benchmarks over three benchmark suites
+without any benchmark sub-setting.
+Does Relative Instruction Count Prediction Help? Fig-
+ure 5(b) compares TPEq with a version, TPEq-W, in which
+we do not perform relative instruction count prediction and
+instead set all the weights, w(i), to one. Effectively, TPEq-
+W assumes that all threads execute the same number of
+instructions, and only account for IPC heterogeneity.
+
+Note that although TPEq and TPEq-W are nearly identi-
+cal for all homogeneous benchmarks (as expected, since all
+threads execute the same number of instructions), the speed-
+up of TPEq over TPEq-W is signiﬁcant for heterogeneous
+benchmarks — 15% on average and up to 20%.
+
+Fig. 6: Progress plots for FFT benchmark.
+
+Why does TPEq outperform MaxBIPS and CS?
+
+To better understand why TPEq outperforms MaxBIPS,
+Figure 6 shows the MaxBIPS and TPEq progress plots for
+the FFT benchmark, focusing on the second barrier phase.
+Note that, compared to the baseline FFT progress plot
+in Figure 1a, both the MaxBIPS and TPEq progress plots
+have much less heterogeneity in thread progress. In fact,
+although MaxBIPS is not explicitly meant to equalize IPCs,
+we observe that it many case, such as this, it speeds up low
+IPC threads and slows down high IPC threads. Nonetheless,
+it is not able to equalize as IPCs as effectively as TPEq, as is
+clear from Figure 6 — the progress plots for all threads are
+almost perfectly aligned with TPEq, but more spread out for
+MaxBIPS. Compared to the progress plot in Figure 1a, TPEq
+achieves an almost 60% reduction in stall time.
+
+Next we compare CS with TPEq, this time using Flu-
+idanimate, a heterogeneous benchmark using progress plots
+shown in Figure 7. Again, observe that TPEq is more suc-
+
+Fig. 7: Progress plots for Fluidanimate using CS and TPEq.
+
+Criticality Stacks TPEq Instruction count Instruction count Time (ms) Time (ms) 050100150200250300012345678910x 108050100150200250300350012345678910x 10810
+
+Fig. 8: Time spent by each thread in different conﬁgurations
+for CS and TPEq.
+
+cessful in reducing thread stalls (regions where a thread’s
+progress plot is ﬂat) than CS, primarily because TPEq
+speeds-up or slows-down each thread optimally so they
+reach barriers at (about) the same time, while CS only
+speeds-up the most critical thread. In fact, the most critical
+thread identiﬁed by CS is sped-up more than necessary,
+and end up stalling on the next barrier. Compared to the
+baseline, in which all threads are executed on identical cores
+within same power budget, TPEq reduces total stall time by
+as much as 50%, while CS only results in less than 20%
+reduction in stall time.
+
+Further insight can be obtained from Figure 8, which
+shows the time spent by each thread in each conﬁguration
+for CS and TPEq. Although it is clear that both both CS
+and TPEq identify Thread 11 as most critical (assigning
+it to higher power/performance conﬁgurations), TPEq as-
+signs each thread (including Thread 11) to a great range
+of conﬁgurations since it is able to perform ﬁne-grained
+optimization. In fact, conﬁguration 4 is not utilized by CS
+at all, while this is not the case for TPEq.
+
+4.3 Results on Remaining Benchmarks
+Figure 9 shows the speed-up of TPEq and MaxBIPS nor-
+malized to CS for the benchmarks in Table 4 that do not
+use barrier synchronization. We reiterate that TPEq is best
+suited for barrier synchronization based parallel programs.
+However, since TPEq does not explicitly look for barriers —
+adaptation happens at regularly sized epochs and threads
+asynchronously update their weights — it can be used with
+any parallel program.
+
+We observe in Figure 9 that even for these benchmarks
+TPEq outperforms CS. In addition, it is competitive with
+MaxBIPS on average and on a per-benchmark basis. The
+improvement with respect to CS can be explained, in part,
+because TPEq (and MaxBIPS) both perform ﬁne-grained
+optimization while CS is coarse-grained. On the other hand,
+the competitiveness of TPEq with MaxBIPS is more sur-
+prising since MaxBIPS should be the ideal objective at least
+for the thread pool and mapreduce benchmarks. We make
+the following observations to help explain the results: (a)
+for thread-pool and mapreduce benchmarks, we observed
+TPEq-W performs as well as TPEq and therefore TPEq is
+primarily equalizing instruction counts in these settings, in
+other words, acting as a load balancer; and (b) for pipeline
+benchmarks we note that the TPEq weights track thread crit-
+icality (to some extent), since the least (most) critical threads
+frequently (rarely) stall on full/empty queues. Nonetheless,
+
+Fig. 9: Execution time on benchmarks in Table 4.
+
+Fig. 10: Performance results for DVFS based dynamic adap-
+tation comparing MaxBIPS with TPEq.
+
+we note that more work needs to be done on generalizing
+TPEq for other modes of parallelism beyond barrier syn-
+chronization.
+
+4.4 DVFS Results
+TPEq can be easily modiﬁed for DVFS based dynamic adap-
+tation. For DVFS, the power and CPI predictors are trained
+for every voltage-frequency conﬁguration (as opposed to
+every micro-architectural conﬁguration) using the model
+described in section 2.2.1. In addition, the second term of
+Ef req(i)
+w(i)CP I(i) ,
+the progress metric in Equation 1 is modiﬁed to
+where E is now measured in seconds (as opposed to
+clock cycles) and f req(i) is the frequency of thread i. We
+performed DVFS experiments with ﬁve voltage-frequency
+levels ranging between {0.8V, 2.5 GHz} and {1V, 3.5 GHz}
+and compare the performance of TPEq with MaxBIPS in
+Figure 10. The average performance improvement over
+MaxBIPS is (6.9%) is slightly better than the improvements
+over MaxBIPS obtained for micro-architectural adaptation,
+in part because of more accurate CPI prediction.
+
+4.5 TPEq Algorithm Runtime Overhead
+The TPEq optimizer needs CPI stack information from all
+cores which happens implicitly via reads and writes to/from
+
+0.850.90.9511.051.11.151.21.251.3Cholesky (TP)Radiosity (TP)Dedup (PP)Ferret (PP)histogram (MR)linear_regression (MR)  matrix_multiply (MR)  word_count (MR) string_match (MR) GEOM. MEAN Speedup (norm. to Criticality Stacks)  CriticalityMaxBIPSMaxBIPS−heuristicTPEq0.80.850.90.9511.051.11.15Blackscholes (HO) Canneal (H0) FFT (HO) Ocean.cont (HO) Streamcluster (HO) Radix (HO) Raytrace (HO) Swaptions (HO) Barnes (HT) Bodytrack (HT) Fluidanimate (HT)LU.cont (HT) LU.ncont (HT) Kmeans (HT) Water.nsq (HT) Water.sp (HT) Geom. mean (HO) Geom. mean (HT) Speedup (norm. to MaxBIPS−heuristic)  MaxBIPS−heuristicTPEq11
+
+per-core voltage scaling and use this to reactively (as opposed
+to TPEq’s proactive approach) slow down stalled threads
+and redistribute power to working threads. Also, unlike
+TPEq, this technique requires programmer inserted hints to
+determine the remaining work for each thread, and uses a
+heuristic approach to decide the voltage level of each core.
+In the context of micro-architectural adaptation, ideas
+ranging from core-level to ﬁne-grained power gating have
+been proposed [4], [13], [17], [33], [34]. Our work is most
+similar in spirit to [27], which uses last-value predictor at
+the barriers to set the frequency of cores so as to save en-
+ergy without compromising performance. However, TPEq
+is different from this technique on several counts. For one,
+[27] assumes that the slow-down of each thread is directly
+proportional to frequency, while the TPEq optimizer is more
+general and works for complex power-performance rela-
+tionships that arise from micro-architectural adaptation and
+not just a simpliﬁed linear slow-down model. Second, TPEq
+does not require any explicit knowledge of a barrier event
+and is transparent to the programmer, while [27] requires
+programmer annotations. Thus TPEq generalizes easily to
+a broader set of barrier synchronization based benchmarks,
+and is not restricted to applications where barriers follow
+an easily discernible template (i.e., outermost for loops in
+OpenMP as studied by [27]). Finally, TPEq performs ﬁne-
+grained adaptation (in time) at the granularity of an epoch,
+while [27] only changes frequency once every barrier phase.
+
+6 CONCLUSION
+We proposed Thread Progress Equalization (TPEq), a run-
+time mechanism to maximize performance under a power
+constraint for multithreaded applications running on mul-
+ticores with support for ﬁne grained dynamic adaption of
+core conﬁgurations. Compared with existing approaches,
+TPEq addresses all sources of inter-thread heterogeneity and
+determines in polynomial time the optimal conﬁguration for
+each core so as to minimize execution time within a power
+budget. Experimental results show that TPEq outperforms
+state-of-the-art techniques in the context of both micro-
+architecturally adaptive multicores, and while incurring
+modest execution time and hardware overheads.
+
+REFERENCES
+[1] A. Bhattacharjee and M. Martonosi. Thread criticality predictors
+for dynamic performance, power, and resource management in
+In ACM SIGARCH Computer Architecture
+chip multiprocessors.
+News, volume 37, pages 290–301. ACM, 2009.
+
+[2] C. Bienia, S. Kumar, et al. The parsec benchmark suite: charac-
+In PACT, pages 72–81.
+
+terization and architectural implications.
+ACM, 2008.
+
+[3] W. L. Bircher and L. K. John. Complete system power estimation
+using processor performance events. Computers, IEEE Transactions
+on, 61(4):563–577, 2012.
+
+[4] A. Buyuktosunoglu, T. Karkhanis, et al. Energy efﬁcient co-
+adaptive instruction fetch and issue. In ISCA, pages 147–156. IEEE,
+2003.
+
+[5] T. E. Carlson, W. Heirman, and L. Eeckhout. Sniper: exploring the
+level of abstraction for scalable and accurate parallel multi-core
+simulation. In Proceedings of 2011 International Conference for High
+Performance Computing, Networking, Storage and Analysis, page 52.
+ACM, 2011.
+
+[6] R. Cochran, C. Hankendi, et al. Pack & cap: adaptive dvfs and
+In MICRO, pages 175–185.
+
+thread packing under power caps.
+ACM, 2011.
+
+Fig. 11: TPEq run-time overhead
+
+a shared address space, along with required synchronization
+between threads (as discussed in Section 2.3). For 16-cores,
+global communication takes roughly 10K cycles and the
+TPEq prediction and optimization procedures (including
+prediction overhead) take another 10K cycles. Together,
+the overhead amounts to 0.6% for a 1 ms epoch length,
+assuming conservatively, that all other cores are stalled
+while the leader executes the TPEq routine. We also conduct
+a sensitivity analysis for TPEq overhead with increasing
+core/thread counts which is shown in Figure 11. The close-
+to-linear scalability of TPEq optimization can be seen and
+is consistent with the complexity analysis of the algorithm
+which is O(M N log N ), with N being the number of cores.
+We observe that the overhead of global communication
+grows faster than that of TPEq optimization. For many core
+systems with 100s of cores, hardware based communication
+and optimization support may be necessary.
+
+5 RELATED WORK
+Dynamic power and resource management of multi-core
+processors is an issue of critical
+importance. Kumar et
+al. [21] proposed the notion of single-ISA heterogeneous
+architectures to maximize power efﬁciency while addressing
+temporal and spatial application variations. Their focus
+was primarily on multiprogrammed workloads. A number
+of papers have proposed scalable thread scheduling and
+mapping techniques for such workloads [25], [36], [38],
+[40], [44]. Others have focused on leveraging asymmetry
+to increase the performance of multithreaded applications
+by identifying and accelerating critical sections [1], [8], [19],
+[20], [22]. A more recent work by Craeynest et. al [46]
+proposes to use fairness-aware equal-progress scheduling
+on heterogeneous multi-cores, but it is unclear how this
+technique can be extended to optimal power-constrained
+performance maximization for adaptive multi-cores, which
+is the focus of this work.
+
+The work on DVFS based dynamic adaptation of multi-
+core processors has made use of the sum-IPS/Watt [15]
+or MaxBIPS [18] objectives, and different optimization al-
+gorithms including distributed optimization [10], [39] and
+control theory [16], [30]. Cochran et al. [6] present a ma-
+chine learning based approach based on ofﬂine workload
+characterization (and online prediction) but perform DVFS
+adaptation at a coarse time granularity of 100 billion uops.
+Recently, Godycki [14] et al. have proposed reconﬁgurable
+power distribution networks to enable fast, ﬁne-grained,
+
+05010015000.511.522.53x 105Number of coresNumber of cycles  Communication + TPEqOnly TPEq[7] G. Contreras and M. Martonosi.
+
+Power prediction for intel
+xscale R(cid:13) processors using performance monitoring unit events. In
+ISLPED, pages 221–226. IEEE, 2005.
+[8] K. Du Bois, S. Eyerman, et al. Criticality stacks: identifying critical
+threads in parallel programs using synchronization behavior. In
+ISCA, ISCA ’13, pages 511–522. ACM, 2013.
+
+[9] E. Duesterwald, J. Torrellas, and S. Dwarkadas. Characterizing
+In PACT,
+
+and predicting program behavior and its variability.
+pages 220–231, 2003.
+
+[10] T. Ebi, M. Faruque, and J. Henkel. Tape: Thermal-aware agent-
+based power econom multi/many-core architectures. In ICCAD,
+pages 302–309. IEEE, 2009.
+
+[11] H. Esmaeilzadeh, E. Blem, et al. Dark silicon and the end
+In Proceedings of the 38th Annual Interna-
+of multicore scaling.
+tional Symposium on Computer Architecture, ISCA ’11, pages 365–
+376, New York, NY, USA, 2011. ACM.
+ISBN 978-1-4503-0472-6.
+doi: 10.1145/2000064.2000108. URL http://doi.acm.org/10.1145/
+2000064.2000108.
+
+[12] S. Eyerman, L. Eeckhout, et al. A performance counter architecture
+for computing accurate cpi components. In ASPLOS, ASPLOS XII,
+pages 175–184. ACM, 2006.
+
+[13] H. R. Ghasemi and N. S. Kim. Rcs: runtime resource and core scal-
+ing for power-constrained multi-core processors. In Proceedings of
+PACT, pages 251–262. ACM, 2014.
+
+[14] W. Godycki, C. Torng, et al. Enabling realistic ﬁne-grain voltage
+
+scaling with reconﬁgurable power distribution networks.
+
+[15] S. Herbert and D. Marculescu. Analysis of dynamic volt-
+age/frequency scaling in chip-multiprocessors. In ISLPED, pages
+38–43. IEEE, 2007.
+
+[16] H. Hoffmann, S. Sidiroglou, et al. Dynamic knobs for responsive
+power-aware computing. In ACM SIGPLAN Notices, volume 46,
+pages 199–212. ACM, 2011.
+
+[17] M. C. Huang, J. Renau, and J. Torrellas. Positional adaptation of
+In Computer Archi-
+processors: application to energy reduction.
+tecture, 2003. Proceedings. 30th Annual International Symposium on,
+pages 157–168. IEEE, 2003.
+
+[18] C. Isci, A. Buyuktosunoglu, et al. An analysis of efﬁcient multi-
+core global power management policies: Maximizing performance
+In MICRO-39, pages 347–358. IEEE,
+for a given power budget.
+2006.
+
+[19] J. A. Joao, M. A. Suleman, et al. Bottleneck identiﬁcation and
+In ASPLOS, ASPLOS
+
+scheduling in multithreaded applications.
+XVII, pages 223–234. ACM, 2012.
+
+[20] J. A. Joao, M. A. Suleman, et al. Utility-based acceleration of
+multithreaded applications on asymmetric cmps. In ISCA, pages
+154–165. ACM, 2013.
+
+[21] R. Kumar, K. I. Farkas, et al. Single-isa heterogeneous multi-core
+In
+
+architectures: The potential for processor power reduction.
+MICRO-36, pages 81–92. IEEE, 2003.
+
+[22] N. B. Lakshminarayana, J. Lee, et al. Age based scheduling
+In Proceedings of the Conference
+for asymmetric multiprocessors.
+on High Performance Computing Networking, Storage and Analysis,
+page 25. ACM, 2009.
+
+[23] S. Li, J. H. Ahn, R. D. Strong, et al. Mcpat: an integrated power,
+area, and timing modeling framework for multicore and manycore
+architectures. In MICRO, pages 469–480. IEEE, 2009.
+
+[24] T. Li, A. R. Lebeck, and D. J. Sorin. Spin detection hardware
+for improved management of multithreaded systems. Parallel and
+Distributed Systems, IEEE Transactions on, 17(6):508–521, 2006.
+
+[25] T. Li, D. Baumberger, D. A. Koufaty, and S. Hahn. Efﬁcient
+operating system scheduling for performance-asymmetric multi-
+core architectures. In Proceedings of the 2007 ACM/IEEE conference
+on Supercomputing, page 53. ACM, 2007.
+
+[26] Q. Liang and IBM.
+
+[online] performance monitor counter data
+
+analysis using counter analyzer, 2009.
+
+[27] C. Liu, A. Sivasubramaniam, et al. Exploiting barriers to optimize
+power consumption of cmps. In Parallel and Distributed Processing
+Symposium, 2005. Proceedings. 19th IEEE International, pages 5a–5a.
+
+12
+
+IEEE, 2005.
+
+[28] G. Liu, J. Park, and D. Marculescu. Dynamic thread mapping
+for high-performance, power-efﬁcient heterogeneous many-core
+systems. In ICCD, pages 54–61. IEEE, 2013.
+
+[29] A. Lukefahr, S. Padmanabha, et al. Composite cores: Pushing het-
+erogeneity into a core. In MICRO, pages 317–328. IEEE Computer
+Society, 2012.
+
+[30] K. Ma, X. Li, M. Chen, and X. Wang. Scalable power control
+for many-core architectures running multi-threaded applications.
+In ACM SIGARCH Computer Architecture News, volume 39, pages
+449–460. ACM, 2011.
+
+[31] MATLAB. version 8.1.0.604 (R2013a). The MathWorks Inc., Natick,
+
+Massachusetts, 2013.
+
+[32] J. M. Mellor-Crummey and M. L. Scott. Algorithms for scalable
+synchronization on shared-memory multiprocessors. ACM Trans-
+actions on Computer Systems (TOCS), 9(1):21–65, 1991.
+
+[33] P. Petrica, A. M. Izraelevitz, et al. Flicker: a dynamically adaptive
+architecture for power limited multicore systems. In ISCA, pages
+13–23. ACM, 2013.
+
+[34] D. Ponomarev, G. Kucuk, and K. Ghose. Reducing power re-
+quirements of instruction scheduling through dynamic allocation
+In Proceedings of the 34th annual
+of multiple datapath resources.
+ACM/IEEE international symposium on Microarchitecture, pages 90–
+101. IEEE Computer Society, 2001.
+
+[35] K. K. Pusukuri, R. Gupta, et al. Thread reinforcer: Dynamically
+determining number of threads via os level monitoring. In IISWC,
+pages 116–125. IEEE, 2011.
+
+[36] K. K. Rangan, G.-Y. Wei, and D. Brooks. Thread motion: ﬁne-
+In ACM
+grained power management for multi-core systems.
+SIGARCH Computer Architecture News, volume 37, pages 302–313.
+ACM, 2009.
+
+[37] C. Ranger, R. Raghuraman, et al. Evaluating mapreduce for multi-
+In HPCA, pages 13–24. IEEE,
+
+core and multiprocessor systems.
+2007.
+
+[38] J. C. Saez, M. Prieto, et al. A comprehensive scheduler for
+asymmetric multicore systems. In Proceedings of the 5th European
+conference on Computer systems, pages 139–152. ACM, 2010.
+
+[39] J. Sartori and R. Kumar. Distributed peak power management for
+
+many-core architectures. In DATE, pages 1556–1559. IEEE, 2009.
+
+[40] D. Shelepov, J. C. Saez Alcaide, et al. Hass: a scheduler for
+heterogeneous multicore systems. ACM SIGOPS Operating Systems
+Review, 43(2):66–75, 2009.
+
+[41] J. Singh, C. Holt, et al. Load balancing and data locality in
+adaptive hierarchical n-body methods: Barnes-hut, fast multipole,
+and radiosity. Journal of Parallel and Distributed Computing, 27(2):
+118 – 141, 1995. ISSN 0743-7315. doi: http://dx.doi.org/10.1006/
+jpdc.1995.1077.
+
+[42] K. Singh, M. Bhadauria, and S. A. McKee. Real time power
+estimation and thread scheduling via performance counters. ACM
+SIGARCH Computer Architecture News, 37(2):46–55, 2009.
+
+[43] B. Sprunt. Pentium 4 performance-monitoring features. Micro,
+
+IEEE, 22(4):72–82, 2002.
+
+[44] R. Teodorescu and J. Torrellas.
+
+Variation-aware application
+scheduling and power management for chip multiprocessors.
+ACM SIGARCH Computer Architecture News, 36(3):363–374, 2008.
+
+[45] K. Van Craeynest, A. Jaleel, et al. Scheduling heterogeneous multi-
+cores through performance impact estimation (pie). In ISCA, pages
+213–224. ACM, 2012.
+
+[46] K. Van Craeynest, S. Akram, et al. Fairness-aware scheduling
+on single-isa heterogeneous multi-cores. In PACT, pages 177–187.
+IEEE, 2013.
+
+[47] S. C. Woo, M. Ohara, et al. The splash-2 programs: Characteriza-
+tion and methodological considerations. In ISCA, ISCA ’95, pages
+24–36. ACM, 1995.
+
+[48] E. Z. Zhang, Y. Jiang, and X. Shen. Does cache sharing on modern
+cmp matter to the performance of contemporary multithreaded
+programs? In ACM Sigplan Notices, volume 45, pages 203–212.
+ACM, 2010.
+
+

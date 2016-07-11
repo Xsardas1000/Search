@@ -1,0 +1,1636 @@
+Efﬁcient Generation of Inductive Validity Cores for Safety
+
+Properties
+
+Elaheh Ghassabani
+Department of Computer
+Science and Engineering
+University of Minnesota
+
+200 Union Street
+
+Minneapolis, MN, 55455,USA
+
+ghass013@umn.edu
+
+Andrew Gacek
+
+Rockwell Collins Advanced
+
+Technology Center
+
+400 Collins Rd. NE
+
+Cedar Rapids, IA, 52498, USA
+
+andrew.gacek@rockwellcollins.com
+
+Michael W. Whalen
+Department of Computer
+Science and Engineering
+University of Minnesota
+
+200 Union Street
+
+Minneapolis, MN, 55455,USA
+
+whalen@cs.umn.edu
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+4
+1
+
+ 
+ 
+]
+E
+S
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+6
+7
+2
+4
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+ABSTRACT
+Symbolic model checkers can construct proofs of properties over
+very complex models. However, the results reported by the tool
+when a proof succeeds do not generally provide much insight to
+the user. It is often useful for users to have traceability information
+related to the proof: which portions of the model were necessary to
+construct it. This traceability information can be used to diagnose a
+variety of modeling problems such as overconstrained axioms and
+underconstrained properties, and can also be used to measure com-
+pleteness of a set of requirements over a model. In this paper, we
+present a new algorithm to efﬁciently compute the inductive va-
+lidity core (IVC) within a model necessary for inductive proofs of
+safety properties for sequential systems. The algorithm is based
+on the UNSAT core support built into current SMT solvers and a
+novel encoding of the inductive problem to try to generate a min-
+imal inductive validity core. We prove our algorithm correct, and
+describe its implementation in the JKind model checker for Lustre
+models. We then present an experiment in which we benchmark
+the algorithm in terms of speed, diversity of produced cores, and
+minimality, with promising results.
+
+Keywords
+Auto-traceability,
+Induction, Requirement Engineering
+
+Inductive Validity Core, UNSAT Core, k-
+
+1.
+
+INTRODUCTION
+
+Symbolic model checking using induction-based techniques
+such as IC3/PDR [18] and k-induction [42] can often determine
+whether safety properties hold of complex ﬁnite or inﬁnite-state
+systems. Model checking tools are attractive both because they are
+automated, requiring little or no interaction with the user and, if the
+answer to a correctness query is negative, they provide a counterex-
+ample to the satisfaction of the property. These counterexamples
+can be used both to illustrate subtle errors in complex hardware and
+software designs [32,34,36] and to support automated test case gen-
+eration [47, 48]. In the event that a property is proved, however, it
+
+is not always clear what level of assurance should be invested in the
+result. Given that these kinds of analyses are performed for safety-
+and security-critical software, this can lead to overconﬁdence in
+the behavior of the ﬁelded system. It is well known that issues such
+as vacuity [27] can cause veriﬁcation to succeed despite errors in
+a property speciﬁcation or in the model. Even for non-vacuous
+speciﬁcations, it is possible to over-constrain the speciﬁcation of
+the environment in the model such that the implementation will not
+work in the actual operating environment.
+
+At issue is the level of feedback provided by the tool to the user.
+In most tools, when the answer to a correctness query is positive,
+no further information is provided. What we would like to pro-
+vide is traceability information, an inductive validity core (IVC),
+that explains the proof, in much the same way that a counterex-
+ample explains the negative result. This is not a new idea: UN-
+SAT cores [49] provide the same kind of information for individual
+SAT or SMT queries, and this approach has been lifted to bounded
+analysis for Alloy in [44]. What we propose is a generic and ef-
+ﬁcient mechanism for extracting supporting information, similar
+to an UNSAT core, from the proofs of safety properties using in-
+ductive techniques such as PDR and k-induction. Because many
+properties are not themselves inductive, these proof techniques in-
+troduce lemmas as part of the solving process in order to strengthen
+the properties and make them inductive. Our technique allows ef-
+ﬁcient, accurate, and precise extraction of inductive validity cores
+even in the presence of such auxiliary lemmas.
+
+Once generated, the IVC can be used for many purposes in the
+
+software veriﬁcation process, including at least the following:
+Vacuity detection: The idea of syntactic vacuity detection (check-
+ing whether all subformulae within a property are necessary
+for its satisfaction) has been well studied [27]. However,
+even if a property is not syntactically vacuous, it may not
+require substantial portions of the model. This in turn may
+indicate that either a.) the model is incorrectly constructed
+or b.) the property is weaker than expected. We have seen
+several examples of this mis-speciﬁcation in our veriﬁcation
+work, especially when variables computed by the model are
+used as part of antecedents to implications.
+
+ACM ISBN 978-1-4503-2138-9.
+DOI: 10.1145/1235
+
+Completeness checking: Closely related to vacuity detection is
+the idea of completeness checking, e.g., are all atoms in the
+model necessary for at least one of the properties proven
+about the model? Several different notions of completeness
+checking have been proposed [9, 26], but these are very ex-
+pensive to compute, and in some cases, provide an overly
+strict answer (e.g., checking can only be performed on non-
+vacuous models for [26]).
+
+node filter(x : real) returns (a, b, y : real);
+let
+
+node filter(x, a : real) returns (b, y : real);
+let
+
+a = f(x, 0.0 -> pre y);
+b = if a >= 0.0 then a else -a;
+y = b + (0.0 -> pre y);
+
+tel;
+
+b = if a >= 0.0 then a else -a;
+y = b + (0.0 -> pre y);
+
+tel;
+
+Figure 1: Model with property y ≥ 0, before IVC analysis
+
+Traceability: Certiﬁcation standards for safety-critical systems
+(e.g., [35, 39]) usually require traceability matrices that
+map high-level requirements to lower-level requirements and
+(eventually) leaf-level requirements to code or models. Cur-
+rent traceability approaches involve either manual mappings
+between requirements and code/models [31] or a heuristic
+approach involving natural language processing [24]. Both
+of these approaches tend to be inaccurate. The proof-based
+approach can provide this information accurately and for
+free.
+
+Symbolic Simulation / Test Case Generation: Model
+
+checkers
+are now often used for symbolic simulation and structural-
+coverage-based test case generation [30, 47]. For either of
+these purposes, the model checker is supposed to produce a
+witness trace for a given coverage obligation using a “trap
+property” which is expected to be falsiﬁable.
+In systems
+of sufﬁcient size, there is often “dead code” that cannot
+ever be reached. In this case, a proof of non-reachability is
+produced, and the IVC provides the reason why this code is
+unreachable.
+
+Nevertheless, to be useful for these tasks, the generation process
+must be efﬁcient and the generated IVC must be accurate and pre-
+cise (that is, sound and close to minimal).
+
+In the remainder of this paper, we present an algorithm for efﬁ-
+cient generation of IVCs for induction-based model checkers. Our
+contributions, as detailed in the remainder of the paper, are as fol-
+lows:
+
+• We present a technique for extracting inductive validity cores
+from an inductive veriﬁcation of a safety property over a se-
+quential model involving lemmas.
+
+• We formalize this technique and present an implementation
+
+of it in the JKind model checker [1].
+
+• We present an experiment over our implementation and mea-
+sure the efﬁciency, minimality, and robustness of the IVC
+generation process.
+
+The rest of this article is organized as follows.
+
+In Section 2,
+In Section 3, we present the
+we present a motivating example.
+required background for our approach.
+In Sections 4 and 5, we
+present our approach and our implementation in JKind. Sections 6
+and 7 present an evaluation of our approach on a set of benchmark
+examples. Finally, Section 8 discusses related work and Section 9
+concludes.
+
+Figure 2: Model with property y ≥ 0, after IVC analysis
+
+2. MOTIVATING EXAMPLE
+
+Consider the model shown both graphically and textually in Fig-
+ure 1. This model takes an input, combines it with the previous
+output in some way, takes the absolute value, and then adds this to
+an accumulating value. This model has the property that the output
+is always non-negative, i.e., y ≥ 0. Moreover, it happens that this
+property holds regardless of the way the input is combined with the
+previous output, i.e., the function f in the model. Formally, we say
+that the inductive validity core (IVC) does not contain that part of
+the model. The model reduced to a minimal IVC is shown in Fig-
+ure 2. Note that traditional static dependency analysis would not be
+able to remove f from the original model.
+
+3. PRELIMINARIES
+Given a state space S, a transition system (I, T ) consists of an
+initial state predicate I : S → bool and a transition step predi-
+cate T : S × S → bool. We deﬁne the notion of reachability for
+(I, T ) as the smallest predicate R : S → bool which satisﬁes the
+following formulas:
+
+∀s. I(s) ⇒ R(s)
+. R(s) ∧ T (s, s
+
+(cid:48)
+
+) ⇒ R(s
+(cid:48)
+
+)
+
+∀s, s
+
+(cid:48)
+
+A safety property P : S → bool is a state predicate. A safety
+property P holds on a transition system (I, T ) if it holds on all
+reachable states, i.e., ∀s. R(s) ⇒ P (s), written as R ⇒ P for
+short. When this is the case, we write (I, T ) (cid:96) P .
+
+For an arbitrary transition system (I, T ), computing reachability
+can be very expensive or even impossible. Thus, we need a more
+effective way of checking if a safety property P is satisﬁed by the
+system. The key idea is to over-approximate reachability. If we can
+ﬁnd an over-approximation that implies the property, then the prop-
+erty must hold. Otherwise, the approximation needs to be reﬁned.
+A good ﬁrst approximation for reachability is the property itself.
+
+That is, we can check if the following formulas hold:
+
+(cid:48)
+
+(cid:48)
+
+)
+
+∀s, s
+
+∀s. I(s) ⇒ P (s)
+. P (s) ∧ T (s, s
+
+(1)
+(2)
+If both formulas hold then P is inductive and holds over the sys-
+tem. If (1) fails to hold, then P is violated by an initial state of
+the system.
+If (2) fails to hold, then P is too much of an over-
+approximation and needs to be reﬁned.
+
+) ⇒ P (s
+(cid:48)
+
+One way to reﬁne our over-approximation is to add additional
+lemmas to the property of interest. For example, given another
+property L : S → bool we can consider the extended property
+P (cid:48)(s) = P (s) ∧ L(s), written as P (cid:48) = P ∧ L for short. If P (cid:48)
+holds on the system, then P must hold as well. The hope is that the
+
+I(s0) ⇒ P (s0)
+
+...
+
+I(s0) ∧ T (s0, s1) ∧ ··· ∧ T (sk−2, sk−1) ⇒ P (sk−1)
+
+P (s0) ∧ T (s0, s1) ∧ ··· ∧ P (sk−1) ∧ T (sk−1, sk) ⇒ P (sk)
+
+Figure 3: k-induction formulas: k base cases and one inductive
+step
+
+addition of L makes formula (2) provable because the antecedent is
+more constrained. However, the consequent of (2) is also more con-
+strained, so the lemma L may require additional lemmas of its own.
+Finding and proving these lemmas is the means by which property
+directed reachability (PDR) strengthens and proves a safety prop-
+erty.
+
+Another way to reﬁne our over-approximation is to use use k-
+induction which to unrolls the property over k steps of the transition
+system. For example, 1-induction consists of formulas (1) and (2)
+above, whereas 2-induction consists of the following formulas:
+
+∀s, s
+
+(cid:48)
+
+∀s. I(s) ⇒ P (s)
+. I(s) ∧ T (s, s
+(cid:48)
+) ∧ P (s
+(cid:48)
+
+(cid:48)
+
+) ⇒ P (s
+(cid:48)
+) ∧ T (s
+(cid:48)
+, s
+
+)
+
+∀s, s
+
+(cid:48)
+
+, s
+
+(cid:48)(cid:48)
+
+. P (s) ∧ T (s, s
+
+(cid:48)(cid:48)
+
+) ⇒ P (s
+(cid:48)(cid:48)
+
+)
+
+That is, there are two base step checks and one inductive step check.
+In general, for an arbitrary k, k-induction consists of the k base
+step checks and one inductive step check as shown in Figure 3 (the
+universal quantiﬁers on si have been elided for space). We say that
+a property is k-inductive if it satisﬁes the k-induction constraints
+for the given value of k. The hope is that the additional formulas in
+the antecedent of the inductive step make it provable.
+
+In practice, inductive model checkers often use a combination of
+the above techniques. Thus, a typical conclusion is of the form “P
+with lemmas L1, . . . , Ln is k-inductive”.
+4.
+
+INDUCTIVE VALIDITY CORES
+
+Given a transition system which satisﬁes a safety property P , we
+want to know which parts of the system are necessary for satisfying
+the safety property. One possible way of asking this is, “What is
+the most general version of this transition system that still satisﬁes
+the property?” The answer is disappointing. The most general sys-
+tem is I(s) = P (s) and T (s, s(cid:48)) = P (s(cid:48)), i.e., you start in any
+state satisfying the property and can transition to any state that still
+satisﬁes the property. This answer gives no insight into the orig-
+inal system because it has no connection to the original system.
+In this section we introduce the notion of inductive validity cores
+(IVC) which looks at generalizing the original transition system
+while preserving a safety property.
+
+In order to talk about generalizing a transition system, we as-
+sume the transition relation of the system has the structure of a top-
+level conjunction. This assumption gives us a structure that we can
+easily manipulate as we generalize the system. Given T (s, s(cid:48)) =
+T1(s, s(cid:48)) ∧ ··· ∧ Tn(s, s(cid:48)) we will write T = T1 ∧ ··· ∧ Tn for
+short. By further abuse of notation we will identify T with the set
+of its top-level conjuncts. Thus we will write x ∈ T to mean that x
+is a top-level conjunct of T . We will write S ⊆ T to mean that all
+top-level conjuncts of S are top-level conjuncts of T . We will write
+T \ {x} to mean that T with the top-level conjunct x removed. We
+will use the same notation when working with sets of invariants.
+
+Deﬁnition 1. Inductive Validity Core: Let (I, T ) be a transition
+
+Algorithm 1: IVC_BF: Brute-force algorithm for computing a
+minimal IVC
+input : (I, T ) (cid:96) P
+output: Minimal inductive validity core for (I, T ) (cid:96) P
+1 S ← T
+2 for x ∈ S do
+3
+4
+
+if (I, S \ {x}) (cid:96) P then
+
+S ← S \ {x}
+
+5 return S
+
+system and let P be a safety property with (I, T ) (cid:96) P . We say
+S ⊆ T is a inductive validity core for (I, T ) (cid:96) P iff (I, S) (cid:96) P .
+When I, T , and P can be inferred from context we will simply say
+S is an inductive validity core.
+
+Deﬁnition 2. Minimal Inductive Validity Core: An inductive va-
+lidity core S for (I, T ) (cid:96) P is minimal iff there does not exist
+M ⊂ S such that M is an inductive validity core for (I, T ) (cid:96) P .
+
+Note that minimal inductive validity cores are not necessarily
+unique. For example, take I = a ∧ b, T = a(cid:48) ∧ b(cid:48), and P =
+a ∨ b. Then both {a(cid:48)} and {b(cid:48)} are minimal inductive validity
+cores for (I, T ) (cid:96) P . However, inductive validity cores do have
+the following monotonicity property.
+
+Lemma 1. Let (I, T ) be a transition system and let P be a safety
+property with (I, T ) (cid:96) P . Let S1 ⊆ S2 ⊆ T . If S1 is an inductive
+validity core for (I, T ) (cid:96) P then S2 is an inductive validity core
+for (I, T ) (cid:96) P .
+
+PROOF. From S1 ⊆ S2 we have S2 ⇒ S1. Thus the reachable
+
+states of (I, S2) are a subset of the reachable states of (I, S1).
+
+This lemma gives us a simple, brute-force algorithm for com-
+puting a minimal inductive validity core, Algorithm IVC_BF (1).
+The resulting set of this algorithm is obviously an inductive valid-
+ity core for (I, T ) (cid:96) P . The following lemma shows that it is also
+minimal.
+
+Lemma 2. The result of Algorithm 1 is a minimal inductive va-
+
+lidity core for (I, T ) (cid:96) P .
+
+PROOF. Let the result be R. Suppose towards contradiction that
+R is not minimal. Then there is an inductive validity core M with
+M ⊂ R. Take x ∈ R \ M. Since x ∈ R it must be that during
+the algorithm (I, S \ {x}) (cid:96) P is not true for some set S where
+R ⊆ S. We have M ⊂ R ⊆ S and x (cid:54)∈ M, thus M ⊆ S \ {x}.
+Since M is an inductive validity core, Lemma 1 says that S \ {x}
+is an inductive validity core, and so (I, S \ {x}) (cid:96) P . This is a
+contradiction, thus R must be minimal.
+
+This algorithm has two problems. First, checking if a safety
+property holds is undecidable in general thus the algorithm may
+never terminate even when the safety property is easily provable
+over the original transition system. Second, this algorithm is very
+inefﬁcient since it tries to re-prove the property multiple times.
+
+The key to a more efﬁcient algorithm is to make better use of
+the information that comes out of model checking. In addition to
+knowing that P holds on a system (I, T ), suppose we also know
+something stronger: P with the invariant set Q is k-inductive for
+(I, T ). This gives us the broad structure of a proof for P which
+allows us to reconstruct the proof over a modiﬁed transition system.
+
+Algorithm 2: IVC_UC: Efﬁcient algorithm for computing a
+nearly minimal inductive validity core from UNSAT cores
+input : P with invariants Q is k-inductive for (I, T )
+output: Inductive validity core for (I, T ) (cid:96) P
+1 k ← MINIMIZEK(T, P ∧ Q)
+2 R ← REDUCEINVARIANTSk(T, Q, P )
+3 return MINIMIZEIVCk(I, T, R)
+
+BASEQUERY1(I, T, P ) ≡ ∀s0. I(s0) ⇒ P (s0)
+BASEQUERYk+1(I, T, P ) ≡ BASEQUERYk(I, T, P ) ∧
+
+(∀s0, . . . , sk. I(s0) ∧ T (s0, s1) ∧ ··· ∧ T (sk−1, sk) ⇒ P (sk))
+
+INDQUERYk(T, Q, P ) ≡ (∀s0, . . . , sk.
+
+Q(s0) ∧ T (s0, s1) ∧ ··· ∧ Q(sk−1) ∧ T (sk−1, sk) ⇒ P (sk))
+
+FULLQUERYk(I, T, P ) ≡
+
+BASEQUERYk(I, T, P ) ∧ INDQUERYk(T, P, P )
+
+Figure 4: k-induction queries
+
+However, we must be careful since this proof structure may be more
+than is actually needed to establish P . In particular, Q may contain
+unneeded invariants which could cause the inductive validity core
+for P ∧ Q to be larger than the inductive validity core for P . Thus
+before computing the inductive validity core we ﬁrst try to reduce
+the set of invariants to be as small as possible. This operation is
+expensive when k is large so as a ﬁrst step we minimize k. This is
+the motivation behind Algorithm IVC_UC (2).
+
+To describe the details of Algorithm 2 we deﬁne queries for
+the base and inductive steps of k-induction (Figure 4). Note, in
+INDQUERY(T, Q, P ) we separate the assumptions made on each
+step, Q, from the property we try to show on the last step, P . We
+use this separation when reducing the set of invariants.
+
+We assume that our queries are checked by an SMT solver. That
+is, we assume we have a function CHECKSAT(F ) which deter-
+mines if F , an existentially quantiﬁed formula, is satisﬁable or not.
+In order to efﬁciently manipulate our queries, we assume the ability
+to create activation literals which are simply distinguished Boolean
+variables. The call CHECKSAT(A, F ) holds the activation literals
+in A true while checking F . When F is unsatisﬁable, we assume
+we have a function UNSATCORE() which returns a minimal sub-
+set of the activation literals such that the formula is unsatisﬁable
+with those activation literals held true. In practice, SMT solvers
+often return a non-minimal set, but we can minimize the set via
+repeated calls to CHECKSAT. We assume both CHECKSAT and
+UNSATCORE are always terminating.
+
+The function MINIMIZEK(T, P ) is deﬁned in Algorithm 3. This
+function assumes that P is k-inductive for (I, T ). It returns the
+smallest k(cid:48) such that P is k(cid:48)-inductive for (I, T ). We start checking
+at k(cid:48) = 1 since smaller values of k(cid:48) are much quicker to check than
+larger ones. The checking must eventually terminate since P is k-
+inductive. We also only check the inductive query since we know
+the base query will be true for all k(cid:48) ≤ k. Although we describe
+each query in Algorithm 3 separately, in practice they can be done
+incrementally to improve efﬁciency.
+The function REDUCEINVARIANTSk(T,{Q1, . . . , Qn}, P ) is
+deﬁned in Algorithm 4. This function assumes that P ∧ Q1 ∧···∧
+Qn is k-inductive for (I, T ). It returns a set R ⊆ {P, Q1, . . . , Qn}
+such that R is k-inductive for (I, T ) and P ∈ R. Like MINI-
+
+Algorithm 3: MINIMIZEK(T, P )
+1 k(cid:48) ← 1
+2 while CHECKSAT(¬INDQUERYk(cid:48) (T, P, P )) = SAT do
+3
+4 return k(cid:48)
+
+k(cid:48) ← k(cid:48) + 1
+
+Algorithm 4: REDUCEINVARIANTSk(T,{Q1, . . . , Qn}, P )
+1 R ← {P}
+2 Create activation literals A = {a1, . . . , an}
+3 C ← (a1 ⇒ Q1) ∧ ··· ∧ (an ⇒ Qn)
+4 while true do
+5
+6
+7
+
+CHECKSAT(A,¬INDQUERYk(T, C, R))
+if UNSATCORE() = ∅ then
+
+return R
+
+8
+9
+10
+
+for ai ∈ UNSATCORE() do
+R ← R ∪ {Qi}
+C ← C \ {ai ⇒ Qi}
+
+MIZEK, this function only checks the inductive query since each
+element of R is an invariant and therefore will always pass the
+base query. A signiﬁcant complication for reducing invariants is
+that some invariants may mutually need each other, even though
+none of them are needed to prove P . Thus in Algorithm 4 we
+ﬁnd a minimal set of invariants needed to prove P , then we ﬁnd a
+minimal set of invariants to prove those invariants, and so on. We
+terminate when no more invariants are needed to prove the prop-
+erties in R. Algorithm 4 is guaranteed to terminate since R gets
+larger in every iteration of the outer loop and it is bounded above by
+{P, Q1, . . . , Qn}. As with Algorithm 3, we describe each query in
+Algorithm 4 separately, though in practice large parts of the queries
+can be re-used to improve efﬁciency.
+
+This iterative lemma determination does not guarantee a min-
+imal result. For example, we may ﬁnd P requires just Q1, that
+Q1 requires just Q2, and that Q2 does not require any other in-
+variants. This gives the result {P, Q1, Q2}, but it may be that Q2
+alone is enough to prove P thus the original result is not minimal.
+Also note, we do not care about the result of CHECKSAT, only the
+UNSATCORE that comes out of it. Since P ∧ Q1 ∧ ··· ∧ Qn is
+k-inductive, we know the CHECKSAT call will always return UN-
+SAT.
+The function MINIMIZEIVCk(I,{T1, . . . , Tn}, P ) is deﬁned
+in Algorithm 5. This function assumes that P is k-inductive
+It returns a minimal inductive validity core R ⊆
+for (I, T ).
+{T1, . . . , Tn} such that P is k-inductive for (I, R). It is trivially
+terminating. Since Algorithms 3, 4, and 5 are terminating, Algo-
+rithm 2 is always terminating.
+
+Our full inductive validity core algorithm in Algorithm 2 does
+not guarantee a minimal inductive validity core. One reason is that
+REDUCEINVARIANTS does not guarantee a minimal set of invari-
+ants. A larger reason is that we only consider the invariants that the
+algorithm is given at the outset. It is possible that there are other
+invariants which could lead to a smaller inductive validity core, but
+we do not search for them. In Sections 6 and 7, we show that in
+practice our algorithm is nearly minimal and much more efﬁcient
+than the naive algorithm. The following theorem shows that mini-
+mality checking is at least as hard as model checking and therefore
+undecidable in many settings.
+
+Theorem 1. Determining if an IVC is minimal is as hard as
+
+Algorithm 5: MINIMIZEIVCk(I,{T1, . . . , Tn}, P )
+1 Create activation literals A = {a1, . . . , an}
+2 T ← (a1 ⇒ T1) ∧ ··· ∧ (an ⇒ Tn)
+3 CHECKSAT(A,¬FULLQUERYk(I, T, P ))
+4 R ← ∅
+5 for ai ∈ UNSATCORE() do
+6
+7 return R
+
+R ← R ∪ {Ti}
+
+model checking.
+
+PROOF. Consider
+
+an arbitrary model
+
+checking problem
+(I, T ) (cid:96)? P where P is not a tautology. We will construct an IVC
+for a related model checking problem which will be minimal if and
+only if (I, T ) (cid:48) P . Let x and y be fresh variables. Construct a tran-
+sition system with initial predicate I ∧ ¬x and transition predicate
+(x(cid:48) ⇒ y(cid:48))∧ ((y(cid:48) ⇒ P (cid:48))∧ T ). The constructed system clearly sat-
+isﬁes the property x ⇒ P . Thus S = {x(cid:48) ⇒ y(cid:48), (y(cid:48) ⇒ P (cid:48)) ∧ T}
+is an IVC. S is minimal if and only if neither {x(cid:48) ⇒ y(cid:48)} nor
+{(y(cid:48) ⇒ P (cid:48)) ∧ T} is an IVC. Since x and y are fresh and P is
+not a tautology, {x(cid:48) ⇒ y(cid:48)} is not an IVC. Since x and y are fresh,
+{(y(cid:48) ⇒ P (cid:48)) ∧ T} is an IVC for the property x ⇒ P if and only if
+(I, T ) (cid:96) P . Therefore, S is minimal if and only if (I, T ) (cid:48) P .
+
+When minimality is a necessity, we can combine IVC_BF and
+IVC_UC into a single algorithm which aims efﬁciently guarantee
+minimality. The hybrid algorithm, IVC_UCBF, consists of run-
+ning IVC_UC to generate an initial nearly minimal IVC which is
+then run through IVC_BF to guarantee minimality. The resulting
+algorithm is not guaranteed to terminate since IVC_BF is not guar-
+anteed to terminate.
+5.
+
+IMPLEMENTATION
+
+We have implemented the inductive validity core algorithms
+in the previous section in two tools: JKind, which performs the
+IVC_UC algorithm, and JSupport, which can compute either the
+IVC_BF or the IVC_UCBF algorithm (using JKind as a subpro-
+cess). Moreover, our implementation of IVC_UCBF uses an ad-
+ditional feature of JKind to store and re-use discovered invariants
+between separate runs. This reduces some of the cost of attempting
+to re-prove a property multiple times. These tools operate over the
+Lustre language [22], which we brieﬂy illustrate below.
+5.1 Lustre and IVCs
+
+Lustre [22] is a synchronous dataﬂow language used as an input
+language for various model checkers. The textual models in Fig-
+ures 1 and 2 are written in Lustre. We will use model in Figure 1
+as a running example in this section. For our purposes, a Lustre
+program consists of 1) input variables, x in the example, 2) output
+variables, a, b, and y in the example, and 3) an equation for each
+output variable. A Lustre program runs over discrete time steps.
+On each step, the input variables take on some values and are used
+to compute values for the output variables on the same step.
+In
+addition, equations may refer to the previous value of a variable
+using the pre operator. This operator is underspeciﬁed in the ﬁrst
+step, so the arrow operator, ->, is used to guard the pre operator.
+In the ﬁrst step the expression e1 -> e2 evaluates to e1, and it
+evaluates to e2 in all other steps.
+
+We interpret a Lustre program as a model speciﬁcation by con-
+sidering the behavior of the program under all possible input traces.
+Safety properties over Lustre can then be expressed as Boolean ex-
+pressions in Lustre. A safety property holds if the corresponding
+
+expression is always true for all input traces. For example, the
+property for Figure 1 is y >= 0, which is a valid property.
+
+It is straightforward to translate this interpretation of Lustre into
+the traditional initial and transition relations. We will show this
+by continuing with the example in Figure 1. First we introduce
+a new Boolean variable init into the state space to denote when
+the system is in its initial state, the state of the system prior to ini-
+tialization. In the initial state, all other variables are completely
+unconstrained which models the underspeciﬁcation of the pre op-
+erator during the ﬁrst step. Then we deﬁne,
+
+(cid:48)
+
+(cid:48)
+
+(cid:48)
+
+I((x, a, b, y, init)) = init
+(cid:48)
+
+(cid:48)
+T ((x, a, b, y, init), (x
+, a
+, if init then 0 else y)) ∧
+(cid:48)
+= f (x
+(cid:48) ≥ 0 then a
+) ∧
+(cid:48)
++ (if init then 0 else y)) ∧
+
+else −a
+(cid:48)
+
+(cid:48)
+(a
+(cid:48)
+(cid:48)
+
+= if a
+
+(b
+
+, b
+
+, y
+
+, init
+
+)) =
+
+(cid:48)
+
+(y
+= b
+¬init
+(cid:48)
+
+Note that f is unspeciﬁed in Figure 1 and so also in T . In a real
+system, f would be deﬁned in the Lustre model and expanded in T .
+A safety property such as y >= 0 is translated into init∨(y ≥ 0).
+Nested uses of arrow and pre operators are handled by introducing
+new output variables for nested expressions, though such details are
+unimportant for our purposes.
+
+Each equation in the Lustre program is translated into a single
+top-level conjunct in the transition relation. This is very convenient
+as the IVC of a Lustre property can be reported in terms of the
+output variables whose equations are part of the IVC. Equivalently,
+the interpretation of an IVC for a Lustre property is that any output
+variable that is not part of the IVC can be turned into an input vari-
+able, its equation thrown away, while preserving the validity of the
+property. Thus the granularity of the IVC analysis is determined
+by the granularity of the Lustre equations and can be adjusted by
+introducing auxiliary variables for subexpressions if desired.
+5.2
+
+JKind
+
+JKind [1] is an inﬁnite-state model checker for safety properties.
+JKind proves safety properties using multiple cooperative engines
+in parallel including k-induction [42], property directed reachabil-
+ity [18], and template-based lemma generation [23]. JKind accepts
+Lustre programs written over the theory of linear integer and real
+arithmetic.
+In the back-end, JKind uses an SMT solver such as
+Z3 [16], Yices [17], MathSAT [14], or SMTInterpol [13].
+
+JKind works on multiple properties simultaneously. When a
+property is proven and IVC generation is enabled, an additional
+parallel engine executes Algorithm 2 to generate a nearly minimal
+IVC.
+
+JKind accepts an annotation on its input Lustre program indicat-
+ing which outputs variables to consider for IVC generation. Output
+variables not mentioned in the annotation are implicitly included
+in all IVCs. This allows the implementation focus on the variables
+important to the user and ignore, for example, administrative equa-
+tions. This is even more important for tools which generate Lustre
+as they often create many such administrative equations which sim-
+ply wire together more interesting expressions.
+
+6. EXPERIMENT
+
+We would like to investigate both the efﬁciency and mini-
+mality of our three algorithms:
+the näive brute-force algorithm
+(IVC_BF), the UNSAT core-based algorithm (IVC_UC), and the
+combined UNSAT core followed by brute-force minimization algo-
+rithm (IVC_UCBF). Efﬁciency is computed in terms of wall-clock
+
+time: how much overhead does the IVC algorithm introduce? Min-
+imality is determined by the size of the IVC: cores with a smaller
+number of variables are preferred to cores with a larger number of
+variables. Finally, we are interested in the diversity of solutions:
+how often do different tools/algorithms generate different minimal
+IVCs?
+
+The use of JKind allows additional dimensions to our investi-
+gation: it supports two different inductive algorithms: k-induction
+and PDR, and a “fastest” mode, that runs both algorithms in paral-
+lel. In addition, JKind supports multiple back-end SMT solvers in-
+cluding Z3 [16], Yices [17], MathSAT [14], and SMTInterpol [13].
+We would like to determine whether the choice of inductive algo-
+rithm affects the size of the IVC, whether different solvers are more
+or less efﬁcient at producing IVCs, and whether running different
+solvers/algorithms leads to diversity of IVC solutions.
+
+Therefore, we investigate the following research questions:
+• RQ1: How expensive is it to compute inductive validity
+cores using the IVC_BF, IVC_UC, and IVC_UCBF algo-
+rithms?
+
+• RQ2: How close to minimal are the support sets com-
+puted by IVC_UC as opposed to the (guaranteed minimal)
+IVC_UCBF?
+
+• RQ3: How much diversity exists in the solutions produced
+
+by different solver/induction algorithm conﬁgurations?
+
+6.1 Experimental Setup
+
+In this study, we started from a suite of 700 Lustre models de-
+veloped as a benchmark suite for [21]. We augmented this suite
+with 82 additional models from recent veriﬁcation projects includ-
+ing avionics and medical devices [4, 36]. Most of the benchmark
+models from [21] are small (10k or less, with 6-40 equations) and
+contain a range of hardware benchmarks and software problems in-
+volving counters. The additional models are much larger: around
+80k with over 300 equations. We added the new benchmarks to bet-
+ter check the scalability for the tools, especially with respect to the
+brute force algorithm. Each benchmark model has a single property
+to analyze. For our purposes, we are only interested in models with
+a valid property (though it is perhaps worth noting that there is no
+additional computation—and thus no overhead—using the JKind
+IVC options for invalid properties).
+In our benchmark set, 295
+models yield counterexamples, and 10 additional models are nei-
+ther provable nor yield counterexamples in our test conﬁguration
+(see next paragraph for conﬁguration information). The benchmark
+suite therefore contains 476 models with valid properties, which we
+use as our test subjects.
+
+For each test model, we computed IVC_UC in 12+1 conﬁgu-
+rations:
+the twelve conﬁgurations were the cross product of all
+solvers {Z3, Yices, MathSAT, SMTInterpol} and inductive algo-
+rithms {k-induction, PDR, fastest}, and the remaining (+1) conﬁg-
+uration was an instance of IVC_BF run on Yices, which is the de-
+fault solver in JKind. In addition, for each of the 12 conﬁgurations,
+we ran an instance of JKind without IVC to examine overhead.
+The experiments were run on an Intel(R) i5-2430M, 2.40GHz, 4GB
+memory machine, with a 1 hour timeout for each analysis on any
+model. The data gathered for each conﬁguration of each model
+included the time required to check the model without IVC, with
+IVC, and also the set of elements in the computed IVC.1
+
+Note that not all analysis problems were solvable with all algo-
+rithms: for all solvers, k-induction (without IVC) was unable to
+1The benchmarks, all raw experimental results, and computed data
+are available on [2].
+
+solve 172 of the examples. When comparing minimality of differ-
+ent solving algorithms, we only considered cases where both algo-
+rithms provided a solution (as will be discussed in more detail in
+Section 7.2).
+
+7. RESULTS
+
+In this section, we examine our experimental results from three
+perspectives: performance, minimality of IVC_UC results and di-
+versity.
+7.1 Performance
+
+In this subsection, we examine the performance of our inductive
+validity core algorithms (research question RQ1). First we examine
+the performance overhead of the IVC_UC algorithm over the time
+necessary to ﬁnd a proof using inductive model checking. To exam-
+ine this question, we use the default fastest option of JKind which
+terminates when either the k-induction or PDR algorithm ﬁnds a
+proof. To measure the performance overhead of the IVC_UC algo-
+rithm, we execute it over the proof generated by the fastest option.
+Since the IVC_UC algorithm uses the UNSAT core facilities of
+the underlying SMT solver, the performance is dependent on the
+efﬁciency of this part of the solver. Examining Tables 1 and 2,
+it is possible to examine both the aggregate computation time for
+analysis using the four solvers under evaluation and the overhead
+imposed by the IVC_UC algorithm. The data suggests that Yices
+(the default solver in JKind) and Z3 are the most performant solvers
+both in terms of computation time and overhead. Figure 5 allows
+a visualization of the overhead for the IVC_UC algorithm running
+different tools (as well as the IVC_BF algorithm, discussed below).
+For this ﬁgure, models are ranked on the x-axis in terms of their
+analysis time using the Yices solver to perform the proof without
+performing IVC.
+
+The IVC_UC algorithm using the Z3 and Yices SMT solvers adds
+a modest performance penalty to the time required for inductive
+proofs.
+
+Next, we consider the overhead of IVC_UC vs. IVC_BF. Re-
+call from Section 4 that IVC_BF requires n model checking runs,
+where n is the number of conjuncts in the transition relation. As
+expected, the performance is approximately a linear multiple of the
+size of the model, so larger models yield substantially lower per-
+formance.2 We run the brute-force algorithm using Yices as it is
+the default solver for JKind and is close to Z3 in terms of computa-
+tion time. For 19 models, IVC_BF times out after 1 hour. Figure 5
+shows the overhead of IVC_BF in comparison to IVC_UC with
+multiple solvers.
+
+The brute-force algorithm IVC_BF adds a substantial performance
+penalty to inductive proofs in all cases and is not scalable enough
+to compute a minimal core for large analysis problems.
+
+Finally, we consider the combined IVC_UCBF algorithm, in
+which we ﬁrst run the IVC_UC to determine a close-to-minimal
+IVC, then run IVC_BF on the remaining set. The overhead of
+this algorithm is considered in Tables 3 and 4. While considerably
+slower than IVC_UC, this approach can still be used for reasonably
+sized models.
+7.2 Minimality
+
+2for Lustre models, the number of conjuncts is equivalent to the
+number of equations in the Lustre model.
+
+Figure 5: Runtime of IVC_BF, IVC_UCBF, IVC_UC algorithms for Yices
+
+Figure 6: IVC_UC performance on different solvers
+
+Figure 7: IVC sizes produced by IVC_UC vs. IVC_UCBF for Yices
+
+runtime (sec)
+
+Z3
+Yices
+
+SMTInterpol
+
+MathSAT
+
+min
+0.005
+0.014
+0.029
+0.011
+
+max
+2.335
+13.297
+19.254
+86.421
+
+mean
+0.192
+0.589
+1.396
+3.071
+
+stdev
+0.355
+1.473
+2.991
+10.403
+
+Table 1: IVC_UC runtime with different solvers
+
+solver
+
+Z3
+Yices
+
+SMTInterpol
+
+MathSAT
+
+max
+
+mean
+
+min
+stdev
+0.73% 84.13% 17.38% 16.92%
+0.17% 351.47% 52.20% 54.50%
+1.46% 175.75% 46.81% 37.35%
+0.78% 955.52% 80.21% 112.92%
+
+Table 2: Overhead of IVC_UC computations using different
+solvers
+
+runtime (sec)
+
+Yices
+Z3
+
+min
+0.68
+0.66
+
+max
+3600.0
+3600.0
+
+mean
+91.59
+93.01
+
+stdev
+490.01
+490.27
+
+Table 3: IVC_UCBF runtime
+
+solver
+Yices
+Z3
+
+min
+
+max
+
+mean
+
+stdev
+
+122.50% 30092.78% 3195.90% 3896.05%
+101.70% 28114.07% 3190.18% 4119.14%
+
+Table 4: Overhead of IVC_UCBF algorithm
+
+solver
+
+Z3
+Yices
+
+total
+
+MathSAT
+
+SMTInterpol
+
+PDR k-induction
+2378
+2384
+2375
+2378
+9515
+
+2379
+2376
+2369
+2368
+9492
+
+total
+4757
+4760
+4744
+4746
+
+Table 5: Aggregate IVC sizes produced by IVC_UC using dif-
+ferent inductive algorithms and solvers
+
+solver
+Yices
+Z3
+
+max
+
+mean
+
+min
+stdev
+0.0% 725.0% 20.54% 50.47%
+0.0% 725.0% 20.81% 50.34%
+
+Table 6: Increase in IVC Size for IVC_UC vs. IVC_UCBF
+
+min max
+0.0
+0.878
+
+mean
+0.026
+
+stdev
+0.059
+
+Table 7: Pairwise Jaccard distances among all models
+
+In this section, we examine the minimality of the cores computed
+by the IVC_UC algorithm using different inductive proof methods
+and compare it to the cores produced by the combined algorithm
+(RQ2). There are two interesting aspects to be examined related
+to this research question. First (RQ2.1), does the choice of SMT
+solver or algorithm used to produce a proof (k-induction or PDR)
+matter in terms of the minimality of the inductive core? As men-
+tioned in Section 4, the IVC_UC algorithm is not guaranteed to
+produce a minimal core due in part to the role of invariants used in
+producing a proof; as k-induction and PDR use different invariant
+generation algorithms, it is possible that one or the other is more
+likely to yield smaller invariant sets. In addition, differences in the
+choice of the UNSAT core algorithms in the different tools could
+affect the size of the generated core. However, our algorithm al-
+ready does a minimization step on UNSAT cores, thus the only
+differences would be due to one algorithm leading to a different
+minimal core than another.
+
+As discussed in Section 6, k-induction is unable to solve all of
+the analysis problems; therefore we include only models that are
+solvable using both k-induction and PDR by all tools, 304 models
+in all. Examining the aggregate data in Table 5, we can see the sizes
+of cores produced by different algorithms and tools.
+
+Neither PDR nor k-induction yields a smaller inductive validity
+core in general.
+
+The next question (RQ2.2) asks how close to minimal are the
+cores produced by IVC_UC vs. the (guaranteed minimal) cores
+produced by the IVC_UCBF algorithm? Note that we cannot mea-
+sure the distance on all models because the combined algorithm
+times out on 9 of the larger models. We therefore examine the dis-
+tance from minimal cores produced by the combined algorithm for
+models in which it completes within the one hour timeout. For
+comparison, we run the IVC_UC algorithm in each tool with the
+default fastest algorithm, which will use the result of either k-
+induction or PDR. A graph showing the size of the IVCs for each
+model produced using the Yices solver is shown in Figure 7. In
+the ﬁgure, the models are ranked along the x-axis by the size of the
+core produced by IVC_UCBF. The ﬁgure demonstrates that while
+on average there is a modest change in minimality, there can be sub-
+stantial variance on the sizes of the cores produced by the IVC_UC
+algorithm. Summary statistics are shown in Table 6.
+
+The IVC_UC algorithm computes cores that on average 21% larger
+than those produced by IVC_UCBF, with substantial variance in
+some cases.
+
+7.3 Diversity
+
+Recall from Section 4 that a minimal core is any core leading to
+a proof such that if you remove any of the conjuncts from the core,
+it no longer produces a proof. For certain models and properties,
+it is possible that there are many minimal cores that will lead to a
+proof. In this section, we examine the issue of diversity: do dif-
+ferent tools and algorithms lead to different minimal cores? This
+is both a function of the models and the solution algorithms: for
+certain models, there is only one possible minimal core, whereas
+
+Figure 8: Pairwise Jaccard distance between IVCs
+
+other models might have many. Given that there are multiple solu-
+tions, the interesting question is whether using different tools and
+algorithms will lead to different solutions. Note that this question
+is closely tied to that of minimality, which we examined in the pre-
+vious section.
+
+Our exploration in this case is not exhaustive, but only ex-
+ploratory. The reason it is considered is that it has substantial rel-
+evance to some of the uses of the tool, e.g., for constructing trace-
+ability matrices from proofs. Given diversity of results, we may
+wish to distinguish must traceability elements from may traceabil-
+ity elements across a set of diverse solutions, and consider more
+systematic explorations of diversity in future work.
+
+To measure diversity of IVCs, we use Jaccard distance:
+Deﬁnition 3. Jaccard distance: dJ (A, B) = 1 − |A∩B|
+|A∪B| ,
+
+0 ≤ dJ (A, B) ≤ 1
+Jaccard distance is a standard metric for comparing ﬁnite sets (as-
+suming that both sets are non-empty) by comparing the size of the
+intersection of two sets over its union. For each model in the bench-
+mark, the experiments generated 13 different IVCs. Therefore, we
+
+(cid:1) = 78 combinations of pairwise distances per model.
+
+obtained(cid:0)13
+
+2
+
+Then, minimum, maximum, average, and standard deviation of the
+distances were calculated (Figure 8), by which, again, we calcu-
+lated these four measures among all models. As seen in Table 7, on
+average, the Jaccard distance between different solutions is small,
+but the maximum is close to 1, which indicates that even for our ex-
+ploratory analysis, there are models for which the tools yield sub-
+stantially diverse solutions. The diversity between solutions is rep-
+resented graphically in Figure 8, where for each model, we present
+the min, max, and mean pairwise distance of the solutions pro-
+duced by algorithm IVC_UC for each model, ranked by the mean
+distance.
+7.4 Discussion
+
+In the previous section, we presented three algorithms for deter-
+mining inductive validity cores. The brute-force algorithm is guar-
+anteed minimal, but is often very slow. The other two algorithms:
+the UNSAT core algorithm IVC_UC and the combined algorithm
+IVC_UCBF, represent interesting trade-offs. The IVC_UC algo-
+rithm is much faster, but is not guaranteed to be minimal; the result
+of this algorithm can be further, and sometimes quickly, reﬁned by
+the combined algorithm. Thus, we can choose to trade off speed
+for guaranteed minimality using these two algorithms; the com-
+bined algorithm can be viewed as a reﬁnement algorithm that we
+can terminate either at completion or after a ﬁxed time bound.
+
+Although our experiment does not ask statistical questions, it
+is still worth examining threats towards generalizing our results.
+First, are the models and properties that we chose representa-
+tive? We started from an existing benchmark from another research
+group suite to try to assuage this concern, but most of these models
+were small, so we extended the benchmark suite with 81 of our own
+models. It is possible that our additions skew the results, though
+these models are immediately derived from previously published
+work and not modiﬁed for our analysis here. Second, our models
+and tools use the Lustre language, which is equational, rather than
+conjuncted transition systems; it is possible (though, in our opinion,
+unlikely) that arbitrary conjuncts rather than equations will yield
+different performance or minimality characteristics.
+
+8. RELATED WORK
+
+Our work builds on top of a substantial foundation build-
+ing Minimally Unsatisﬁable Subformulas (MUSes) from UNSAT
+cores [15], including [6, 7, 29, 38, 40]. Recent algorithms can han-
+dle very large problems, but computing MUSes is still a resource-
+intensive task. While some work is aimed at providing a set of
+minimal unsatisﬁable formulae, minimality is usually deﬁned such
+that given a set of clauses M, removing any member of M makes it
+satisﬁable [6].
+
+UNSAT cores and MUSes are used for many different activi-
+ties within formal veriﬁcation. Gupta et al. [19] and McMillan and
+Amla [33] introduced the use of unsatisﬁable cores in proof-based
+abstraction engines. Their goal is to shrink the abstraction size by
+omitting the parts of the design that are irrelevant to the proof of
+the property under veriﬁcation. Torlak et al. in [45] ﬁnds MUSes
+of Alloy speciﬁcations, and considers semantic vacuity, which we
+consider in Section 1. Alloy models are only analyzed up to certain
+size bounds, however, and in general are unable to prove properties
+for arbitrary models. In our work, we extract the inductive validity
+core from information from several bounded model checking exe-
+cutions. Also, because we are extracting information from proofs,
+it is possible to use IVCs for additional purposes (proof explanation
+and completeness checking).
+
+If we view Lustre as a programming language, our work can be
+viewed as a more accurate form of program slicing [43]. We per-
+form backwards slicing from the formula that deﬁnes the property
+of interest of the model. The slice produced is smaller and more
+accurate than a static slice of the formula [46], but guaranteed to
+be a sound slice for the formula for all program executions, unlike
+dynamic slicing [3]. Predicate-based slicing has been used [28] to
+try to minimize the size of a dynamic slice. Our approach may
+
+have utility for some concerns of program slicing (such as model
+understanding) by constructing simple “requirements” of a model
+and using the tool to ﬁnd the relevant portions of the model.
+
+Another potential use of our work is for “semantic” vacuity de-
+tection. A standard deﬁnition of vacuity is syntactic and deﬁned as
+follows [25]: A system K satisﬁes a formula φ vacuously iff K (cid:96) φ
+and there is some subformula ψ of φ such that ψ does not affect
+φ in K. Vacuity has been extensively studied [5, 8, 11, 12, 20, 25]
+considering a range of different temporal logics and deﬁnitions of
+“affect”. On the other hand, our work can be used to consider a
+broader deﬁnition of vacuity. Even if all subformulae are required
+(the property is not syntactically vacuous), it may not require sub-
+stantial portions of the model, and so may be provable for vacu-
+ous reasons. The problem is exacerbated when the modeling and
+property language are the same (as in JKind), because whether a
+subformula is considered part of the model or part of the property,
+from the perspective of checking tools, can be unclear.
+
+Determining completeness of properties has also been exten-
+sively studied. Certiﬁcation standards such as DO178C [39] re-
+quire that requirements-derived tests achieve some level of struc-
+tural coverage (MC/DC, decision, statement) depending on the crit-
+icality level of the software, in order to approximate completeness.
+If coverage is not achieved, then additional requirements and tests
+are added until coverage is achieved. Chockler [10] deﬁned the ﬁrst
+completeness metrics directly on formal properties based on muta-
+tion coverage. Later work by Kupferman, Chockler and Vardi [25]
+deﬁnes completeness as an extension of vacuity to elements in the
+model. We present an alternative approach that uses the proof di-
+rectly, which we expect to be considerably less expensive to com-
+pute. Recent work by Murugesan [37] and Schuller [41] attempts
+to combine test coverage metrics with requirements to determine
+completeness.
+
+9. CONCLUSIONS & FUTURE WORK
+
+We have deﬁned the notion of an inductive validity core (IVC)
+which appears to be a useful measure in relation to a valid safety
+property in inductive model checking. We have presented a novel
+algorithm for computing IVCs that are nearly minimal and have
+shown that full minimality is undecidable in many settings. Our
+algorithm is applicable to all forms of inductive SAT/SMT-based
+model checking including k-induction, property directed reacha-
+bility (PDR), and interpolation-based model checking.
+
+We have implemented our IVC algorithm as part of the open
+source model checker JKind. We have shown that the algorithm
+requires only a moderate overhead and produces nearly minimal
+IVCs in practice. Moreover, the produced IVCs are fairly stable
+with respect to underlying proof engines (k-induction and PDR)
+and back-end SMT solvers (Yices, Z3, MathSAT, SMTInterpol).
+
+In ongoing work, we are using the notion of IVCs to perform
+vacuity detection, completeness checking, traceability, and test
+case generation failure analysis. We plan to investigate algorithms
+for exploring the space of IVCs such as ﬁnding distinct minimal
+IVCs or ﬁnding minimum (rather than minimal) IVCs. Such algo-
+rithms could be used to automatically measure the redundancy of
+systems with respect to their safety properties.
+
+10. REFERENCES
+[1] JKind. http://loonwerks.com/tools/jkind.html.
+[2] Set of Support. https://github.com/elaghs/Working/tree/
+
+master/support/experiments.
+
+[3] H. Agrawal and J. R. Horgan. Dynamic program slicing.
+
+SIGPLAN Not., 25(6):246–256, June 1990.
+
+[4] J. Backes, D. Cofer, S. Miller, and M. W. Whalen.
+
+Requirements analysis of a quad-redundant ﬂight control
+system. In K. Havelund, G. Holzmann, and R. Joshi, editors,
+NASA Formal Methods, volume 9058 of Lecture Notes in
+Computer Science, pages 82–96. Springer International
+Publishing, 2015.
+
+[5] I. Beer, S. Ben-David, C. Eisner, and Y. Rodeh. Computer
+Aided Veriﬁcation: 9th International Conference, CAV’97
+Haifa, Israel, June 22–25, 1997 Proceedings, chapter
+Efﬁcient detection of vacuity in ACTL formulas, pages
+279–290. Springer Berlin Heidelberg, Berlin, Heidelberg,
+1997.
+
+[6] A. Belov, M. Janota, I. Lynce, and J. Marques-Silva. On
+
+computing minimal equivalent subformulas. In Principles
+and Practice of Constraint Programming, pages 158–174.
+Springer, 2012.
+
+[7] A. Belov, I. Lynce, and J. Marques-Silva. Towards efﬁcient
+MUS extraction. AI Communications, 25(2):97–116, Apr.
+2012.
+
+[8] S. Ben-David and O. Kupferman. A framework for ranking
+
+vacuity results. In Automated Technology for Veriﬁcation and
+Analysis - 11th International Symposium, ATVA 2013,
+Hanoi, Vietnam, October 15-18, 2013. Proceedings, pages
+148–162, 2013.
+
+[9] H. Chockler, O. Kupferman, and M. Vardi. Coverage metrics
+
+for formal veriﬁcation. Correct hardware design and
+veriﬁcation methods, pages 111–125, 2003.
+
+[10] H. Chockler, O. Kupferman, and M. Y. Vardi. Correct
+
+Hardware Design and Veriﬁcation Methods: 12th IFIP WG
+10.5 Advanced Research Working Conference, CHARME
+2003, L’Aquila, Italy, October 21-24, 2003. Proceedings,
+chapter Coverage Metrics for Formal Veriﬁcation, pages
+111–125. Springer Berlin Heidelberg, Berlin, Heidelberg,
+2003.
+
+[11] H. Chockler and O. Strichman. Easier and more informative
+
+vacuity checks. In Proceedings of the 5th IEEE/ACM
+International Conference on Formal Methods and Models for
+Codesign, MEMOCODE ’07, pages 189–198, Washington,
+DC, USA, 2007. IEEE Computer Society.
+
+[12] H. Chockler and O. Strichman. Before and after vacuity.
+Formal Methods in System Design, 34(1):37–58, 2008.
+
+[13] J. Christ, J. Hoenicke, and A. Nutz. Smtinterpol: An
+interpolating smt solver. In Proceedings of the 19th
+International Conference on Model Checking Software,
+SPIN’12, pages 248–254, Berlin, Heidelberg, 2012.
+Springer-Verlag.
+
+[14] A. Cimatti, A. Griggio, B. J. Schaafsma, and R. Sebastiani.
+
+The mathsat5 smt solver. In Proceedings of the 19th
+International Conference on Tools and Algorithms for the
+Construction and Analysis of Systems, TACAS’13, pages
+93–107, Berlin, Heidelberg, 2013. Springer-Verlag.
+
+[15] A. Cimatti, A. Griggio, and R. Sebastiani. A simple and
+ﬂexible way of computing small unsatisﬁable cores in sat
+modulo theories. In Proceedings of the 10th International
+Conference on Theory and Applications of Satisﬁability
+Testing, SAT’07, pages 334–339, Berlin, Heidelberg, 2007.
+Springer-Verlag.
+
+[16] L. De Moura and N. Bjørner. Z3: An efﬁcient SMT solver. In
+
+Tools and Algorithms for the Construction and Analysis of
+Systems, pages 337–340. Springer, 2008.
+
+[17] B. Dutertre and L. D. Moura. The YICES SMT solver.
+
+Technical report, SRI, 2006.
+
+[18] N. Een, A. Mishchenko, and R. Brayton. Efﬁcient
+
+implementation of property directed reachability. In
+Proceedings of the International Conference on Formal
+Methods in Computer-Aided Design, FMCAD ’11, pages
+125–134, Austin, TX, 2011. FMCAD Inc.
+
+[19] A. Gupta, M. Ganai, Z. Yang, and P. Ashar. Iterative
+
+abstraction using sat-based bmc with proof analysis. In
+Proceedings of the 2003 IEEE/ACM international conference
+on Computer-aided design, page 416. IEEE Computer
+Society, 2003.
+
+[20] A. Gurﬁnkel and M. Chechik. Robust vacuity for branching
+temporal logic. ACM Trans. Comput. Logic, 13(1):1:1–1:32,
+Jan. 2012.
+
+[21] G. Hagen and C. Tinelli. Scaling up the formal veriﬁcation of
+
+lustre programs with smt-based techniques. In Formal
+Methods in Computer-Aided Design, 2008. FMCAD ’08,
+pages 1–9, Nov 2008.
+
+[22] N. Halbwachs, P. Caspi, P. Raymond, and D. Pilaud. The
+
+Synchronous Dataﬂow Programming Language Lustre.
+Proceedings of the IEEE, 79(9):1305–1320, September 1991.
+[23] T. Kahsai, Y. Ge, and C. Tinelli. Instantiation-based invariant
+
+discovery. In NASA Formal Methods - Third International
+Symposium, NFM 2011, Pasadena, CA, USA, April 18-20,
+2011. Proceedings, pages 192–206, 2011.
+
+[24] E. Keenan, A. Czauderna, G. Leach, J. Cleland-Huang,
+
+Y. Shin, E. Moritz, M. Gethers, D. Poshyvanyk, J. Maletic,
+J. Huffman Hayes, A. Dekhtyar, D. Manukian, S. Hossein,
+and D. Hearn. Tracelab: An experimental workbench for
+equipping researchers to innovate, synthesize, and
+comparatively evaluate traceability solutions. In Proceedings
+of the 34th International Conference on Software
+Engineering, ICSE ’12, pages 1375–1378, Piscataway, NJ,
+USA, 2012. IEEE Press.
+
+[25] O. Kupferman. Sanity checks in formal veriﬁcation. In
+
+Proceedings of the 17th International Conference on
+Concurrency Theory, CONCUR’06, pages 37–51, Berlin,
+Heidelberg, 2006. Springer-Verlag.
+
+[26] O. Kupferman, W. Li, and S. Seshia. A theory of mutations
+
+with applications to vacuity, coverage, and fault tolerance. In
+Proceedings of the 2008 Int’l Conf. on Formal Methods in
+Computer-Aided Design, page 25, 2008.
+
+[27] O. Kupferman and M. Y. Vardi. Vacuity detection in
+
+temporal model checking. Journal on Software Tools for
+Technology Transfer, 4(2), February 2003.
+
+[28] H. F. Li, J. Rilling, and D. Goswami. Granularity-driven
+
+dynamic predicate slicing algorithms for message passing
+systems. Automated Software Engineering, 11(1):63–89,
+2004.
+
+[29] J. Marques-Silva. Minimal unsatisﬁability: Models,
+
+algorithms and applications. In Multiple-Valued Logic
+(ISMVL), 2010 40th IEEE International Symposium on,
+pages 9–14. IEEE, 2010.
+
+[30] MathWorks Inc. Simulink Design Veriﬁer.
+
+http://www.mathworks.com/products/sldesignveriﬁer, 2015.
+
+[31] MathWorks Inc. Simulink Requirements Traceability.
+http://www.mathworks.com/discovery/requirements-
+traceability.html,
+2016.
+
+[32] K. L. McMillan. A methodology for hardware veriﬁcation
+
+using compositional model checking. Technical Report
+1999-01, Cadence Berkeley Labs, Berkeley, CA 94704.
+
+[33] K. L. McMillan and N. Amla. Automatic abstraction without
+
+counterexamples. In Tools and Algorithms for the
+Construction and Analysis of Systems, pages 2–17. Springer,
+2003.
+
+[34] S. P. Miller, M. W. Whalen, and D. D. Cofer. Software model
+
+checking takes off. Commun. ACM, 53(2):58–64, 2010.
+
+[35] Requirements for Safety Related Software in Defence
+Equipment, Issue 2. UK Ministry of Defence, 1997.
+
+[36] A. Murugesan, M. W. Whalen, S. Rayadurgam, and M. P.
+Heimdahl. Compositional veriﬁcation of a medical device
+system. In ACM Int’l Conf. on High Integrity Language
+Technology (HILT) 2013. ACM, November 2013.
+
+[37] A. Murugesan, M. W. Whalen, N. Rungta, O. Tkachuk,
+
+S. Person, M. P. Heimdahl, and D. You. Are we there yet?
+Determining the adequacy of formalized requirements and
+test suites. In NASA Formal Methods, pages 279–294.
+Springer, 2015.
+
+[38] A. Nadel. Boosting minimal unsatisﬁable core extraction. In
+
+Formal Methods in Computer-Aided Design (FMCAD),
+2010, pages 221–229. IEEE, 2010.
+
+[39] RTCA/DO-178C. Software considerations in airborne
+
+systems and equipment certiﬁcation.
+
+[40] V. Ryvchin and O. Strichman. Faster extraction of high-level
+
+minimal unsatisﬁable cores. In Theory and Applications of
+Satisﬁability Testing-SAT 2011, pages 174–187. Springer,
+2011.
+
+[41] D. Schuler and A. Zeller. Assessing oracle quality with
+
+checked coverage. In Proceedings of the Fourth IEEE Int’l
+Conf. on Software Testing, Veriﬁcation and Validation, pages
+90–99, 2011.
+
+[42] M. Sheeran, S. Singh, and G. Stålmarck. Checking safety
+properties using induction and a SAT-solver. In FMCAD,
+pages 108–125, 2000.
+
+[43] F. Tip. A survey of program slicing techniques. JOURNAL
+
+OF PROGRAMMING LANGUAGES, 3:121–189, 1995.
+
+[44] E. Torlak, F. S.-H. Chang, and D. Jackson. Finding minimal
+
+unsatisﬁable cores of declarative speciﬁcations. In
+Proceedings of the 15th International Symposium on Formal
+Methods, FM ’08, pages 326–341, Berlin, Heidelberg, 2008.
+Springer-Verlag.
+
+[45] E. Torlak, F. S.-H. Chang, and D. Jackson. Finding minimal
+unsatisﬁable cores of declarative speciﬁcations. In FM 2008:
+Formal Methods, pages 326–341. Springer, 2008.
+
+[46] M. Weiser. Program slicing. In Proceedings of the 5th
+
+International Conference on Software Engineering, ICSE
+’81, pages 439–449, Piscataway, NJ, USA, 1981. IEEE Press.
+
+[47] M. Whalen, G. Gay, D. You, M. Heimdahl, and M. Staats.
+
+Observable modiﬁed condition/decision coverage. In
+Proceedings of the 2013 Int’l Conf. on Software Engineering.
+ACM, May 2013.
+
+[48] D. You, S. Rayadurgam, M. Whalen, and M. Heimdahl.
+Efﬁcient observability-based test generation by dynamic
+symbolic execution. In 26th International Symposium on
+Software Reliability Engineering (ISSRE 2015), November
+2015.
+
+[49] L. Zhang and S. Malik. Extracting small unsatisﬁable cores
+
+from unsatisﬁable boolean formula. In 6th International
+Conference on Theory and Applications of Satisﬁability
+Testing: SAT 2003, May 2003.
+
+

@@ -1,0 +1,2288 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+3
+1
+
+ 
+ 
+]
+
+R
+C
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+5
+8
+0
+4
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Server-side Veriﬁcation of Client Behavior in Cryptographic Protocols
+
+Andrew Chi Robert Cochran Marie Nesﬁeld Michael K. Reiter Cynthia Sturton
+
+University of North Carolina
+
+Chapel Hill, NC, USA
+
+Abstract
+Numerous exploits of client-server protocols and appli-
+cations involve modifying clients to behave in ways that
+untampered clients would not, such as crafting malicious
+packets. In this paper, we demonstrate practical veriﬁ-
+cation of a cryptographic protocol client’s messaging be-
+havior as being consistent with the client program it is
+believed to be running. Moreover, we accomplish this
+without modifying the client in any way, and without
+knowing all of the client-side inputs driving its behavior.
+Our toolchain for verifying a client’s messages explores
+multiple candidate execution paths in the client concur-
+rently, an innovation that we show is both speciﬁcally
+useful for cryptographic protocol clients and more gener-
+ally useful for client applications of other types, as well.
+In addition, our toolchain includes a novel approach to
+symbolically executing the client software in multiple
+passes that defers expensive functions until their inputs
+can be inferred and concretized. We demonstrate client
+veriﬁcation on OpenSSL to show that, e.g., Heartbleed
+exploits can be detected without Heartbleed-speciﬁc ﬁl-
+tering and within seconds of the ﬁrst malicious packet,
+and that veriﬁcation of legitimate clients can keep pace
+with, e.g., Gmail workloads.
+
+INTRODUCTION
+
+1
+Tampering with clients in client-server protocols or ap-
+plications is an ingredient in numerous abuses. These
+abuses can involve exploits on the server directly, or ma-
+nipulation of application state for which the client is au-
+thoritative. Examples of the former include at least ten
+vulnerabilities in the last two years for OpenSSL alone1,
+including the high-proﬁle Heartbleed [10] vulnerability,
+which enabled a tampered SSL client to extract contents
+of server memory. Examples of the latter are “invalid
+command” game cheats that permit the client greater
+powers or resources in the game [28].
+
+The ideal defense would be to implement formally
+veriﬁed servers that incorporate all necessary input val-
+idation and application-speciﬁc checking. However, in
+practice, current production servers have codebases too
+
+1CVE-2014-0160, CVE-2014-3512, CVE-2014-3567, CVE-2014-
+3513, CVE-2015-0205, CVE-2015-1787, CVE-2015-0293, CVE-
+2015-0292, CVE-2015-0208, CVE-2015-0291.
+
+large to retroﬁt into a formally veriﬁed model. More-
+over, even simple input validation is difﬁcult to get per-
+fect, despite extensive review, as exhibited by widely
+deployed security software such as implementations of
+Transport Layer Security (TLS). In 2014, critical vulner-
+abilities were discovered in all ﬁve major implementa-
+tions of TLS [18], many of which turned out (after the
+fact) to be failures of input validation.
+
+Since it is generally impossible to anticipate all such
+abuses, in this paper we explore a holistic approach to
+validating client behavior as consistent with a sanctioned
+client program. In this approach, a veriﬁer monitors each
+client message as it is delivered to the server, to deter-
+mine whether the sequence of messages received from
+the client so far is consistent with the program the client
+is believed to be running and the messages that the server
+has sent to the client (Fig. 1). Performing this veriﬁcation
+is challenging primarily because inputs or nondetermin-
+istic events at the client may be unknown to the veriﬁer,
+and thus, the veriﬁer must solve for whether there ex-
+ist inputs that could have driven the client software to
+send the messages it did. Furthermore, some of those in-
+puts may be protected by cryptographic guarantees (pri-
+vate keys in asymmetric cryptography), and maliciously
+crafted ﬁelds may themselves be hidden by encryption,
+as is the case with Heartbleed.
+
+Figure 1: Abstracted client veriﬁcation problem.
+
+Our central contribution is to show that legitimate
+cryptographic client behavior can in fact be veriﬁed, not
+against a simpliﬁed protocol model but against the client
+program. Intuitively, we limit an attacker to only behav-
+iors that could be effected by a legitimate client. We
+believe this advance to be important:
+in showing that
+messages from a client can be quickly veriﬁed as legit-
+imate or potentially malicious, we narrow the time be-
+tween zero-day exploit and detection/countermeasure to
+minutes or even seconds. This is signiﬁcant, since in the
+case of Heartbleed, for example, the bug was introduced
+in March 2012 and disclosed in April 2014, a window
+of vulnerability of over two years. In fact, with latency-
+
+Given:P: Client ProgramM: Network MessageNot Given:I: Client InputsQuestion:Could Phave produced M ?LegitimatePotentiallyMaliciousYESNO✓Xtolerant applications (e.g., SMTP), our defense could be
+installed inline as a prevention system rather than sim-
+ply a detection system. Moreover, our technique accom-
+plishes this veriﬁcation with no vulnerability-speciﬁc
+conﬁguration and, indeed, would discover client exploit
+attempts even prior to a vulnerability’s disclosure. It also
+requires no changes to client or server software.2
+
+Following several other works in veriﬁcation of client
+messages when some client-side values are unknown
+(see Sec. 2 for a discussion of prior research), the ba-
+sic strategy we take is to use symbolic execution [4] to
+trace the client execution based on the messages received
+so far from the client (and the messages the server has
+sent to it). When the veriﬁer, in tracing client execu-
+tion, operates on a value that it does not know (a “sym-
+bolic” value), it considers all possibilities for that value
+(e.g., branching in both directions if a branch statement
+involves a symbolic variable) and records constraints
+on those symbolic values implied by the execution path
+taken. Upon an execution path reaching a message send
+point in the client software, the veriﬁer reconciles the
+accumulated constraints on that execution path with the
+next message received from the client. If the path does
+not contradict the message, then the message is con-
+ﬁrmed as being consistent with some valid client exe-
+cution.
+
+Our technical innovations within this direction of re-
+
+search are twofold.
+1. Prior research on this form of client veriﬁcation has
+primarily focused on carefully prioritizing candidate
+paths through the client in the hopes of ﬁnding one
+quickly to validate the message trace observed so far.
+This prioritization can itself be somewhat expensive
+(e.g., involving edit-distance computations on execu-
+tion paths) and prone to error, in which case the veri-
+ﬁer’s search costs grow dramatically (e.g., [7]). Here
+we instead use parallelism to explore candidate paths
+concurrently, in lieu of sophisticated path prediction
+or to overcome the impact of poor predictions.
+In
+Sec. 4, we describe the architecture of this parallel
+client-veriﬁcation tool and demonstrate its ability to
+overcome limitations in path prediction accuracy on
+two online games studied in previous research. We
+also highlight one aspect of cryptographic protocols
+for which efﬁciently validating client-side behavior
+depends on being able to explore multiple execution
+fragments in parallel, namely execution fragments re-
+ﬂecting plaintexts of different sizes, when the true
+plaintext size is hidden by message padding (as in
+SSH and draft TLS 1.3). In this case, predicting the
+plaintext length is not possible from the ciphertext
+2In the case of validating OpenSSL client behavior, we do use a
+common diagnostic feature on servers: logging session keys to enable
+analysis of network captures.
+
+length, by design, and so exploring different candi-
+date lengths in parallel yields substantial savings.
+
+2. When verifying the behavior of a client in a cryp-
+tographic protocol such as Transport Layer Security
+(TLS), the search for a client execution path to explain
+the next client message can be stymied by paths that
+contain cryptographic functions for which some in-
+puts are unknown (i.e., symbolic). The symbolic exe-
+cution of, e.g., the AES block cipher with an unknown
+message or a modular exponentiation with an un-
+known exponent is simply too costly. Every message-
+dependent branch in the AES code or modular ex-
+ponentiation routine would need to be explored, and
+the resulting formula would be unmanageably com-
+plex.
+In Sec. 5 we therefore describe a multi-pass
+algorithm for exploring such paths, whereby user-
+speciﬁed “prohibitive” functions are bypassed tem-
+porarily until their inputs can be deduced through rec-
+onciliation with the client message; only then is the
+function explored (concretely). In cases where those
+inputs can never be inferred—as would be the case for
+an ephemeral Difﬁe-Hellman key, for example—the
+system outputs the assumption required for the ver-
+iﬁcation of the client message to be correct, which
+can be discharged from a small whitelist of assump-
+tions. Aside from these assumptions, our veriﬁcation
+is sound.
+
+We stress that our veriﬁcation technique, while not
+completely turnkey, does not require detailed knowl-
+edge of the protocol or application being veriﬁed.
+For example, the speciﬁcation of prohibitive functions
+and a matching whitelist of permissible assumptions is
+straightforward in our examples: the forbidden functions
+are simply the AES block cipher, hash functions, and el-
+liptic curve group operations; and the whitelist includes
+the assumptions that a group element can be produced
+by raising the group generator to some power and that
+there exists an input that would induce the hash func-
+tion to produce a given value (which are both reason-
+able). Aside from specifying the forbidden functions and
+the whitelist, the other (optional) step is to “stub out”
+calls to software that are irrelevant to the analysis (e.g.,
+printf). For each of the contributions above, we detail
+the effort required by the user to utilize them.
+
+We document the efﬁcacy of our client veriﬁcation
+technique by showing that it can keep pace with client
+messages in an interactive Gmail session running over
+TLS 1.2 connections. Our veriﬁcation for each client-
+to-server TLS record takes an average of 126ms on a
+3.2GHz processor. Taking into account the bursts of
+network activity in Gmail trafﬁc, and given that a mes-
+sage cannot begin veriﬁcation until all previous messages
+are veriﬁed, the veriﬁcation of any client-to-server mes-
+
+2
+
+sage completes a maximum of 14s after the time the
+packet was delivered over the network. We also show
+that our technique keeps pace with TLS connections that
+use message padding, a draft TLS 1.3 [9] feature that in-
+troduces costs that our parallel approach is able to over-
+come.
+2 RELATED WORK
+The most closely related work is due to Bethea et al. [1]
+and Cochran and Reiter [7]. These works develop al-
+gorithms to verify the behavior of (non-cryptographic)
+client applications in client-server settings, as we do
+here. Bethea et al. adopted a wholly ofﬂine strategy, ow-
+ing to the expense of their techniques. Cochran and Re-
+iter improved the method by which a veriﬁer searches for
+a path through the client program that is consistent with
+the messages seen by the veriﬁer so far. By leveraging
+a training phase and using observed messages to provide
+hints as to the client program paths that likely produced
+those messages, their technique achieved improved veri-
+ﬁcation latencies but still fell far short of being able to
+keep pace with, e.g., highly interactive games. Their
+approach would not work for cryptographic protocols
+such as those we consider here, since without substantial
+protocol-speciﬁc tuning, the cryptographic protections
+would obscure information in messages on which their
+technique depends for generating these hints. In some
+sense, our work in Sec. 5 can be viewed as providing a
+method for iteratively stripping away these obfuscating
+effects of cryptographic ﬁelds, with the bare minimum
+of manual conﬁguration or protocol-speciﬁc knowledge,
+and our work in Sec. 4 then dampens the impact of gen-
+erated hints that are ultimately inaccurate.
+
+Several other works have sought to verify the behavior
+of clients in client-server protocols. Most permit false
+rejections or acceptances since they verify client behav-
+ior against an abstract (and so imprecise) model of the
+client program (e.g., [12, 14]), versus an actual client
+program as we do here. Others seek exact results as we
+do, but accomplish this by modifying the client to send
+all inputs it processes to the veriﬁer, allowing the veriﬁer
+to simply replay the client on those inputs [26]. In our
+work, we verify completely unchanged clients and intro-
+duce no additional messaging overhead. Proxies for in-
+ferring web-form parameter constraints when a web form
+is served to a client, to detect parameter-tampering at-
+tacks when the form values are returned [24], also pro-
+vide exact detection. However, this work addresses only
+stateless clients and does so without attention to cryp-
+tographically protected trafﬁc. Our work permits stateful
+clients and speciﬁcally innovates to overcome challenges
+associated with cryptographic protocols.
+
+Also related to our goals are numerous works focused
+on verifying the correctness of computations outsourced
+
+to an untrusted cloud. Recent works in this area, sur-
+veyed by Walﬁsh and Blumberg [27], employ advances
+in probabilistically checkable proofs (e.g., [15]) and/or
+interactive proofs (e.g., [13]) to permit a veriﬁer to con-
+ﬁrm (probabilistically) that an untrusted, remote party
+performed the outsourced computation correctly, at a
+cost to the veriﬁer that is smaller than it performing the
+outsourced computation itself. Since we approach the
+problem from the opposite viewpoint of a well-resourced
+veriﬁer (e.g., running with the server in a large cloud
+that the server owner trusts), our techniques do not offer
+this last property. However, ours requires no changes to
+the party being veriﬁed (in our case, the client), whereas
+these other works increase the computational cost for the
+party being veriﬁed (in their case, the cloud) by orders of
+magnitude (e.g., see [27, Fig. 5]). Another area of focus
+in this domain has been reducing the privacy ramiﬁca-
+tions of the additional information sent to the veriﬁer to
+enable veriﬁcation (e.g., [21]). Since our technique does
+not require changes to the messaging behavior of the ap-
+plication at all, our technique does not suffer from such
+drawbacks.
+
+More distantly related to our work is recent progress
+on reducing the security of reference implementations of
+cryptographic protocols to underlying cryptographic as-
+sumptions (e.g., miTLS, a reference implementation of
+TLS in F# [2]). Whereas such works prove speciﬁed
+properties of client and server implementations, our work
+instead seeks to prove a property of the messages sent
+in an interaction, the property being that these messages
+are consistent with a speciﬁed client implementation. As
+such, our techniques show nothing about the intrinsic se-
+curity of the client (or server) implementation itself; nev-
+ertheless, they are helpful in detecting a broad range of
+common exploit types in client-server protocols, as we
+show here. Our techniques also have the feature of being
+immediately deployable to existing production protocol
+implementations.
+3 BACKGROUND AND GOALS
+A client-server protocol generates messages msg 0,
+msg 1, . . ., some from the client and some sent by the
+server. Our goal is to construct a veriﬁer to validate the
+client behavior as represented in the message sequence;
+the server is trusted. We assume that the client is single-
+threaded and that the message order reﬂects the order in
+which the client sent or received those messages, though
+neither of these assumptions is fundamental. Our tech-
+nique is not dependent on a particular location for the
+veriﬁer, though for the purposes of this paper, we assume
+it is near the server, acting as a passive network tap.3
+
+3The veriﬁer can optimistically assume that the order in which it
+observes the messages is the order in which the client sent or received
+them, and this assumption will often sufﬁce to validate a legitimate
+
+3
+
+Borrowing terminology from prior work [7], the task
+of the veriﬁer is to determine whether there exists an exe-
+cution preﬁx of the client that is consistent with the mes-
+sages msg 0, msg 1, . . .. Speciﬁcally, an execution pre-
+ﬁx Π is a sequence of client instructions that begins at
+the client entry point and follows valid branching behav-
+ior in the client program. We deﬁne Πn to be consis-
+tent with msg 0, msg 1, . . ., msg n, if the network SEND
+and RECV instructions4 in Πn number n + 1 and these
+network instructions match msg 0, msg 1, . . ., msg n by
+direction—i.e., if msg i is a client-to-server message (re-
+spectively, server-to-client message), then the i-th net-
+work I/O instruction is a SEND (respectively, RECV)—
+and if the branches taken in Πn were possible under the
+assumption that msg 0, msg 1, . . . , msg n were the mes-
+sages sent and received. Consistency of Πn with msg 0,
+msg 1, . . ., msg n requires that the conjunction of all sym-
+bolic postconditions at SEND instructions along Πn be
+satisﬁable, once concretized using contents of messages
+msg 0, msg 1, . . ., msg n sent and received on that path.
+
+The veriﬁer attempts to validate the sequence msg 0,
+msg 1, . . . incrementally, i.e., by verifying the sequence
+msg 0, msg 1, . . ., msg n starting from an execution pre-
+ﬁx Πn−1 found to be consistent with msg 0, msg 1, . . .,
+msg n−1, and appending to it an execution fragment that
+yields an execution preﬁx Πn consistent with msg 0,
+msg 1, . . ., msg n. Speciﬁcally, an execution fragment is
+a nonempty sequence of client instructions (i) beginning
+at the client entry point, a SEND, or a RECV in the client
+software, (ii) ending at a SEND or RECV, and (iii) having
+no intervening SEND or RECV instructions. If there is no
+execution fragment that can be appended to Πn−1 to pro-
+duce a Πn consistent with msg 0, msg 1, . . ., msg n, then
+the search resumes by backtracking to to ﬁnd another ex-
+ecution preﬁx ˆΠn−1 consistent with msg 0, msg 1, . . .,
+msg n−1, from which the search resumes for an execu-
+tion fragment to extend it to yield a ˆΠn consistent with
+msg 0, msg 1, . . ., msg n. Only after all such attempts fail
+can the client behavior be declared invalid, which may
+take substantial time.
+
+Determining if a program can output a given value is
+only semidecidable (recursively enumerable); i.e., while
+valid client behavior can be declared as such in ﬁnite
+time, invalid behavior cannot, in general. Thus, an “in-
+valid” declaration usually comes by timeout on the veri-
+ﬁcation process.5 However, our primary concern in this
+paper is verifying the behavior of valid clients quickly.
+
+client even if not strictly true, particularly when the client-server proto-
+col operates in each direction independently (as in TLS). In other cases,
+the veriﬁer could in theory explore other orders when veriﬁcation with
+the observed order fails.
+
+4We abbreviate calls to POSIX send() and recv() system calls
+
+(or their functional equivalents) with the labels SEND and RECV.
+
+5Nevertheless, our tool declares our tested exploit traces as invalid
+
+within several seconds; see Sec. 7.1.
+
+4 PARALLEL CLIENT VERIFICATION
+As discussed in the previous section, upon receipt of
+message msg n, the veriﬁer attempts to ﬁnd an execution
+fragment with which to extend execution preﬁx Πn−1
+(consistent with msg 0, . . ., msg n−1) to create an execu-
+tion preﬁx Πn that is consistent with msg 0, . . ., msg n.
+Doing so at a pace that keeps up with highly interac-
+tive applications remains a challenge (e.g., [7]). We ob-
+serve, however, that multiple execution fragments can
+be explored concurrently. This permits multiple worker
+threads to symbolically execute execution fragments si-
+multaneously, while coordinating their activities through
+data structures to ensure that they continue to examine
+new fragments in priority order. In this section we detail
+the design of our tool to do so.
+
+While concurrent exploration of execution fragments
+can improve the performance of veriﬁcation in any
+client-server application (as we show in App. A), there
+are speciﬁc needs for this capability for verifying the
+cryptographic protocols of primary interest in this paper.
+For example, symbolic execution tools such as the KLEE
+tool on which we build [6], while being designed to work
+with program variables whose values are unknown (sym-
+bolic), nevertheless require the sizes of those variables to
+be ﬁxed. Upon observing a message msg i that is en-
+crypted, however, it may not be possible to determine
+the size of the plaintext if padding is added to the plain-
+text before encrypting (as in SSH and TLS 1.3)—and in
+some cases, this might be exactly the reason that padding
+was introduced (as in the case of TLS 1.3). The cipher-
+text length does, however, provide an upper bound on the
+plaintext length, and so veriﬁcation can proceed by con-
+sidering each possible plaintext length (up to the cipher-
+text length) individually. Doing so sequentially would
+result in a many-fold increase in veriﬁcation cost, how-
+ever. Instead, by considering many plaintext lengths in
+parallel, the increase in veriﬁcation cost due to this am-
+biguity can be substantially dampened.
+4.1 Algorithm overview
+We ﬁrst deﬁne the data structures used by the algorithm.
+A state σ represents a snapshot of execution in the sym-
+bolic virtual machine, including all constraints (path con-
+ditions) and memory objects, which includes the con-
+tents (symbolic or concrete) of registers, the stack and
+the heap. We use σ.cons to represent the constraints ac-
+cumulated during the execution to reach σ, and σ.nxt to
+represent the next instruction to be executed from σ. The
+veriﬁer produces state σn by symbolically executing the
+instruction sequence represented by execution preﬁx Πn.
+The algorithm builds and maintains a binary tree con-
+sisting of Node objects. Each node nd has a ﬁeld
+nd.path to record a path of instructions in the client; a
+ﬁeld nd.state that holds a symbolic state; children ﬁelds
+
+4
+
+represent backtracking.
+100 procedure ParallelVerify(Πn−1, σn−1, msg n)
+101 Root ← makeNode(Πn−1, σn−1, true)
+102 QR ← makeNodeQueue()
+(cid:46) Nodes ready to execute
+103 QA ← makeNodeQueue() (cid:46) Nodes added by workers
+104 Done ← false
+(cid:46) Instructs all threads to halt
+105 Rslt ← makeNode(⊥,⊥,⊥)
+(cid:46) Filled in on success
+106
+107
+108
+109
+110
+
+spawn NodeScheduler(Root, QR, QA, Done)
+for 1 to NumWorkers do
+
+spawn VfyMsg(msg n, Root, QR, QA, Done, Rslt)
+
+sync
+return Rslt
+
+(cid:46) Wait for all child threads
+(cid:46) Return result
+
+Figure 3: Main procedure for parallel client veriﬁcation.
+
+The algorithm for verifying a client-to-server message
+using thread-level parallelism is shown in Fig. 3. This
+algorithm, denoted ParallelVerify, takes as input the ex-
+ecution preﬁx Πn−1 consistent with msg 0, . . . , msg n−1;
+the symbolic state σn−1 resulting from execution of
+Πn−1 from the client entry point on message trace
+msg 0, . . . , msg n−1; and the next message msg n. Its out-
+put is Rslt, which holds the preﬁx Πn and corresponding
+state σn in Rslt.path and Rslt.state, respectively, if a pre-
+ﬁx consistent with msg 0, . . . , msg n is found. If the pro-
+cedure returns with Rslt.path = Rslt.state = ⊥, then
+this indicates that there is no execution preﬁx that can
+extend Πn−1 to make Πn that is consistent with msg 0,
+. . ., msg n. This will induce backtracking to search for
+another ˆΠn−1 that is consistent with msg 0, . . ., msg n−1,
+which the veriﬁer will then try to extend to ﬁnd a ˆΠn
+consistent with msg 0, . . ., msg n.
+
+The algorithm operates in a parent thread that spawns
+NumWorkers + 1 child threads; this includes one thread
+to manage scheduling of nodes for execution via the pro-
+cedure NodeScheduler (not shown) and NumWorkers
+worker threads to explore candidate execution fragments
+via the procedure VfyMsg (Fig. 4).
+
+NodeScheduler manages the selection of node states
+to execute next and maintains the ﬂow of nodes between
+worker threads. It receives as input two queues of nodes,
+a “ready” queue QR and an “added” queue QA. These
+queues are shared between the worker threads and the
+NodeScheduler thread. Worker threads pull nodes from
+QR and push new nodes onto QA. As there is only one
+scheduler thread and one or more worker threads produc-
+ing and consuming nodes from the queues QR and QA,
+QR is a single-producer-multi-consumer priority queue
+and QA is a multi-producer-single-consumer queue. The
+goal of NodeScheduler is to keep QA empty and QR
+full. Nodes are in one of four possible states, either
+actively being explored inside VfyMsg, stored in QR,
+stored in QA, or being prioritized by NodeScheduler.
+A node at the front of QR is the highest priority node
+not currently being explored. The nodes in QA are child
+nodes that have been created by VfyMsg threads that
+
+5
+
+Figure 2: Example node tree.
+
+nd.child0 and nd.child1 that point to children nodes, and
+a ﬁeld nd.saved that will be described in Sec. 5. The
+tree of nodes is rooted with a node nd holding the state
+nd.state = σn−1 and nd.path = Πn−1. The two chil-
+dren of a node nd in the tree extend nd.path through
+the next symbolic branch (i.e., branch instruction with
+a symbolic condition). One child node holds a state
+with a constraint that maintains that the branch condi-
+tion implies false, and the other child node’s state holds
+a constraint that indicates that the branch condition is
+true. The algorithm succeeds by ﬁnding a fragment with
+which to extend Πn−1 to yield Πn if, upon extending a
+path, it encounters a network I/O instruction that yields a
+state with constraints that do not contradict msg n being
+the network I/O instruction’s message.
+
+The driving goal of our algorithm is to enable concur-
+rent exploration of multiple states in the node tree. To
+this end, our parallel veriﬁcation algorithm uses multi-
+ple threads; it uses a single thread to manage the node
+tree and several worker threads, each assigned to a sin-
+gle node in the node tree at a time. Fig. 2 shows an ex-
+ample assignment of four workers to multiple nodes in
+a node tree.
+In our design and experiments, the num-
+ber of worker threads NumWorkers is a ﬁxed parameter
+provided to the veriﬁer. Because the veriﬁcation task is
+largely CPU-bound, in our experience it is not beneﬁcial
+to use more worker threads than the number of logical
+CPU cores, and in some cases, fewer worker threads than
+cores are necessary.
+4.2 Detailed algorithm description
+We will express our algorithm using standard multi-
+threading primitives. The keyword spawn indicates the
+creation of a child thread that will execute a named pro-
+cedure until completion, at which point the child thread
+will terminate. The keyword sync denotes that the parent
+procedure will not proceed to the next statement until all
+spawned child threads have ﬁnished execution. In addi-
+tion, statements involving accesses to shared data struc-
+tures will be performed atomically (i.e., in a critical sec-
+tion), though for readability we do not include explicit
+designation of the critical section boundaries in our pseu-
+docode. Also for readability, our pseudocode does not
+
+PQPRPSPT!"#$1-:$’HF7$56%M/%*N--*J$/:D"#$U<*"#$need to be prioritized by NodeScheduler and inserted
+into QR. NodeScheduler continues executing until the
+boolean Done is set to true by some VfyMsg thread.
+
+Shown in Fig. 4, the procedure VfyMsg does the main
+work of client veriﬁcation: stepping execution forward
+in the state σ of each node. In this ﬁgure, lines shaded
+gray will be explained in Sec. 5 and can be ignored
+for now (i.e., read Fig. 4 as if these lines simply do
+not exist). Like NodeScheduler, the procedure VfyMsg
+runs inside of a while loop until the value of Done is
+no longer equal to false (201). Recall that the parent
+procedure ParallelVerify spawns multiple instances of
+VfyMsg. Whenever there is a node on the queue QR,
+the condition on line 202 will be true and the procedure
+calls dequeue atomically. Note that even if |QR| = 1,
+multiple instances of VfyMsg may call dequeue in 203,
+but only one will return a node; the rest will retrieve un-
+deﬁned (⊥) from dequeue.
+
+If nd is not undeﬁned (204), the algorithm proceeds
+to execute the state nd.state and extend the associated
+path nd.path up to either the next network instruction
+(SEND or RECV) or the next symbolic branch (a branch
+instruction that is conditioned on a symbolic variable).
+The ﬁrst case, stepping execution on a non-network
+/ non-symbolic-branch instruction σ.nxt (here denoted
+isNormal(σ.nxt)), executes in a while loop on lines 206–
+208. The current instruction is appended to the path and
+the procedure execStep is called, which symbolically ex-
+ecutes the next instruction in state σ. These lines are
+where the majority of the computation work is done by
+the veriﬁer. The ability to concurrently step execution
+on multiple states is where the largest performance ben-
+eﬁts of parallelization are achieved. Note that calls to
+execStep may invoke branch instructions, but these are
+non-symbolic branches.
+
+In the second case, if the next instruction is SEND or
+RECV and if the constraints σ.cons accumulated so far
+with the symbolic state σ do not contradict the possibil-
+ity that the network I/O message σ.nxt.msg in the next
+instruction σ.nxt is msg n (i.e., (σ.cons ∧ σ.nxt.msg =
+msg n) (cid:54)⇒ false, line 210), then the algorithm has suc-
+cessfully reached an execution preﬁx Πn consistent with
+msg 0, . . ., msg n. The algorithm sets the termination
+value (Done = true) and sets the return values of the
+parent function on lines 212–213: Rslt.path is set to the
+newly found execution preﬁx Πn and Rslt.state is set to
+the state that results from executing it, conditioned on
+the last message being msg n (denoted [execStep(σ) |
+σ.nxt.msg (cid:55)→ msg n]). All other threads of execution
+now exit because Done = true and the parent procedure
+ParallelVerify will return Rslt.
+
+In the ﬁnal case, (isSymbolicBranch(σ.nxt)), the al-
+gorithm is at a symbolic branch. Thus, the branch con-
+dition contains symbolic variables and cannot be evalu-
+
+200 procedure VfyMsg(msg n, Root, QR, QA, Done, Rslt)
+201 while ¬Done do
+if |QR| > 0 then
+202
+nd ← dequeue(QR)
+203
+if nd (cid:54)= ⊥ then
+204
+π ← nd.path ; σ ← nd.state
+205
+while isNormal(σ.nxt) do
+206
+π ← π (cid:107) (cid:104)σ.nxt(cid:105)
+207
+σ ← execStep(σ)
+208
+if isNetInstr(σ.nxt) then
+209
+if (σ.cons ∧ σ.nxt.msg = msg n) (cid:54)⇒ false then
+210
+if (σ.cons ∧ σ.nxt.msg = msg n) ≡ nd.saved
+211
+then
+Rslt.path ← π (cid:107) (cid:104)σ.nxt(cid:105)
+Rslt.state ←
+Done ← true
+else
+nd ← clone(Root)
+nd.saved ← σ.cons ∧ σ.nxt.msg = msg n
+enqueue(QA, nd)
+
+[execStep(σ) | σ.nxt.msg (cid:55)→ msg n]
+(cid:46) Success!
+
+else if isProhibitive(σ.nxt) then
+nd.path ← π (cid:107) (cid:104)σ.nxt(cid:105)
+nd.state ← execStepProhibitive(σ, nd.saved)
+enqueue(QA, nd)
+else if isSymbolicBranch(σ.nxt) then
+π ← π (cid:107) (cid:104)σ.nxt(cid:105)
+σ(cid:48) ← clone(σ)
+σ(cid:48) ← [execStep(σ(cid:48)) | σ(cid:48).nxt.cond (cid:55)→ false]
+if σ(cid:48).cons (cid:54)⇒ false then
+nd.child0 ← makeNode(π, σ(cid:48), nd.saved)
+enqueue(QA, nd.child0)
+σ ← [execStep(σ) | σ.nxt.cond (cid:55)→ true]
+if σ.cons (cid:54)⇒ false then
+nd.child1 ← makeNode(π, σ, nd.saved)
+enqueue(QA, nd.child1)
+
+212
+213
+
+214
+215
+216
+217
+218
+219
+220
+221
+222
+223
+224
+225
+226
+227
+228
+229
+230
+231
+232
+233
+
+Figure 4: VfyMsg procedure. Shaded lines will be explained in Sec. 5.
+
+ated as true or false in isolation. Using symbolic exe-
+cution, the algorithm evaluates both the true branch and
+the false branch by executing σ.nxt conditioned on the
+condition evaluating to false (denoted [execStep(σ(cid:48)) |
+σ(cid:48).nxt.cond (cid:55)→ false] in line 226) and conditioned on the
+branch condition evaluating to true (230). In each case,
+the constraints of the resulting state are checked for con-
+sistency (227, 231), for example, using an SMT solver.
+If either state is consistent, it is atomically placed onto
+QA (229, 233).
+4.3 Algorithm summary
+Let us return to Fig. 2 from earlier, which depicts a node
+tree rooted at σn−1 during the veriﬁcation of msg n. The
+node colored white with a solid outline represents the
+root node with state σn−1. The nodes colored white with
+dashed outlines, are the dead nodes and represent inter-
+
+6
+
+mediate states that no longer exist. A node is dead when
+it does not reach a success condition or exits the main
+if block of VfyMsg (starting on line 204) without gener-
+ating any child nodes. Nodes colored black are the ac-
+tive nodes and are currently being explored by worker
+threads. Nodes colored dark gray are being prioritized
+by NodeScheduler and are still live. If there are worker
+threads that are ready to process a node, the highest pri-
+ority live nodes are in QR. Nodes colored light gray are
+the infant nodes and are in QA. We can see that worker
+W4 recently hit a symbolic branch condition and created
+two infant nodes which were added to QA. The other
+workers are likely executing lines 206–208.
+
+While we are mainly concerned with cryptographic
+protocols, in App. A we show that our parallel algorithm
+can be highly effective in improving the speed of verify-
+ing clients in other distributed applications.
+5 MULTIPASS CLIENT VERIFICATION
+As shown in App. A, concurrent exploration of execution
+fragments can be highly beneﬁcial to the speed of val-
+idating legitimate client behavior in non-cryptographic
+protocols. For verifying a cryptographic client, con-
+current exploration of execution fragments can be sim-
+ilarly beneﬁcial, as we will show in Sec. 7.3. Nev-
+ertheless, there remain challenges to verifying crypto-
+graphic clients that no reasonable amount of paralleliza-
+tion can overcome, since doing so would be tantamount
+to breaking some of the underlying cryptographic primi-
+tives themselves. In this section, we introduce a strategy
+for client veriﬁcation that can overcome these hurdles for
+practical protocols such as TLS.
+
+The most obvious challenge is encrypted messages. To
+make sense of these messages, the veriﬁer will need to be
+given the symmetric session key under which they are en-
+crypted. Fortunately, existing implementations of, e.g.,
+OpenSSL servers, enable logging session keys to support
+analysis of network captures, and so we rely on such fa-
+cilities to provide the session key to the veriﬁer. Given
+this, it is theoretically straightforward to reverse the en-
+cryption on a client-to-server message mid-session—just
+as the server can—but that capability does surprisingly
+little to itself aid the veriﬁcation of the client’s behav-
+ior. Indeed, state-of-the-art servers routinely fail to de-
+tect problems with the message sequence received from a
+client, as demonstrated by numerous such CVEs over the
+past two years in all major TLS implementations [18].
+
+We therefore continue with our strategy of incremen-
+tally building an execution preﬁx Π in the client software
+as each message is received by the veriﬁer to validate
+the client’s behavior. The veriﬁer injects the logged ses-
+sion key into the execution preﬁx at the point where the
+key would ﬁrst be generated by the client. Still, how-
+ever, the number of execution fragments that need to be
+
+explored in cryptographic protocol client implementa-
+tions is far too large to overcome by concurrent explo-
+ration alone, when other inputs to cryptographic algo-
+rithms can be symbolic. Some of these (e.g., a message
+plaintext, once decrypted) could be injected by the ver-
+iﬁer like the session key is, but in our experience, con-
+ﬁguring where to inject what values would require sub-
+stantially greater client-implementation-speciﬁc knowl-
+edge and bookkeeping than injecting just the session key
+does. This is in part due to the many layers in which
+cryptographic mechanisms are applied in modern proto-
+cols; e.g., in the TLS handshake, multiple messages are
+hashed to form the plaintext of another message, which is
+subsequently encrypted and authenticated. Even worse,
+other values, such as a client’s ephemeral Difﬁe-Hellman
+key, will never become available to a veriﬁer (or server)
+and so cannot be injected into an execution preﬁx Π.
+
+These observations motivate a design whereby the ver-
+iﬁer is permitted to skip speciﬁed functions that would
+simply be too expensive to execute with symbolic in-
+puts. Specifying such prohibitive functions need not re-
+quire substantial client-implementation-speciﬁc or even
+protocol-speciﬁc knowledge;
+in our experience with
+TLS, for example, it sufﬁces to specify basic crypto-
+graphic primitives such as modular exponentiation, block
+ciphers, and hash functions as prohibitive. Once speci-
+ﬁed as prohibitive, the function is skipped by the veriﬁer
+if any of its inputs are symbolic, producing a symbolic
+result instead. Once reconciled with the message se-
+quence msg 0, . . ., msg n under consideration, however,
+the veriﬁer can solve for some values that it was previ-
+ously forced to keep symbolic, after which it can go back
+and verify function computations (concretely) it had pre-
+viously skipped. Once additional passes yield no new
+information, the veriﬁer outputs any unveriﬁed function
+computations (e.g., ones based on the client’s ephemeral
+Difﬁe-Hellman key) as assumptions on which the veriﬁ-
+cation rests. Only if one of these assumptions is not true
+will our veriﬁer erroneously accept this message trace.
+As we will see, however, these remaining assumptions
+for a protocol like TLS are minimal.
+
+5.1 User conﬁguration
+As mentioned previously, our algorithm requires the
+speciﬁcation of prohibitive functions. A prohibitive
+function is required to have no side effects other than al-
+tering its own parameters (or parameter buffers if passed
+by reference) and producing a return value; given the
+same inputs, it must produce the same results; and it must
+be possible to compute the sizes of all output buffers as
+a function of the sizes of the input buffers. A function
+should be speciﬁed as prohibitive if executing it on sym-
+bolic inputs induces a large number of symbolic states,
+due to branching that depends on input values. For ex-
+
+7
+
+ample, a physics engine might contain signal processing
+functions that should be marked prohibitive.
+
+In our case studies, the prohibitive functions are cryp-
+tographic functions such as the AES block cipher or
+SHA-256. We stress, however, that the user need not
+know how these primitives are composed into a proto-
+col. We illustrate this in App. B, where we show the user
+conﬁguration needed for verifying the OpenSSL client,
+including the speciﬁcation of the prohibitive functions.
+
+Specifying prohibitive functions generalizes the nor-
+mal procedure used by symbolic execution to inject sym-
+bolic inputs into the program. The user normally desig-
+nates “user input” functions (such as getchar) as sym-
+bolic, so that each one is essentially replaced with a func-
+tion that always returns a symbolic, unconstrained value
+of the appropriate size. The random number generators,
+client-side inputs (i.e., stdin), and functions that re-
+turn the current time are typically so designated. The
+user conﬁguration for prohibitive functions simply ex-
+tends this mechanism so that some of these functions do
+not always return symbolic outputs, but return concrete
+outputs when their inputs are fully concrete.
+
+5.2 Algorithm description
+The multipass veriﬁcation algorithm involves changes to
+the VfyMsg procedure in Fig. 4, speciﬁcally the inser-
+tion of the shaded lines. Whenever σ.nxt is a call to a
+prohibitive function, it is treated separately (lines 219–
+222), using the execStepProhibitive function (221). (To
+accomplish this, isNormal in line 206 now returns false
+not only for any network instruction or symbolic branch,
+but also for any call to a prohibitive function.)
+If
+execStepProhibitive receives a call σ.nxt to a prohibitive
+function with any symbolic input buffers, it replaces the
+call with an operation producing fully symbolic out-
+put buffers of the appropriate size. However, if the
+constraints saved in nd.saved allow the concrete input
+buffer values to be inferred, then execStepProhibitive in-
+stead performs the call σ.nxt on the now-concrete input
+buffers.
+
+Prior to the execution path reaching a network instruc-
+tion, when a call σ.nxt to a prohibitive function is en-
+countered, nd.saved is simply true as initialized (see the
+third argument to makeNode in line 101 of Fig. 3, as well
+as in 228 and 232), permitting no additional inferences
+about the values of input buffers to σ.nxt. After a net-
+work instruction is reached and msg n is reconciled with
+the constraints σ.cons accumulated along the path so far
+(210), the path constraints σ.cons and the new constraint
+σ.nxt.msg = msg n are saved in nd.saved (217). The ex-
+ecution path is then replayed from the root of the binary
+tree (i.e., beginning from Πn−1, see 216). This process
+repeats until an execution occurs in which nothing new is
+learned (i.e., (σ.cons∧ σ.nxt.msg = msg n) ≡ nd.saved,
+
+void Client(int x, int y, int iv) {
+
+int p = x*y;
+if (x % 9 == 0) {
+
+if (y & 1 == 1) {
+
+int s = AES(iv);
+int c = p ˆ s;
+SEND(iv, c);
+
+}
+
+}
+
+}
+
+(a) Example client code
+
+(b) Pass one
+
+(c) Pass two
+
+Figure 5: Example of multipass veriﬁcation on a simple client.
+
+in 211), at which point VfyMsg returns as before.
+
+5.3 Detailed walk-through
+In Sec. 5.2, we concisely summarized the multipass al-
+gorithm as deﬁned by the shaded lines in Fig. 4. We now
+provide a detailed walk-through of the algorithm on a
+segment of C code that includes both an encryption op-
+eration and a network operation (Fig. 5a), starting from
+entry point and following the veriﬁer to termination.
+
+This client multiplies two of its inputs x and y, en-
+crypts it using a third input iv as an initialization vec-
+tor, and sends both iv and the encrypted value to the
+server. Our tool begins with a node initialized to the
+client entry point and attempts to verify (by spawning
+one or more threads that execute VfyMsg) that there ex-
+
+8
+
+x % 9 == 0FALSETRUEy & 1 == 1AES(iv)SEND(iv, c)FALSETRUEInitial State:x = ?, y = ?, iv = ?Learned Constraints:p = x * yx % 9 = 0y & 1 = 1c = p ^ siv = 0x1234c = 0x9DACMessage to Verify:𝑚𝑠𝑔0= 0x12349DAC𝜎.consnd.savedx % 9 == 0TRUEy & 1 == 1SEND(iv, c)TRUEAES(iv)Initial State:x = ?, y = ?iv = 0x1234, c = 0x9DACLearned Constraints:p = x * yx % 9 = 0y & 1 = 1c = p ^ siv = 0x1234c = 0x9DACs = 0x2343p= 0xBEEFMessage to Verify:𝑚𝑠𝑔0= 0x12349DAC𝜎.cons≡nd.savedist inputs x, y, and iv that would produce the output
+message msg 0 = 0x12349DAC that was observed over
+the network.
+
+The instance of VfyMsg that ﬁrst reaches the SEND
+has, by that time, accumulated constraints σ.cons as
+speciﬁed in Fig. 5b. Note, however, that it has no con-
+straints relating s (the output of AES(iv)) and iv,
+since AES was designated as prohibitive and skipped
+(since iv is symbolic). After reconciling these con-
+straints with the message msg 0 = 0x12349DAC, the
+veriﬁer records nd.saved.
+
+It
+
+The veriﬁer then re-executes from Root (Fig. 5c),
+although since it now knows iv = 0x1234,
+this
+time it does not skip AES.
+thus computes a
+concrete output s = 0x2343 and the constraint
+0x9DAC = p ˆ 0x2343, i.e., p = 0xBEEF. After
+this second pass, the constraints in nd.saved are still sat-
+isﬁable (e.g., x = 0x9, y = 0x1537). However, the
+third pass (not shown) reveals no more information, so
+VfyMsg returns the corresponding execution preﬁx and
+state at the end of the third pass.
+
+5.4 TLS example
+We illustrate the behavior of the multipass algorithm on
+TLS. Fig. 6 shows an abstracted subset of a TLS client
+implementation of AES-GCM, running on a single block
+of plaintext input. For clarity, the example omits details
+such as the implicit nonce, the server ECDH parameters,
+the generation of the four symmetric keys, and subsumes
+the tag computation into the GHASH function. But in all
+features shown, this walkthrough closely exempliﬁes the
+multi-pass veriﬁcation of a real-world TLS client.
+
+In Fig. 6, the outputs observed by the veriﬁer are the
+client Difﬁe-Hellman parameter A, the initialization vec-
+tor iv, the ciphertext c, and the AES-GCM tag t. The
+unobserved inputs are the Difﬁe-Hellman private expo-
+nent a, the initialization vector iv, and the plaintext p.
+We do assume access to the AES symmetric key k. Since
+the client veriﬁcation is being performed on the server
+end of the connection, we can use server state, including
+the symmetric key. The veriﬁer decides whether the ob-
+served outputs are legal, given knowledge of the program
+but not its inputs.
+
+In the ﬁrst pass of symbolic execution (Fig. 6a), even
+with knowledge of the AES symmetric key k, all pro-
+hibitive functions (ECDH, AES, GHASH) have at least
+one symbolic input. So, execStepProhibitive skips them
+and produces unconstrained symbolic output for each.
+After the ﬁrst execution pass (Fig. 6b), the veriﬁer en-
+counters the observed client outputs. Reconciling them
+with the accumulated constraints σ.cons yields concrete
+values for A, t, c, and iv, but not the other variables.
+
+The veriﬁer then begins the second pass of symbolic
+execution (Fig. 6c). At this point, AES and GHASH both
+
+have concrete inputs, and therefore can be executed con-
+cretely. Note that the concrete execution of AES yields
+a concrete value for s, which was not previously known.
+At the end of the second execution pass (Fig. 6d), the ver-
+iﬁer implicitly uses the new knowledge of s to check that
+there exists a p, the unobserved plaintext value, that sat-
+isﬁes the constraints imposed by observed output. Fur-
+ther passes beyond this point yield no additional infor-
+mation, as no further symbolic inputs to prohibitive func-
+tions can be concretized.
+
+Note that the value of a, the client Difﬁe-Hellman
+private exponent, is never computed. The veriﬁer thus
+yields as output an additional assumption that there exists
+an a such that ECDH(a) yields values A and k. As such,
+we do not detect invalid curve attacks [16], for example;
+we discuss practical mitigations for this in Sec. 8.2.
+
+IMPLEMENTATION
+
+Perhaps remarkably, no decryption mechanism is ex-
+plicitly provided to the veriﬁer. The multipass mecha-
+nism automatically recovers the plaintext for stream ci-
+phers and counter-mode block ciphers. For other modes
+such as CBC, the user could provide inverse functions
+via an extension described in App. D.
+6
+We have designed and implemented a prototype of our
+client veriﬁcation technique. Our implementation is built
+upon a modiﬁed version of KLEE [6] and employs opti-
+mizations used in previous work [7] as well as several
+new performance improvements. At a high level, KLEE
+serves as an interpreter of LLVM assembly instructions.
+When an instruction has symbolic operands, the oper-
+ation is stored as a symbolic expression; otherwise the
+operation is interpreted concretely. Note that even in-
+terpreting instructions concretely induces a signiﬁcant
+performance penalty compared to native execution. We
+reduce this cost by leveraging the information provided
+in the user conﬁguration of prohibitive functions to mix
+in native execution of calls to prohibitive functions with
+concrete inputs. The only additional requirement for this
+optimization is to provide the veriﬁer with a native shared
+object that exports implementations of the prohibitive
+functions.
+
+Symbolic execution of the client requires interaction
+with the environment through library and system calls.
+Our implementation inherits and extends several mecha-
+nisms from KLEE for interacting with the environment.
+We use a combination of the POSIX model provided
+by KLEE, and an expanded POSIX environment model
+from another system, Cloud9 [5]. We also make two
+key extensions to this model to support network instruc-
+tions and prohibitive functions. First, during symbolic
+execution of the client, each SEND or RECV is is inter-
+cepted and the next message in the trace under veriﬁca-
+tion for a given symbolic state is processed as described
+
+9
+
+(a) First pass, execution
+
+(b) First pass, reconciliation
+
+(c) Second pass, execution
+
+(d) Second pass, reconciliation
+
+Figure 6: Multipass algorithm on a TLS client implementing an abstracted subset of AES-GCM. Rectangular blocks are prohibitive functions;
+circles are variables. Shaded nodes are concrete values or functions executed with concrete inputs. Unshaded nodes are symbolic values or skipped
+functions. In Fig. 6b and Fig. 6d, some values become concrete when σ.cons is reconciled with σ.nxt.msg = msg n in line 210.
+
+in Sec. 4. POSIX network calls are thus modeled to
+be consistent with the message trace we are verifying.
+Prohibitive functions are supported through an extension
+to the KLEE runtime model. The steps a user takes to
+add a prohibitive function to a given client program are
+straightforward. First, the user adds the function signa-
+ture to a speciﬁed ﬁle in the KLEE runtime model using
+an API provided by the veriﬁer. Next, the user deﬁnes
+the input parameters and their size, as well as the output
+parameters and size (as a function of the input size). The
+model is compiled and linked with the client program
+to prepare for veriﬁcation. When a prohibitive function
+is reached during veriﬁcation, the veriﬁer uses the user-
+provided annotations to identify if any input memory is
+symbolic and, if so, the function is “skipped” and the
+outputs are initialized and marked as symbolic. If all in-
+puts are concrete, then the underlying implementation is
+executed.
+
+The parallel client veriﬁcation algorithm (Sec. 4) re-
+quires a mechanism to concurrently execute symbolic
+states. We extended KLEE to support multi-threaded op-
+eration. Our changes did not signiﬁcantly alter the over-
+all architecture of KLEE, but several submodules required
+modiﬁcation to support concurrent execution, including
+symbolic state “searchers”, symbolic memory manage-
+ment, and constraint caching and solving.
+
+To our knowledge, no current symbolic execution
+engines support parallel execution in a single process
+via multiple threads. While other efforts have demon-
+strated the feasibility and performance beneﬁts of paral-
+lelized symbolic execution engines ([5, 23, 25]), these
+approaches differ from ours by dividing the symbolic ex-
+
+ecution work across multiple processes or hosts instead
+of across multiple threads. A multi-threaded symbolic
+execution engine can leverage opportunities to identify
+duplicate states, utilize state merging, and utilize shared
+constraint-solving caches. Furthermore, our architecture
+does not incur costs due to the latency of communication
+between multiple hosts; our application of symbolic ex-
+ecution to client veriﬁcation requires high speed context
+switching between states. Additionally our state selec-
+tion can achieve efﬁciencies with global knowledge of
+the progress of each execution path. Finally, our veri-
+ﬁer is designed to solve SMT queries concurrently with
+multiple instantiations of an SMT solver, in our case
+STP [11].
+7 EVALUATION
+In this section we evaluate our implementation of the al-
+gorithms in Secs. 4–5. First, we run a single-worker ver-
+iﬁer against two attacks on OpenSSL that represent dif-
+ferent classes of client misbehavior. Second, we load test
+a single-worker veriﬁer on a typical TLS 1.2 payload,
+i.e., the trafﬁc generated by a Gmail session. Third, we
+increase the veriﬁcation complexity to demonstrate scal-
+ability to more complex protocols with larger client state
+spaces, which we overcome using multiple workers. We
+do this by simulating veriﬁcation of a TLS 1.3 draft [9]
+feature that permits arbitrary random padding in every
+packet. The OpenSSL conﬁguration options we used are
+listed in App. B. All experiments were run on a system
+with 256GB of RAM and 3.2GHz processor cores.
+
+Our primary measure of performance is veriﬁcation
+lag. To deﬁne lag, let the veriﬁcation cost of a message
+
+10
+
+RNG RNG STDIN iv AES ECDH A GHASH akpscttAciv Observed Outputs Unobserved Inputs (symbolic) (concrete) RNG RNG STDIN iv AES ECDH A GHASH akpscttAciv Observed Outputs Unobserved Inputs (symbolic) (concrete) RNG RNG STDIN iv AES ECDH A GHASH akpscttAciv Observed Outputs Unobserved Inputs (symbolic) (concrete) RNG RNG STDIN iv AES ECDH A GHASH akpscttAciv Observed Outputs Unobserved Inputs (symbolic) (concrete) msg n, denoted cost(n), be the wall-clock time that the
+veriﬁer spends to conclude if msg n is valid, beginning
+from the execution preﬁx Πn−1 produced from the suc-
+cessful veriﬁcation of msg 0, . . . , msg n−1. Since the ver-
+iﬁer is compute-bound, cost(n) is roughly the CPU time
+that it spends to produce Πn from Πn−1.6 The comple-
+tion time for msg n is then deﬁned inductively as follows:
+
+comp(0) = cost(0)
+comp(n) = max{arr (n), comp(n − 1)} + cost(n)
+
+where arr (n) is the wall-clock time when msg n ar-
+rived at the veriﬁer. Since the veriﬁcation of msg n can-
+not begin until after both (i) it is received at the ver-
+iﬁer (at time arr (n)) and (ii) the previous messages
+msg 0, . . . , msg n−1 have completed veriﬁcation (at time
+comp(n − 1)), comp(n) is calculated as the cost cost(n)
+incurred after both (i) and (ii) are met. Finally, the lag of
+msg n is lag(n) = comp(n) − arr (n), which is our pri-
+mary measure of performance.
+7.1 Heartbleed and CVE-2015-0205 detection
+We ﬁrst evaluate our client veriﬁer against two attacks on
+OpenSSL, which are meant to be illustrative of different
+classes of vulnerabilities that we can verify: those related
+to tampering with the client software to produce mes-
+sages that a client could not have produced (CVE-2014-
+0160 Heartbleed) and a message sequence that, while
+correctly formatted, is impossible given a valid client
+state machine (CVE-2015-0205).
+
+An OpenSSL 1.0.1f s server was instantiated with
+standard settings, and an OpenSSL s client was mod-
+iﬁed so that it would establish a TLS connection and send
+a single Heartbleed exploit packet. This packet had a
+modiﬁed length ﬁeld, and when received by an OpenSSL
+1.0.1f s server, caused the server to disclose sensitive
+information from memory.
+
+When client veriﬁcation was applied to a normal client
+(which sends a normal Heartbeat packet), the veriﬁca-
+tion lag for the (last message of the) connection was 1.7s.
+When it was applied to a client that sends a Heartbleed
+exploit, the validation process was unable to ﬁnd an ex-
+planation for the contents of the packet and rejected the
+packet after exhausting all search paths, with a lag for the
+Heartbleed packet of 6.9s.
+
+Unlike Heartbleed, CVE-2015-0205 contains only
+correctly formatted messages.
+In the certiﬁcate ex-
+change, a good client will send a DH certiﬁcate (used
+to generate a pre-master secret), followed by a 0-length
+ClientKeyExchange message. A malicious client will
+send a certiﬁcate, followed by a ClientKeyExchange
+
+6In case of backtracking—i.e., if at any point an alternate preﬁx
+ˆΠn−1 must be produced—then the time needed to advance ˆΠn−1 to
+an ˆΠn that is consistent with all of msg 0, . . . , msg n is also accumu-
+lated into cost(n).
+
+11
+
+message containing a DH parameter. The server will au-
+thenticate the certiﬁcate, but prefer the second message’s
+DH parameter, allowing a malicious client to imper-
+sonate anyone whose public certiﬁcate it has obtained.
+We introduced this vulnerability to an OpenSSL 1.0.1d
+s server which was instantiated with standard set-
+tings, and an OpenSSL s client was modiﬁed to send
+a ClientKeyExchange containing a DH parameter. The
+server authenticated the certiﬁcate but preferred the sec-
+ond DH parameter.
+
+The veriﬁcation lag for the good connection was 1.3s,
+and the veriﬁer rejected an attempted attack after a lag of
+2.4s. This exploit illustrates the power of our technique:
+we not only verify whether each message is possible in
+isolation, but also in the context of all previous messages.
+Since the tool veriﬁes valid client behavior, no attack-
+speciﬁc conﬁguration was required. We do not require
+any foreknowledge of the exploit and anticipate correct
+detection of other exploits requiring client tampering.
+
+7.2 Performance evaluation: Typical TLS load
+The Gmail performance test was designed to measure the
+lag that would result from running a single-worker ver-
+iﬁer against typical real-world TLS trafﬁc. The data set
+was a tcpdump capture of a three-minute Gmail session
+conducted in Firefox, and consisted of 21 concurrent,
+independent TLS sessions, totaling 3.8MB of network
+data. This Gmail session was performed in the context
+of one of the authors’ email accounts and included both
+receiving emails and sending emails with attachments.
+
+The veriﬁcation objective of this test was to verify
+the TLS layer of a network connection, but not the ap-
+plication layer above it, such as the browser logic and
+Gmail web application. To simulate the client-server
+conﬁguration without access to Gmail servers and pri-
+vate keys, we used the packet sizes and timings from the
+Gmail tcpdump to generate 21 equivalent sessions us-
+ing OpenSSL s client and s server, such that the
+amount of trafﬁc sent in each direction at any point in
+time matches identically with that of the original Gmail
+capture. Since s client implements a few diagnos-
+tic features in addition to TLS (but no application layer),
+verifying s client against these 21 sessions provides
+a conservative evaluation of the time required to verify
+the pure TLS layer.
+
+Fig. 7 shows the bandwidth characteristics of these 21
+TLS connections. As can be seen, one of the 21 TLS
+sessions was responsible for the vast majority of the data
+transferred, and almost all of the data it carried was car-
+ried from the server to the client (Fig. 7b); presumably
+this was a bulk-transfer connection that was involved
+in prefetching, attachment uploading, or other latency-
+insensitive tasks. The other 20 TLS sessions were uti-
+lized comparatively lightly and presumably involved in
+
+sage size for all 21 TLS sessions. Note that client-to-
+server messages tend to be costlier to verify, despite be-
+ing smaller, because the veriﬁer’s execution of the client
+software when processing server-to-client messages is
+almost entirely concrete. In contrast, the execution of the
+client in preparation of sending a client-to-server mes-
+sage tends to involve more symbolic branching. But
+what is most noteworthy about this plot is the linearity
+of the relationship between message size and veriﬁca-
+tion cost, particularly for client-to-server messages. This
+is remarkable, given that the general problem of client
+veriﬁcation is undecidable. In fact, it provides a simple,
+application-independent way to estimate the costs of ver-
+iﬁcation for TLS sessions carrying payloads other than
+Gmail. Furthermore, assuming similar upper bounds on
+the sizes of messages in each direction, this predictabil-
+ity enables us to set a sharp timeout at which point the
+veriﬁer declares the client “invalid.” Based on Fig. 9,
+setting the timeout at a mere 2s (veriﬁcation cost) would
+enable the veriﬁer to quickly detect misbehaving clients
+at a vanishingly small false alarm rate.
+TLS-Speciﬁc Optimizations. While our goal so far in
+this paper has been to provide for client behavior veri-
+ﬁcation with a minimum of protocol-speciﬁc tuning, a
+practical deployment should leverage properties of the
+protocol for performance. One important property of
+TLS (and other TCP-based protocols such as SSH) is that
+its client-to-server and server-to-client message streams
+operate independently. That is, with the exception of the
+initial session handshake and ending session teardown,
+the veriﬁability of client-to-server messages should be
+unaffected by which, if any, server-to-client messages the
+client has received. This gives the veriﬁer the freedom
+to simply ignore server-to-client application data mes-
+sages. By doing so, the veriﬁcation costs for server-to-
+client messages, which effectively reduce to zero, do not
+contribute to a growing lag. The effect of this optimiza-
+tion on lag is shown in Fig. 10, in particular reducing the
+worst-case lag to around 14s. In all subsequent results,
+we have ignored server-to-client messages unless other-
+wise noted.
+7.3 Stress testing: Added protocol complexity
+The Gmail performance evaluation showed that veriﬁ-
+cation of a typical TLS 1.2 session can be done efﬁ-
+ciently and reliably, an advance made possible by apply-
+ing a multipass methodology to cryptographic functions.
+In essence, once the state explosion from cryptographic
+functions is mitigated, the client state space becomes
+small enough that the veriﬁcation time is primarily de-
+termined the straight-line execution speed of the KLEE
+symbolic interpreter. However, not all clients are guar-
+anteed to be this simple. One good example is the draft
+TLS 1.3 standard [9]. In order to hide the length of the
+
+(b) Server-to-client volumes
+
+(a) Client-to-server volumes
+Figure 7: Cumulative data transferred for a Gmail session consisting
+of 21 TLS connections. Fig. 7a shows the volumes transferred in the
+client-to-server direction, with one line per TLS session. Fig. 7b shows
+the volumes transferred in the server-to-client direction.
+
+(a) All 21 TLS sessions
+
+(b) High-volume session
+
+Figure 8: Veriﬁcation lags in seconds for the messages in the Gmail
+data set. Box plot at horizontal-axis value t includes {lag(i) : t ≤
+arr (i) < t + 30s}. Fig. 8a shows the veriﬁcation lags for all messages
+in all 21 TLS sessions. Fig. 8b shows the veriﬁcation lags for only the
+messages in the high-volume session.
+
+more latency-sensitive activities.
+
+Fig. 8 shows the
+distribution of veri-
+ﬁcation lag of mes-
+sages, grouped by
+the 30-second inter-
+val in which they ar-
+rived at the veriﬁer.
+Fig. 8a show all of
+the messages’ veriﬁ-
+cation lag, whereas
+Fig. 8b isolates the
+lag for the one high-
+volume ﬂow shown
+in Fig. 7.
+It is evi-
+dent from these ﬁg-
+ures that majority of the veriﬁcation lag happens early
+on, initially up to ∼ 30s in the worst case. This lag co-
+incides with an initial burst of trafﬁc related to requests
+while loading the Gmail application. Another burst oc-
+curs later, roughly 160s into the trace, when an attach-
+ment was uploaded by the client. Still, even for the high-
+volume session (Fig. 8b), the lag is reduced to near-zero
+in the middle of the session and by the end of the session.
+The same holds true for the other 20 sessions, meaning
+that veriﬁcation for all sessions (in parallel) can easily
+complete within approximately the wall-clock interval
+for which the sessions are active.
+
+Figure 9: Message size (kilobytes)
+versus veriﬁcation cost
+(seconds).
+(•)
+Client-to-server messages
+and
+server-to-client handshake messages
+(•) are shown.
+
+Fig. 9 shows veriﬁcation cost as a function of mes-
+
+12
+
+0387774116115481935050100150200Arrival Time (s)Data (KB)0387774116115481935050100150200Arrival Time (s)Data (KB)lllllllllllllllllllllllllllllllllllllllllll06121824300306090120150180Arrival Time (s)Verification Lag (s)lllllllllllllllllllllll06121824300306090120150180Arrival Time (s)Verification Lag (s)llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll0.000.250.500.75051015Message Size (KB)Verification Cost (s)(a) All 21 TLS sessions
+
+(b) High-volume session
+
+Figure 10: Veriﬁcation lags in seconds for the messages in the Gmail
+data set, dropping server-to-client application data messages. Box plot
+at horizontal-axis value t includes {lag(i) : t ≤ arr (i) < t + 30s}.
+Fig. 8a shows the veriﬁcation lags for all messages in all 21 TLS ses-
+sions. Fig. 8b shows the veriﬁcation lags for only the messages in the
+high-volume session.
+
+(a) NumWorkers = 1
+
+(b) NumWorkers = 16
+
+Figure 11: Veriﬁcation lags in seconds for the messages in the Gmail
+data set when up to 128 bytes of encrypted random padding are applied,
+over all 21 TLS sessions. A box plot at horizontal-axis value t includes
+{lag(i) : t ≤ arr (i) < t + 30s}. Fig. 11a shows the lag for a one-
+worker veriﬁer when padding is applied. Fig. 11b shows the lag for a
+16-worker veriﬁer when padding is applied.
+
+plaintext from an observer, implementations of TLS 1.3
+are permitted (but not required) to pad an encrypted TLS
+record by an arbitrary size, up to maximum TLS record
+size. This random encrypted padding hides the size of
+the plaintext from any observer, whether an attacker or
+a veriﬁer. In other words, given a TLS 1.3 record, the
+length of the input (e.g., from stdin) that was used to
+generate the TLS record could range anywhere from 0 to
+the record length minus header. Other less extreme ex-
+amples of padding include CBC mode ciphers, and the
+SSH protocol, in which a small amount of padding pro-
+tects the length of the password as well as channel trafﬁc.
+We thus extended our evaluation to stress test our ver-
+iﬁer beyond typical current practice. We simulated the
+TLS 1.3 padding feature by modifying a TLS 1.2 client
+(henceforth designated as “TLS 1.2+”), so that each TLS
+record includes a random amount of padding up to 128
+bytes7, applied before encryption. We then measured
+the performance of our veriﬁer, ignoring server-to-client
+messages (except during session setup and teardown) as
+before.
+
+7While 128 bytes of padding may seem extreme, previous work
+showed that an attacker could sometimes infer the website visited by
+encrypted HTTP connections even with substantial padding (e.g., [19]).
+
+over
+
+all
+
+Figure 12: Message size (kilo-
+bytes) versus veriﬁcation cost (sec-
+onds). Shown are the single-worker
+baseline veriﬁer running on TLS 1.2
+trafﬁc (•),
+the single-worker veriﬁer
+running on TLS 1.2+ ((cid:78)), and the
+16-worker veriﬁer running on TLS
+1.2+ ((cid:4)).
+TLS 1.2+ includes en-
+crypted random padding. Client-to-
+server messages (black) and server-to-
+client handshake messages (gray) are
+also designated.
+
+Figs. 11–12 show
+the
+performance
+of our single- and
+16-worker veriﬁers
+on TLS 1.2+ with a
+random amount of
+encrypted padding.
+Fig. 12 shows the
+veriﬁcation cost as a
+function of message
+size
+21
+Gmail TLS sessions
+and, for comparison,
+the cost of our base-
+single-worker
+line
+veriﬁer
+running on
+a TLS 1.2 client as
+previously discussed
+in Sec. 7.2.
+The
+addition of random
+padding
+TLS
+signiﬁcantly
+1.2+
+enlarges
+the client
+state space that must
+be explored. When
+the
+single-worker
+applied
+veriﬁer
+to TLS 1.2+,
+the
+veriﬁcation cost in-
+creases substantially
+compared to the TLS
+The
+1.2 baseline.
+veriﬁer
+16-worker
+reduces
+the veriﬁ-
+cation cost nearly back to the TLS 1.2 baseline levels.
+This demonstrates that the state space search is highly
+amenable to parallelization. Again, it is noteworthy, and
+perhaps surprising, that in all three cases, the veriﬁcation
+cost is linearly related to message size.
+
+Figure 13: Veriﬁcation lag in sec-
+onds for the messages in the high-
+volume session of the Gmail data set
+with ≤ 128 bytes of encrypted random
+padding.
+
+to
+
+is
+
+Fig. 13 shows the veriﬁcation lag on a TLS 1.2+ client
+that is sending the high-volume Gmail trace (worst case).
+Compared to the single-worker baseline on TLS 1.2, the
+single-worker veriﬁer on TLS 1.2+ is unable to keep up
+with the Gmail high-volume trafﬁc load, as its veriﬁca-
+tion lag continues to increase through the end of the ses-
+sion at which point it is over 4 minutes behind. But with
+16 workers, the initial lag (maximum of 33s lag) reduces
+to near-zero by the 75s mark and the veriﬁer stays in step
+with the network trafﬁc for the rest of the session. The
+16-worker veriﬁer parallelizes the search well enough to
+keep up with a client whose state space is two orders of
+magnitude larger than that of the typical TLS 1.2 client.
+
+13
+
+llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll036912150306090120150180Arrival Time (s)Verification Lag (s)llll036912150306090120150180Arrival Time (s)Verification Lag (s)lllllllllllllllllllllll035701051401750306090120150180Arrival Time (s)Verification Lag (s)lll06121824300306090120150180Arrival Time (s)Verification Lag (s)llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll0123450123Message Size (KB)Verification Cost (s)050100150050100150200Arrival Time (s)Verification Lag (s)Workers=1, No PaddingWorkers=1, PaddingWorkers=16, Padding8 DISCUSSION
+Here we discuss the applications for which our design is
+appropriate, and several limitations of our approach.
+8.1 Applications
+Suitable Application Layers.
+The application layer
+chosen for our TLS evaluation, Gmail, was a relatively
+strenuous one in that it exhibited both low-latency inter-
+active behavior as well as high-volume data transfer, the
+latter of which was challenging as measured by veriﬁca-
+tion lag. Other applications that exhibit only one behav-
+ior or the other may actually be more amenable to sym-
+bolic client veriﬁcation, not only as an intrusion detec-
+tion system, but as an intrusion prevention system.8 For
+example, the Extensible Messaging and Presence Pro-
+tocol (XMPP) [22], generally used for text-based Inter-
+net messaging, is highly interactive but sends relatively
+small XML payloads. An average veriﬁcation cost of
+126ms per TLS record may be an acceptable latency for
+XMPP. On the other end of the spectrum are bulk data
+transfer applications such as the Simple Mail Transfer
+Protocol (SMTP). In this case, although the volume of
+data to be transferred can be large, the application is
+highly tolerant of delay. RFC 5321 recommends that the
+retry interval be at least 30 minutes and the give-up time
+be at least 4-5 days [17]. Therefore, a larger veriﬁca-
+tion lag may be perfectly acceptable for TLS-protected
+SMTP connections.
+Other Cryptographic Protocols.
+Perhaps due to its
+widespread use in various applications, TLS is one of
+the more complex security protocols. We believe that
+the client veriﬁcation technique would likely generalize
+to other, often simpler, protocols. One example is Se-
+cure Shell (SSH), which includes both authentication and
+transport layer protocols [29, 30]. Indeed, SSH is likely
+to exhibit application behavior amenable to our veriﬁ-
+cation approach. When used as a remote shell, SSH re-
+quires low latency but transfers a relatively small amount
+of data: key presses and terminal updates. When used for
+ﬁle transfer (SFTP), a large volume of data is sent, but in
+a mode that is relatively latency-insensitive.
+8.2 Limitations
+Source Code and Other TLS Implementations. Our
+veriﬁer requires the client source code to generate LLVM
+bitcode and to designate prohibitive functions. We also
+
+8Because of the need for the veriﬁer to obtain the master secret from
+the server after the server receives the second client-to-server message
+in the TLS handshake, the veriﬁer would need to substitute a fake mas-
+ter secret in place of the real one in order to verify the ﬁrst two client-
+to-server messages, if used as an intrusion prevention system. The ﬁrst
+use of the real master secret, which is not evidenced until several mes-
+sages later, would then cause the veriﬁer to backtrack, at which point
+the real master secret could be inserted.
+
+require knowledge of the client conﬁguration, such as
+command line parameters controlling the menu of pos-
+sible cipher suites. While this work provides veriﬁcation
+for OpenSSL-based clients, there are several other pop-
+ular implementations of TLS, including Mozilla NSS,
+GnuTLS, Apple Secure Transport, and Microsoft Schan-
+nel. In principle, one could verify a signiﬁcant portion
+of TLS trafﬁc by verifying observed trafﬁc against these
+ﬁve major TLS libraries, considering a client valid if its
+behavior is consistent with any one of them.
+Client Versions. A veriﬁer that is validating a client’s
+behavior against the wrong version of the client’s im-
+plementation could reject a legitimate client falsely. In
+App. C, we summarize our initial steps toward verifying
+multiple client versions far more efﬁciently than instan-
+tiating a separate veriﬁer for each possible version.
+Environment Modeling. While OpenSSL s client
+has relatively few interactions with the environment,
+other clients may interact with the environment exten-
+sively. For example, XPilot interacts with the window-
+ing system, and SSH reads /etc/passwd, the .ssh/
+directory, redirects standard ﬁle descriptors, etc. The
+KLEE [6] and Cloud9 [5] POSIX runtimes serve as good
+starting points, but some environment modeling is likely
+to be necessary for each new type of client. This one-
+time procedure per client is probably unavoidable.
+Manual Choice of Prohibitive Functions. We cur-
+rently choose the set of prohibitive functions manually.
+While the choice of cryptographic hash functions, public
+key algorithms, and symmetric cipher primitives may be
+relatively obvious to a security researcher, this may not
+be true for a typical software developer.
+Prohibitive Function Assumptions. When prohibitive
+functions are initially skipped but eventually executed
+concretely, veriﬁcation soundness is preserved. If a pro-
+hibitive function is never executed concretely (e.g., due
+to asymmetric cryptography), this introduces an assump-
+tion; e.g., in the case of ECDH, a violation of this as-
+sumption could yield an invalid curve attack [16]. In a
+practical deployment, the user designating a prohibitive
+function should also designate predicates on the func-
+tion’s output (e.g., the public key is actually a group el-
+ement) that are speciﬁed by the relevant NIST or IETF
+standards as mandatory server-side checks [20] (which
+would have prevented the Jager et al. attack [16]). In our
+tool, these predicates could be implemented via lazy con-
+straint generation (see App. D), or as a klee assume
+for simple predicates. Of course, care must be taken
+not
+to turn our veriﬁer into an oracle that enables
+Bleichenbacher-type attacks [3].
+IDS/IPS Deployment and Denial of Service. Our cur-
+rent tool takes as input a recorded network log. To de-
+
+14
+
+ploy it as an intrusion detection system (IDS), it would
+need to be integrated with a passive network tap. For
+latency-tolerant applications, it could even be deployed
+as an intrusion prevention system (IPS), where it acts as
+a ﬁrewall that delivers only veriﬁed packets to the server.
+In both modes, but especially the latter, we must miti-
+gate a potential denial of service (DoS) attack. To do so,
+we leverage the strong linear relationship between veri-
+ﬁcation cost and message size in two ways. (1) Impose a
+hard upper bound on veriﬁer time per packet, and declare
+all packets that exceed the time budget invalid. Since le-
+gitimate packets ﬁnish within a few seconds, the bound
+can be easily set such that the false alarm rate is negligi-
+ble. (2) Given a ﬁxed CPU time budget, precisely com-
+pute the amount of trafﬁc that can be veriﬁed. The opera-
+tor can then allocate veriﬁers according to the threat pro-
+ﬁle, e.g., assigning veriﬁers to high-priority TLS sessions
+or ones from networks with poor reputation (e.g., [8]).
+The IDS/IPS will then degrade gracefully when total traf-
+ﬁc bandwidth exceeds the veriﬁcation budget.
+
+9 CONCLUSION
+
+We showed that it is possible to efﬁciently verify that the
+messaging behavior of an untrusted cryptographic client
+is consistent with legitimate client code. Our technical
+contributions are twofold. First, we described a paral-
+lel client veriﬁcation engine that supports concurrent ex-
+ploration of paths in the client software to explain a se-
+quence of observed messages. This innovation is both
+generally useful for client veriﬁcation and speciﬁcally
+useful for verifying cryptographic clients, e.g., due to
+ambiguities arising from message padding hidden by en-
+cryption. Second, we developed a multipass veriﬁcation
+strategy that enables veriﬁcation of clients whose code
+contains cryptographic functions, which typically pose
+major challenges to symbolic execution. We demon-
+strated our veriﬁer by showing that it detects two attacks
+on OpenSSL that represent two classes of client misbe-
+havior:
+those that produce malformed messages (e.g.,
+Heartbleed), and those that leverage correctly format-
+ted messages that are nevertheless impossible to observe
+from a valid client. In addition, we showed that our veri-
+ﬁer can keep pace with a typical TLS load (Gmail), run-
+ning over both OpenSSL TLS 1.2 and a more complex
+simulation of TLS 1.3. We believe our contributions to
+be signiﬁcant in reducing the detection time of a nontriv-
+ial class of protocol exploits from years to seconds, with
+no prior knowledge of the exploit.
+Acknowledgments. This work was supported in part by
+NSF grants 115948 and 1330599, grant N00014-13-1-
+0048 from the Ofﬁce of Naval Research, and a gift from
+CISCO.
+
+15
+
+REFERENCES
+[1] BETHEA, D., COCHRAN, R. A., AND REITER, M. K. Server-
+side veriﬁcation of client behavior in online games. ACM Trans-
+actions on Information and System Security 14, 4 (Dec. 2011).
+
+[2] BHARGAVAN, K., FOURNET, C., KOHLWEISS, M., PIRONTI,
+A., AND STRUB, P.
+Implementing TLS with veriﬁed crypto-
+graphic security. In 34th IEEE Symposium on Security and Pri-
+vacy (2013), pp. 445–459.
+
+[3] BLEICHENBACHER, D. Chosen ciphertext attacks against pro-
+tocols based on the RSA encryption standard PKCS #1. In Ad-
+vances in Cryptology – CRYPTO ’98, vol. 1462 of Lecture Notes
+in Computer Science. 1998.
+
+[4] BOYER, R. S., ELSPAS, B., AND LEVITT, K. N. SELECT –
+a formal system for testing and debugging programs by sym-
+In International Conference on Reliable Soft-
+bolic execution.
+ware (1975), pp. 234–245.
+
+[5] BUCUR, S., URECHE, V., ZAMFIR, C., AND CANDEA, G. Par-
+allel symbolic execution for automated real-world software test-
+ing. In 6th European Conference on Computer Systems (2011).
+
+[6] CADAR, C., DUNBAR, D., AND ENGLER, D. KLEE: Unassisted
+and automatic generation of high-coverage tests for complex sys-
+tems programs. In 8th USENIX Symposium on Operating Systems
+Design and Implementation (Dec. 2008).
+
+[7] COCHRAN, R. A., AND REITER, M. K. Toward online veriﬁca-
+tion of client behavior in distributed applications. In 20th ISOC
+Network and Distributed System Security Symposium (2013).
+
+[8] COLLINS, M. P., SHIMEALL, T. J., FABER, S., JANIES, J.,
+WEAVER, R., DE SHON, M., AND KADANE, J. Using unclean-
+liness to predict future botnet addresses. In 7th Internet Measure-
+ment Conference (2007), pp. 93–104.
+
+[9] DIERKS, T., AND RESCORLA, E. The Transport Layer Secu-
+rity (TLS) Protocol Version 1.3. draft-ietf-tls-tls13-10 (work in
+progress), Oct. 2015.
+
+[10] DURUMERIC, K., KASTEN, J., ADRIAN, D., HALDERMAN,
+A. J., BAILEY, M., LI, F., WEAVER, N., AMANN, J., BEEK-
+MAN, J., PAYER, M., AND PAXSON, V. The matter of Heart-
+bleed. In Internet Measurement Conference (2014).
+
+[11] GANESH, V., AND DILL, D. L. A decision procedure for bit-
+In 19th International Conference on Com-
+
+vectors and arrays.
+puter Aided Veriﬁcation (July 2007), pp. 519–531.
+
+[12] GIFFIN, J. T., JHA, S., AND MILLER, B. P. Detecting manipu-
+lated remote call streams. In 11th USENIX Security Symposium
+(Aug. 2002).
+
+[13] GOLDWASSER, S., KALAI, Y. T., AND ROTHBLUM, G. N. Del-
+In 40th
+
+egating computation: Interactive proofs for muggles.
+ACM Symposium on Theory of Computing (May 2008).
+
+[14] GUHA, A., KRISHNAMURTHI, S., AND JIM, T. Using static
+analysis for Ajax intrusion detection. In 18th International World
+Wide Web Conference (Apr. 2009), pp. 561–570.
+
+[15] ISHAI, Y., KUSHILEVITZ, E., AND OSTROVSKY, R. Efﬁcient
+In 22nd IEEE Conference on
+
+arguments without short PCPs.
+Computational Complexity (June 2007).
+
+[16] JAGER, T., SCHWENK, J., AND SOMOROVSKY, J. Practical in-
+valid curve attacks on TLS-ECDH. In Computer Security – ES-
+ORICS 2015, vol. 9326 of Lecture Notes in Computer Science.
+2015.
+
+[17] KLENSIN, J. Simple Mail Transfer Protocol. RFC 5321 (Draft
+
+Standard), Oct. 2008.
+
+[18] LEYDEN, J.
+
+Annus HORRIBILIS for TLS! all
+
+the big-
+The Register, Nov.
+http://www.theregister.co.uk/2014/11/
+
+guns now ofﬁcially pwned in 2014.
+2014.
+12/ms_crypto_library_megaflaw/.
+
+[19] LIBERATORE, M., AND LEVINE, B. N.
+
+of encrypted HTTP connections.
+Computer and Communications Security (2006), pp. 255–263.
+
+Inferring the source
+In 13th ACM Conference on
+
+[20] MCGREW, D., IGOE, K., AND SALTER, M. Fundamental el-
+liptic curve cryptography algorithms. RFC 6090 (Proposed Stan-
+dard), Feb. 2011.
+
+[21] PARNO, B., HOWELL, J., GENTRY, C., AND RAYKOVA, M.
+Pinocchio: Nearly practical veriﬁable computation. In 2013 IEEE
+Symposium on Security and Privacy (May 2013).
+
+[22] SAINT-ANDRE, P. Extensible Messaging and Presence Protocol
+
+(XMPP): core. RFC 6120 (Proposed Standard), Mar. 2011.
+
+[23] SIDDIQUI, J. H., AND KHURSHID, S. ParSym: Parallel sym-
+In 2nd International Conference on Software
+
+bolic execution.
+Technology and Engineering (2010).
+
+[24] SKRUPSKY, N., BISHT, P., HINRICHS, T., VENKATAKRISH-
+NAN, V. N., AND ZUCK, L. TamperProof: A server-agnostic
+defense for parameter-tampering attacks on web applicatoins. In
+3rd ACM Conference on Data and Application Security and Pri-
+vacy (Feb. 2013).
+
+[25] STAATS, M., AND P ˇAS ˇAREANU, C. Parallel symbolic execution
+for structural test generation. In 19th International Symposium
+on Software Testing and Analysis (2010).
+
+[26] VIKRAM, K., PRATEEK, A., AND LIVSHITS, B. Ripley: Auto-
+matically securing Web 2.0 applications through replicated exe-
+cution. In 16th ACM Conference on Computer and Communica-
+tions Security (Nov. 2009).
+
+[27] WALFISH, M., AND BLUMBERG, A. J. Verifying computations
+without reexecuting them. Communications of the ACM 58, 2
+(Feb. 2015).
+
+[28] WEBB, S., AND SOH, S. A survey on network game cheats
+and P2P solutions. Australian Journal of Intelligent Information
+Processing Systems 9, 4 (2008), 34–43.
+
+[29] YLONEN, T., AND LONVICK, C. The Secure Shell (SSH) au-
+thentication protocol. RFC 4252 (Proposed Standard), Jan. 2006.
+[30] YLONEN, T., AND LONVICK, C. The Secure Shell (SSH) trans-
+port layer protocol. RFC 4253 (Proposed Standard), Jan. 2006.
+Updated by RFC 6668.
+
+A DEMONSTRATION OF PARALLELIZA-
+
+TION ON CLIENT-SERVER GAMES
+
+Though our focus in this paper is on cryptographic pro-
+tocols, the beneﬁts of the parallel veriﬁcation architec-
+ture described in Sec. 4 extend to other protocols, as
+well. To demonstrate this, we employ two game clients
+studied in previous work [7], namely XPilot and TetriNet
+(speciﬁcally XPilot NG v4.7.2 and TetriNet v0.11). The
+XPilot client consists of roughly 100,000 SLOC. Beyond
+this, the scope of symbolic execution included all needed
+libraries except Xlib, whose functions were replaced
+with minimal stubs, so that the game could be run with-
+out display output. Moreover, uClibc was used in lieu
+of the GNU C library. The TetriNet client is 5000 SLOC.
+As in XPilot, the scope of symbolic execution also in-
+cluded all needed libraries, though again the display out-
+put library (ncurses) was disabled using minimal stub
+functions and uClibc was used in place of the GNU C
+library. The experiments shown here were run on a sys-
+tem with 256GB of RAM and 3.2GHz processor cores.
+
+(a) NumWorkers = 1
+
+(b) NumWorkers = 16
+
+Figure 14: Veriﬁcation lag of legitimate TetriNet traces. Box plot at
+horizontal-axis value t includes {lag(i) : t ≤ arr (i) < t + 60s} in
+20 traces, each starting at time t = 0. “♦” shows the average.
+
+Execution fragments were prioritized by SelectNode as
+described in prior work [7].
+
+Fig. 14 shows the distribution of veriﬁcation lag per
+message, binned into 60s bins, across 20 TetriNet traces.
+The boxplot labeled t shows the distribution of veriﬁca-
+tion lags for messages that arrived between times t and
+t + 60s in the 20 traces.
+In each boxplot, the “box”
+shows the ﬁrst, second (median) and third quartiles, and
+its whiskers extend to cover points within ±1.5 times the
+interquartile range. Additional outlier points are shown
+as dots. Overlaid on each boxplot is a diamond (♦) that
+shows the average of the data points. In the single worker
+conﬁguration (Fig. 14a), veriﬁcation lags behind mes-
+sage arrival times by more than 200s in the worst case. In
+contrast, with 16 workers (Fig. 14b), veriﬁcation is able
+to keep pace with gameplay and never accumulates lag
+over the course of veriﬁcation. Even if veriﬁcation falls
+behind at some point in the game, it always catches up
+because of the gap between message arrival times. As
+such, the veriﬁer should need only a ﬁxed sized buffer of
+network messages to manage a long-running veriﬁcation
+session.
+
+In Fig. 15, the veriﬁcation lags for XPilot are shown
+for two worker conﬁgurations across 40 message traces.
+Despite a mean veriﬁcation cost of 75ms when using
+a single worker thread, the fast pace of XPilot makes
+it difﬁcult for veriﬁcation to keep pace with the game
+(Fig. 15a). However, by increasing the number of worker
+threads, we can see that in the 8-worker conﬁguration
+(Fig. 15b), veriﬁcation lag never signiﬁcantly falls be-
+hind and could use only a ﬁxed buffer of messages for
+veriﬁcation in long-running sessions. In this case, there
+is little additional improvement gained by moving to 16
+workers.
+B TLS EXPERIMENTAL SETUP
+In Sec. 7, we applied our client veriﬁcation algorithm
+to OpenSSL, a widely used implementation of Trans-
+port Layer Security (TLS) with over 400,000 lines
+of code. We conﬁgured our OpenSSL client with
+one of the currently preferred cipher suites, namely
+TLS ECDHE ECDSA WITH AES 128 GCM SHA256.
+
+16
+
+lllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll04896144192240060120180240300360420480540Arrival Time (s)Verification Lag (s)lllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll0246810060120180240300360420480540Arrival Time (s)Verification Lag (s)DEFINE_MODEL(void, AES_encrypt,
+
+const unsigned char *in,
+unsigned char *out,
+const AES_KEY *key)
+
+SYMBOLIC_CHECK_AND_RETURN(
+
+in, 16,
+out, 16, "AESBlock");
+
+SYMBOLIC_CHECK_AND_RETURN(
+
+key, sizeof(AES_KEY),
+out, 16, "AESBlock");
+
+CALL_UNDERLYING(AES_encrypt,
+
+in, out, key);
+
+Figure 16: Example prohibitive function declaration.
+
+{
+
+}
+
+key are checked for symbolic data.
+If either buffer
+contains symbolic data, out is populated with uncon-
+strained symbolic data, and the macro returns without
+executing any subsequent lines. Otherwise, the under-
+lying (concrete) AES block cipher is called.
+
+In a pure functional language or an ideal, strongly
+typed language, the prohibitive function speciﬁcations
+could in principle be generated automatically from the
+function name alone. Unfortunately, in C, the memory
+regions representing input and output may be accessible
+only through pointer dereferences and type casts. This
+is certainly true of OpenSSL (e.g., there is no guarantee
+that the AES KEY struct does not contain pointers to aux-
+iliary structs). Therefore, for each prohibitive function,
+the user annotation must explicitly deﬁne the data layout
+of the input and output.
+
+The domain knowledge required for the ﬁrst two con-
+ﬁguration steps is minimal, namely that current TLS
+conﬁgurations use the above cryptographic primitives in
+some way, and that a symmetric key is generated in a
+particular function. The domain knowledge necessary
+for the third conﬁguration step is that TLS typically uses
+public key signatures only to authenticate the server to
+the client, e.g., via the Web PKI. The server itself gener-
+ates the signature that can be veriﬁed via PKI, and so the
+veriﬁer knows that the chain of signature veriﬁcations is
+guaranteed to succeed. Moreover, this optimization gen-
+eralizes to any protocol that uses a PKI to authenticate
+the server to an untrusted client.
+C MULTI-VERSION VERIFIERS
+When the version of the client software used by the ver-
+iﬁer is different from the version of the client software
+being run by a legitimate client, it is possible for the ver-
+iﬁer to falsely accuse the client as being invalid. This
+poses a challenge for veriﬁcation when the client ver-
+sion is not immediately evident to the veriﬁer. For ex-
+ample, OpenSSL does not communicate the minor ver-
+sion number of its client to the server, and hence our
+
+(a) NumWorkers = 1
+
+(b) NumWorkers = 8
+
+Figure 15: Veriﬁcation lag of legitimate XPilot traces. Box plot at
+horizontal-axis value t includes {lag(i) : t ≤ arr (i) < t + 5s} in 40
+traces, each starting at time t = 0. “♦” shows the average.
+• Key exchange: Ephemeral Elliptic-Curve Difﬁe Hell-
+man (ECDHE) signed using the Elliptic Curve Digital
+Signature Algorithm (ECDSA)
+
+• Symmetric Encryption: 128-bit Advanced Encryption
+
+Standard (AES) in Galois/Counter Mode
+
+• Pseudorandom function (PRF) built on SHA-256
+
+Since our goal was to verify the TLS layer and not the
+higher-layer application, in our experiment we took ad-
+vantage of the OpenSSL s client test endpoint. This
+client establishes a fully functional TLS session, but al-
+lows arbitrary application-layer data to be sent and re-
+ceived via stdin and stdout, similar to the netcat
+tool. Verifying that network trafﬁc is consistent with
+s client is roughly equivalent to verifying the TLS
+layer alone.
+
+The OpenSSL-speciﬁc user conﬁguration for veriﬁca-
+
+tion consisted of the following:
+
+1. Conﬁguring the following OpenSSL functions as
+
+prohibitive: AES encrypt, ECDH compute key,
+EC POINT point2oct, EC KEY generate key,
+SHA1 Update, SHA1 Final, SHA256 Update,
+SHA256 Final, gcm gmult 4bit,
+gcm ghash 4bit
+
+2. Conﬁguring tls1 generate master secret as
+the function to be replaced by server-side computa-
+tion of the symmetric key.
+
+3. (Optional) Declaring EVP PKEY verify to be a func-
+tion that always returns success. Performance opti-
+mization only.
+
+The user conﬁguration for OpenSSL, comprising decla-
+rations of prohibitive functions and their respective in-
+put/output annotations, consisted of 138 lines of C code
+using our API. Fig. 16 shows an example prohibitive
+function declaration for the AES block cipher.
+In this
+macro, we declare the function signature, which com-
+prises the 128-bit input buffer in, the 128-bit output
+buffer out, and the symmetric key data structure, key,
+which contains the expanded round keys. Both in and
+
+17
+
+lllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll0265278104130051015202530354045505560Arrival Time (s)Verification Lag (s)lllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll0.00.40.81.21.62.0051015202530354045505560Arrival Time (s)Verification Lag (s)veriﬁer would be in the dark about this version num-
+ber. The possibility for false accusations here is real:
+we conﬁrmed, for example, that a veriﬁer for OpenSSL
+client version 1.0.1e can fail if used to verify trafﬁc for
+OpenSSL client version 1.0.1f, and vice versa. This
+occurs because, for example, the changes from 1.0.1e
+to 1.0.1f included removing MD5 from use and re-
+moving a timestamp from a client nonce, not to mention
+numerous platform-speciﬁc adaptations and bug ﬁxes. In
+total, 1.0.1f involved changes to 102 ﬁles amounting
+to 1564 insertions and 997 deletions (according to git),
+implemented between Feb 11, 2013 and Jan 6, 2014.
+
+The immediate solution to this problem is to instanti-
+ate a veriﬁer for every possible version that a legitimate
+client might be using. By running these veriﬁers in par-
+allel on the message trace from the client, the trace can
+be considered valid as long as one veriﬁer remains ac-
+cepting of the trace. Running many veriﬁers in parallel
+incurs considerable expense, however.
+
+An alternative approach to address this issue is to
+create a single veriﬁer that veriﬁes trafﬁc against sev-
+eral versions simultaneously — a multi-version veriﬁer
+— while amortizing veriﬁcation costs for their com-
+mon code paths across all versions. To illustrate the
+potential savings, we constructed a multi-version ver-
+iﬁer for both 1.0.1e and 1.0.1f by manually as-
+sembling a “unioned client” of these versions, say client
+“1.0.1ef”.
+In client 1.0.1ef, every difference in
+the code between client 1.0.1e and client 1.0.1f is
+preceded by a branch on version number, i.e.,
+
+if (strcmp(version, "1.0.1e") == 0) {
+
+/* 1.0.1e code here */
+
+} else {
+
+/* 1.0.1f code here */
+
+}
+
+We then provided this as the client code to the veriﬁer,
+marking version as a symbolic variable.
+It is im-
+portant to note that once the client messages reveal be-
+havior that is consistent with only one of 1.0.1e and
+1.0.1f, then version will become concrete, caus-
+ing the veriﬁer to explore only the code paths for that
+version; as such,
+the veriﬁer still allows only “pure
+1.0.1e” or “pure 1.0.1f” behavior, not a combina-
+tion thereof.
+
+As shown in Table 1, the single-worker costs (specif-
+i cost(i)) of verifying 1.0.1e trafﬁc with a
+1.0.1ef veriﬁer and of verifying 1.0.1f trafﬁc with
+a 1.0.1ef veriﬁer were both within 4% of the costs for
+verifying with a 1.0.1e and 1.0.1f veriﬁer, respec-
+tively. (For these tests, we used the same Gmail traces
+used in Sec. 7.) In fact, we do not include lag graphs
+for the multi-version veriﬁer here (analogous to those in
+Sec. 7) because they are visibly indistinguishable from
+
+ically, (cid:80)
+
+Measurement
+
+Symbolic branches
+SMT solver queries
+Veriﬁcation cost
+
+Network Trace
+
+1.0.1e
+32.3%
+7.8%
+3.0%
+
+1.0.1f
+32.0%
+7.6%
+3.3%
+
+Table 1: Percentage overhead incurred by veriﬁcation with a “union”
+1.0.1ef client instead of the matching client. Veriﬁcation cost (time)
+is deﬁned in Sec. 7.
+
+those for single-version veriﬁers. As can be seen from
+Table 1, despite a 32% increase in symbolic branches that
+in turn drives a 7% increase in SMT solver queries, the
+overall cost increases very little. This implies that de-
+spite an increase in the number of code path “options”
+comprising the union of two versions of client code, the
+incorrect paths die off quickly and contribute relatively
+little to total veriﬁcation cost.
+
+While a demonstration of the efﬁciency of a multi-
+version veriﬁer for only two versions of one codebase,
+we believe this result suggests a path forward for veri-
+fying clients of unknown versions much more efﬁciently
+than simply running a separate veriﬁer for each possibil-
+ity. We also anticipate that multi-version veriﬁers can be
+constructed automatically from commit logs to reposito-
+ries, a possibility that we hope to explore in future work.
+D EXTENSION:
+LAZY CONSTRAINT
+GENERATORS
+
+There are several potentially useful extensions to our
+client veriﬁcation algorithm that we are considering for
+future development. Here we highlight one, namely lazy
+constraint generators to accompany the designation of
+prohibitive functions. Since a function, once speciﬁed as
+prohibitive, will be skipped by the veriﬁer until its inputs
+are inferred concretely, the veriﬁer cannot gather con-
+straints relating the input and output buffers of that func-
+tion until the inputs can be inferred via other constraints.
+There are cases, however, where introducing constraints
+relating the input and output buffers once some subset of
+them are inferred concretely would be useful or, indeed,
+is central to eventually inferring other inputs concretely.
+Perhaps the most straightforward example arises in
+symmetric encryption modes that require the inversion
+of a block cipher in order to decrypt a ciphertext (e.g.,
+CBC mode). Upon reaching the client SEND instruction
+for a message, the veriﬁer reconciles the observed client-
+to-server message msg n with the constraints σ.cons ac-
+cumulated on the path to that SEND; for example, sup-
+pose this makes concrete the buffers corresponding to
+outputs of the encryption routine. However, because the
+block cipher was prohibitive and so skipped, constraints
+relating the input buffers to those output buffers were not
+recorded, and so the input buffers remain unconstrained
+by the (now concrete) output buffers. Moreover, a second
+
+18
+
+pass of the client execution will not add additional con-
+straints on those input buffers, meaning they will remain
+unconstrained after another pass.
+
+An extension to address this situation is to permit the
+user to specify a lazy constraint generator along with des-
+ignating the block cipher as prohibitive. The lazy con-
+straint generator would simply be a function from some
+subset of the input and output buffers for the function
+to constraints on other buffers. The generator is “lazy”
+in that it would be invoked by the veriﬁer only after its
+inputs were inferred concretely by other means; once in-
+voked, it would produce new constraints as a function of
+those values. In the case of the block cipher, the most nat-
+ural constraint generator would be the inverse function,
+which takes in the key and a ciphertext and produces the
+corresponding plaintext to constrain the value of the in-
+put buffer.
+
+Our OpenSSL case study in Sec. 5.4 does not re-
+quire this functionality since in the encryption mode used
+there, the ciphertext and plaintext buffers are related by
+simple exclusive-or against outputs from the (still pro-
+hibitive) block cipher applied to values that can be in-
+ferred concretely from the message. So, once the in-
+puts to the block cipher are inferred by the veriﬁer, the
+block cipher outputs can be produced concretely, and the
+plaintext then inferred from the concrete ciphertexts by
+exclusive-or.
+
+19
+
+

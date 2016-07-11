@@ -1,0 +1,1422 @@
+Hybrid Collaborative Filtering with Neural Networks
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+9
+
+ 
+
+ 
+ 
+]
+
+R
+
+I
+.
+s
+c
+[
+ 
+ 
+
+2
+v
+6
+0
+8
+0
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Florian Strub
+Univ of Lille, CRIStAL, Inria, SequeL Team, 40 av. du Halley, 59650 Villeneuve d’Ascq, FRANCE
+J´er´emie Mary
+Univ of Lille, CRIStAL, Inria, SequeL Team, 40 av. du Halley, 59650 Villeneuve d’Ascq, FRANCE
+Romaric Gaudel
+Univ of Lille, CRIStAL, Inria, SequeL Team, 40 av. du Halley, 59650 Villeneuve d’Ascq, FRANCE
+
+ROMARIC.GAUDEL@INRIA.FR
+
+FLORIAN.STRUB@INRIA.FR
+
+JEREMIE.MARY@INRIA.FR
+
+Abstract
+
+Collaborative Filtering aims at exploiting the
+feedback of users to provide personalised recom-
+mendations. Such algorithms look for latent vari-
+ables in a large sparse matrix of ratings. They can
+be enhanced by adding side information to tackle
+the well-known cold start problem. While Neu-
+ral Networks have tremendous success in image
+and speech recognition, they have received less
+attention in Collaborative Filtering. This is all the
+more surprising that Neural Networks are able
+to discover latent variables in large and hetero-
+geneous datasets. In this paper, we introduce a
+Collaborative Filtering Neural network architec-
+ture aka CFN which computes a non-linear Ma-
+trix Factorization from sparse rating inputs and
+side information. We show experimentally on the
+MovieLens and Douban dataset that CFN outper-
+forms the state of the art and beneﬁts from side
+information. We provide an implementation of
+the algorithm as a reusable plugin for Torch, a
+popular Neural Network framework.
+
+1. Introduction
+Recommendation systems advise users on which items
+(movies, musics, books etc.)
+they are more likely to be
+interested in. A good recommendation system may dra-
+matically increase the amount of sales of a ﬁrm or retain
+customers. For instance, 80% of movies watched on Net-
+ﬂix come from the recommender system of the company
+(Gomez-Uribe & Hunt, 2015). One efﬁcient way to de-
+sign such algorithm is to predict how a user would rate a
+given item. Two key methods co-exist to tackle this issue:
+Content-Based Filtering and Collaborative Filtering (CF).
+
+Preliminary work. Under review by the under review by the Inter-
+national Conference on Machine Learning (ICML),
+
+Content-Based Filtering explicitly uses the user/item
+knowledge to estimate a new rating. For instance, user in-
+formation can be the age, gender or graph of friends etc.
+Item information can be the movie genre, a short descrip-
+tion or the tags. CF uses the ratings history of users and
+items. The feedback of one user on some items is com-
+bined with the feedback of all other users on all items to
+predict a new rating. For instance, if someone rated a few
+books, Collaborative Filtering aims at estimating the rat-
+ings he would have given to thousands of other books by
+using the ratings of all the other readers. CF is often pre-
+ferred to Content-Based Filtering because it wins the ag-
+nostic vs. studied contest: CF only relies on the ratings of
+the users while Content-Based Filtering requires advanced
+engineering on items to perform well (Lops et al., 2011).
+The most successful approach in CF is to retrieve poten-
+tial latent factors from the sparse matrix of ratings. Book
+latent factors are likely to encapsulate the book genre (spy
+novel, fantasy, etc.) or some writing styles. Common latent
+factor techniques compute a low-rank rating matrix by ap-
+plying Singular Value Decomposition through gradient de-
+scent (Koren et al., 2009) or Regularized Alternative Least
+Square algorithm (Zhou et al., 2008). However, these meth-
+ods are linear and cannot catch subtle factors. Newer algo-
+rithms were explored to face those constraints such as Non
+Linear Probabilistic Matrix Factorization (Lawrence & Ur-
+tasun, 2009), Factorization Machines (Rendle, 2010) or Lo-
+cal Low Rank Matrix Approximation (Lee et al., 2013).
+Another limitation of CF is known as the cold start prob-
+lem: how to recommend an item to a user when no rat-
+ing exists for neither the user nor the item ? To overcome
+this issue, one idea is to build a hybrid model mixing CF
+and Content Based Filtering where side information is inte-
+grated into the training process. The goal is to supplant the
+lack of ratings through side information. A successful ap-
+proach (Adams & Murray, 2010; Porteous & A. U. Asun-
+cion, 2010) extends the Bayesian Probabilistic Matrix Fac-
+torization Framework (Salakhutdinov & Mnih, 2008) to in-
+
+Hybrid Collaborative Filtering with Neural Networks
+
+tegrate side information. However, recent algorithms out-
+perform them in the general case (Lee et al., 2012).
+In this paper we introduce a CF approach based on Stacked
+Denoising Autoencoders (Vincent et al., 2010) which tack-
+les both challenges:
+learning a non-linear representation
+of users and items, and alleviating the cold start problem
+by integrating side information. Compared to previous at-
+tempts in that direction (Salakhutdinov et al., 2007; Sed-
+hain et al., 2015; Strub & Mary, 2015; Dziugaite & Roy,
+2015), our framework integrates the sparse matrix of rat-
+ings and side information in a unique Network. This joint
+model leads to a scalable and robust approach which beats
+state-of-the-art results in CF. Reusable source code is pro-
+vided in Lua/Torch to reproduce the results. Last but not
+least, we show that CF approaches based on Matrix Factor-
+ization have a strong link with our approach.
+The paper is organized as follows. First, Sec. 2 summarizes
+the state-of-the-art in CF and Neural Networks. Then, our
+model is described in Sec. 3 and 4 and its relation with
+Matrix Factorization is characterized in Sec. 3.2. Finally,
+experimental results are given and discussed in Sec. 5 and
+Sec. 6 discusses algorithmic aspects.
+
+2. Preliminaries
+2.1. Denoising Autoencoders
+
+The proposed approach builds upon Autoencoders which
+are feed-forward Neural Networks popularized by Kramer
+(1991). They are unsupervised Networks where the output
+of the Network aims at reconstructing the initial input. The
+Network is constrained to use narrow hidden layers, forcing
+a dimensionality reduction on the data. The Network is
+trained by back-propagating the squared error loss on the
+reconstruction. Such Networks are divided into two parts:
+
+• the encoder : f (x) = σ(W1x + b1),
+• the decoder : g(y) = σ(W2y + b2),
+
+with x ∈ RN the input, y ∈ RK the output, K the size of
+the Autoencoder’s bottleneck (K << N), W1 ∈ RN×K
+and W2 ∈ RK×N the weight matrices, b1 ∈ RK and
+b2 ∈ RN the bias vectors, and σ(.) a non-linear transfer
+function.
+Recent work in Deep Learning advocates to stack pre-
+trained encoders to initialize Deep Neural Networks (Glo-
+rot & Bengio, 2010). This process enables the lowest layers
+of the Network to ﬁnd low-dimensional representations. It
+experimentally increases the quality of the whole Network.
+Yet, classic Autoencoders often degenerate into identity
+Networks and they fail to learn the latent relationship be-
+tween data. (Vincent et al., 2010) tackle this issue by cor-
+rupting inputs, pushing the Network to denoise the ﬁnal
+outputs. One method is to add Gaussian noise on a random
+
+fraction ν of the input. Another method is to mask a ran-
+dom fraction ν of the input by replacing them with zero.
+In this case, the Denoising AutoEncoder (DAE) loss func-
+tion is modiﬁed to emphasize the denoising aspect of the
+Network. The loss is based on two main hyperparameters
+α, β. They balance whether the Network would focus on
+denoising the input (α) or reconstructing the input (β):
+
+ +
+
+ ,
+
+[nn(˜x)j − xj]2
+
+L2,α,β(x, ˜x) = α
+
+ (cid:88)
+
+j∈C(˜x)
+
+[nn(˜x)j − xj]2
+
+ (cid:88)
+
+j(cid:54)∈C(˜x)
+
+β
+
+where ˜x is the corrupted input x ∈ RN , C are the indices
+of the corrupted elements of x, nn(x)j is the jth output of
+the Network.
+
+2.2. Matrix Factorization
+
+One of the most successful approach of Collaborative Fil-
+tering is Matrix Factorization (Koren et al., 2009). This
+method retrieves latent factors from the ratings of items
+made by the users. The underlying idea is that key fea-
+tures are hidden in the ratings themselves. Given N users
+and M items, the rating rij is the rating given by the ith
+user for the jth item. It entails a sparse matrix of ratings
+R ∈ RN×M . In Collaborative Filtering, sparsity is origi-
+nally produced by missing values rather than zero values.
+The goal of Matrix Factorization is to ﬁnd a K low rank
+matrix ˆR ∈ RN×M where ˆR = UVT with U ∈ RN×K
+and V ∈ RM×K are two matrices of rank K encoding a
+dense representation of the users/items with
+i ¯vj)2 +λ((cid:107)¯ui(cid:107)2
+
+F ro +(cid:107)¯vj(cid:107)2
+
+(rij − ¯uT
+
+(cid:88)
+
+F ro),
+
+arg min
+
+U,V
+
+(i,j)∈K(R)
+
+where K(R) is the set of indices of known ratings, ¯ui, ¯vj
+are the corresponding line vectors of U ,V and (cid:107)¯ui(cid:107)F ro is
+the Frobenius norm.
+
+2.3. Related Work
+
+Neural Networks have attracted little attention in the
+CF community.
+In a preliminary work, (Salakhutdinov
+et al., 2007) tackled the Netﬂix challenge using Restricted
+Boltzmann Machines but little published work had follow
+(Truyen et al., 2009). While Deep Learning has tremen-
+dous success in image and speech recognition (LeCun
+et al., 2015), sparse data has received less attention and re-
+mains a challenging problem for Neural Networks.
+Nevertheless, Neural Networks are able to discover non-
+linear latent variables with heterogeneous data (LeCun
+et al., 2015) which makes them a promising tool for CF.
+
+Hybrid Collaborative Filtering with Neural Networks
+
+Figure 1. Feed Forward/Backward process for sparse Autoencoders. The sparse input is extracted from the matrix of ratings, unknown
+values are turned to zero, input is corrupted by masking additional ratings and a dense estimate is ﬁnally obtained. Before backpropaga-
+tion, unknown ratings are turned to zero error, predicted errors are reweighed by α and reconstruction errors are reweighed by β.
+
+(Sedhain et al., 2015; Strub & Mary, 2015; Dziugaite &
+Roy, 2015) directly train Autoencoders to provide the best
+predicted ratings. Those methods report excellent results
+in the general case. However, the cold start initialization
+problem is ignored. For instance, AutoRec (Sedhain et al.,
+2015) replaces unpredictable ratings by an arbitrary se-
+lected score. In our case, we apply a training loss designed
+for sparse rating inputs and we integrate side information
+to lessen the cold start effect.
+Other contributions deal with this cold start problem by us-
+ing Neural Networks properties for Content-Based Filter-
+ing: Neural Networks are ﬁrst trained to learn a feature
+representation from the item which is then processed ob-
+tain a CF approach such as Probabilistic Matrix Factoriza-
+tion (Mnih & Salakhutdinov, 2007) to provide the ﬁnal rat-
+ing. For instance, (Glorot et al., 2011; Wang et al., 2014a)
+respectively auto-encode bag-of-words from restaurant re-
+views and movie plots, (Li et al., 2015) auto-encode het-
+erogeneous side information from users and items. Finally,
+(den Oord et al., 2013; Wang et al., 2014b) use Convolu-
+tional Networks on music samples. In our case, side infor-
+mation and ratings are used together without any unsuper-
+vised pretreatment.
+
+2.4. Notation
+
+In the rest of the paper, we will use the following notations:
+
+• ui, vj are the sparse lines/columns of R
+• ˜ui, ˜vj are corrupted versions of ui, vj
+• ˆui, ˆvj are dense estimates of ˆR
+• ¯ui, ¯vj are dense low rank representations of ui, vj.
+
+3. Autoencoders for Collaborative Filtering
+User preferences are encoded as a sparse matrix of ratings
+R. A user is represented by a sparse line ui ∈ RN and
+an item is represented by a sparse column vj ∈ RM . The
+
+Collaborative Filtering objective can be formulated as: turn
+the sparse vectors ui/vj, into dense vectors ˆui/ˆvj.
+We propose to perform this conversion with Autoencoders.
+To do so, we need to deﬁne two types of Autoencoders:
+
+• U-CFN is deﬁned as nn(ui) = ˆui,
+• V-CFN is deﬁned as nn(vj) = ˆvj.
+
+The encoding part of these Autoencoder aims at building
+a low-rank dense representation of the sparse input of rat-
+ings. The decoding part aims at predicting a dense vector
+of ratings from the low-rank dense representation of the
+encoder. This new approach differs from classic Autoen-
+coders which only aim at reconstructing/denoising the in-
+put. As we will see later, the training loss will then differ
+from the evaluation one.
+
+3.1. Sparse Inputs
+
+There is no standard approach for using sparse vectors as
+inputs of Neural Networks. Most of the papers dealing with
+sparse inputs get around by pre-computing an estimate of
+the missing values (Tresp et al., 1994; Bishop, 1995). In
+our case, we want the Autoencoder to handle this prediction
+issue by itself. Such problems have already been studied in
+industry (Miranda et al., 2012) where 5% of the values are
+missing. However in Collaborative Filtering we often face
+datasets with more than 95% missing values. Furthermore,
+missing values are not known during training in Collabo-
+rative Filtering which makes the task even more difﬁcult.
+Our approach includes three ingredients to handle the train-
+ing of sparse Autoencoders:
+
+• inhibit the edges of the input layers by zeroing out
+• inhibit the edges of the output layers by zeroing out
+• use a denoising loss to emphasize rating prediction
+
+back-propagated values,
+
+values in the input,
+
+over rating reconstruction.
+
+Hybrid Collaborative Filtering with Neural Networks
+
+One way to inhibit the input edges is to turn missing val-
+ues to zero. To keep the Autoencoder from always return-
+ing zero, we also use an empirical loss that disregards the
+loss of unknown values. No error is back-propagated for
+missing values. Therefore, the error is back-propagated for
+actual zero values while it is discarded for missing values.
+In other words, missing values do not bring information to
+the Network. This operation is equivalent to removing the
+neurons with missing values described in (Salakhutdinov
+et al., 2007; Sedhain et al., 2015). However, Our method
+has important computational advantages because only one
+Neural Networks is trained whereas other techniques has to
+share the weights among thousands of Networks.
+Finally, we take advantage of the masking noise from the
+Denoising AutoEncoders (DAE) empirical loss. By simu-
+lating missing values in the training process, Autoencoders
+are trained to predict them. In Collaborative Filtering, this
+prediction aspect is actually the ﬁnal target. Thus, em-
+phasizing the prediction criterion turns the classic unsuper-
+vised training of Autoencoders into a simulated supervised
+learning. By mixing both the reconstruction and predic-
+tion criteria, the training can be thought as a pseudo-semi-
+supervised learning. This makes the DAE loss a promising
+objective function. After regularization, the ﬁnal training
+loss is:
+
+ (cid:88)
+
+j∈C(˜x)∩K(x)
+
+[nn(˜x)j − xj]2
+
+[nn(˜x)j − xj]2
+
+ +
+ + λ|W|2
+
+F ro,
+
+L2,α,β(x, ˜x) = α
+
+ (cid:88)
+
+β
+
+j(cid:54)∈C(˜x)∩K(x)
+
+where K(x) are the indices of known values of x, W is
+the ﬂatten vector of weights and λ is the regularization
+hyperparameter. The full forward/backward process is ex-
+plained in Figure 1. Importantly, Autoencoders with sparse
+inputs differs from sparse-Autoencoders (Lee et al., 2006)
+or Dropout regularization (Srivastava et al., 2014) in the
+sense that Sparse Autoencoders and Droupout inhibit the
+hidden neurons while inputs/outputs are actually known.
+
+3.2. Autoencoder and Low Rank Matrix Factorization
+
+Autoencoders are actually strongly linked with Matrix Fac-
+torization. For an Autoencoder with only one hidden layer
+and no output transfer function, the response of the network
+can be written as
+
+nn(x) = W2 σ(W1x + b1) + b2,
+
+where W1, W2 are the weights matrices and b1, b2 the
+bias terms. Up to the bias term b2, if we replace x by
+the representation ui of the user i, we recover a predicted
+
+σ(W1ui + b1)
+
+vector ˆui of the form V¯ui:
+
+ˆui = nn(ui) = W2(cid:124)(cid:123)(cid:122)(cid:125)
+2(cid:124)(cid:123)(cid:122)(cid:125)
+
+ˆvj = nn(vj) = W(cid:48)
+
+¯ui
+Symmetrically, ˆvj has the form U¯vj:
+σ(W(cid:48)
+
+(cid:124)
+(cid:124)
+
+(cid:123)(cid:122)
+(cid:123)(cid:122)
+1vj + b(cid:48)
+1)
+
+(cid:125)
+(cid:125)
+
+¯vj
+
+V
+
+U
+
++b2.
+
++b(cid:48)
+2.
+
+For the Matrix Factorization by ALS ; ˆR is iteratively built
+by solving for each row i of U (resp. column j of VT) a
+penalized least square regression using the known values of
+the ith row of R (resp. jth column of R) as observations
+of a scalar product in dimension k of ¯ui and a column of
+VT (resp ¯vi and a row of U). An Autoencoder replaces
+the regularization introduced by the alternate scheme by a
+projection in dimension k composed with the non linearity
+σ. This process is a non linear matrix factorization.
+Note that CFN breaks the symmetry between U and V. For
+example, while Matrix Factorization approaches learn both
+U and V, U-CFN learns V and only indirectly learns U:
+U-CFN targets the function to build ¯ui whatever the row
+ui. A direct beneﬁt is that the learned Autoencoder is able
+to ﬁll in every vector ui, even if that vector was not in the
+training data.
+Finally, both non-linear decompositions on rows and
+columns are done independently, which means that the
+matrix V learned by U-CFN from rows can differ from
+the concatenation of vectors ¯vj predicted by V-CFN from
+columns.
+
+4. Integrating side information
+Collaborative Filtering only relies on the feedback of users
+regarding a set of items. When additional information is
+available for the users and the items, this can sound re-
+strictive. One would think that adding more information
+can help in several ways: increasing the prediction accu-
+racy, speeding up the training, increasing the robustness of
+the model, etc. Furthermore, pure Collaborative Filtering
+suffers from the cold start problem: when very little infor-
+mation is available on an item, Collaborative Filtering will
+have difﬁculties recommending it. When bad recommenda-
+tion are provided, the probability to receive valuable feed-
+back is lowered leading to a vicious circle for new items.
+A common way to tackle this problem is to add some side
+information to ensure a better initialization of the system.
+This is known in the recommendation community as hy-
+bridization.
+The simplest approach to integrate side information is to
+append additional user/item bias to the rating prediction
+(Koren et al., 2009):
+
+ˆrij = ¯uT
+
+i ¯vj + bu,i + bu,j + b(cid:48),
+
+Hybrid Collaborative Filtering with Neural Networks
+
+an input to predict new ratings. With this scenario, side in-
+formation is assimilated to pseudo-ratings that will always
+exist for every items. However, when the dimension of the
+Neural Network input is far greater than the dimension of
+the side information, the Autoencoder may have difﬁculties
+to use it efﬁciently.
+Yet, common Matrix Factorization would append side in-
+formation to dense feature representations {¯ui, xi} rather
+than sparse feature representation as we just proposed
+{ui, xi}. Thus, one way to reproduce this idea is to inject
+the side information to every layer inputs of the Network.
+
+nn({ui, xi}) = V(cid:48) {
+= V(cid:48) {¯u(cid:48)
+= V(cid:48)
+[1:k]¯u(cid:48)
+
+¯u(cid:48)
+
+(cid:123)
+
+(cid:122)
+
+(cid:125)(cid:124)
+1{ui, xi} + b1), xi} + b2
+σ(W(cid:48)
+i, xi} + b2
+(cid:123)(cid:122)
+(cid:124)
+i + V(cid:48)
+
+[k+1:k+p]xi
+
++b2,
+
+(cid:125)
+
+bu,i
+
+[1:k] ∈
+where V(cid:48) ∈ R(n×k+p) is a weight matrix, V(cid:48)
+[k+1:k+p] ∈ Rn×p are respectively the submatri-
+Rn×k, V(cid:48)
+ces of V(cid:48) that contain the columns from 1 to k and k + 1 to
+k + p.
+By injecting the side information in every layer, the dy-
+namic Autoencoders representation is forced to integrate
+this new data. In addition, the output layer computes a lin-
+ear regression of the side information. However, we do not
+want the side information to overstep the dense rating rep-
+resentation. Thus, we enforced the following constraint.
+The dimension of the sparse input must be greater than the
+dimension of the Autoencoder bottleneck which must be
+greater than the dimension of the side information 1:
+
+P << Ku << N and Q << Kv << M.
+
+We ﬁnally obtain an Autoencoder which can incorporate
+side information and be trained through backpropagation.
+
+5. Experiments
+5.1. Benchmark Models
+
+We benchmark CFN with two SVD techniques that are
+broadly used in the industry.
+Alternating Least Squares with Weighted-λ-Regularization
+(ALS-WR) (Zhou et al., 2008) solves the low-rank matrix
+factorization problem by alternatively ﬁxing U and V and
+solving the resulting linear problem. Tikhonov regulariza-
+
+Figure 2. Integrating side information. The Network has two in-
+puts: the classic Autoencoder rating input and a side information
+input. Side information is wired to every neurons in the Network.
+
+where bu,i, bu,j, b(cid:48) are respectively the user, item, and
+global bias of the Matrix Factorization. Computing these
+bias can be done through hand-crafted engineering or Col-
+laborative Filtering technique. For instance, one method
+is to extend the dense feature vectors by directly append-
+ing side information on them (Porteous & A. U. Asuncion,
+2010). Therefore, the estimated rating is computed by:
+ˆrij = {¯ui, xi} ⊗ {¯vj, yj}
+[1:k],i ¯v[1:k],j + ¯uT
+
+[k+1:k+p],jxi
+
+[k+1:k+p],iyj
+
+def
+= ¯uT
+
++ ¯vT
+
+,
+
+(cid:124)
+
+(cid:123)(cid:122)
+
+bv,j
+
+(cid:125)
+
+(cid:124)
+
+(cid:123)(cid:122)
+
+bu,i
+
+(cid:125)
+
+where xi ∈ RP and yj ∈ RQ are respectively a vector rep-
+resentation of side information for the user and the item. If
+we decompose the previous scalar product, ¯uT
+[1:k],i ¯v[1:k],j
+is the classic Matrix Factorization term, ¯uT
+[k+1:k+p],iyj is
+the linear regression of the dense user representation and
+[k+1:k+p],jxj is the linear re-
+the item side information, ¯vT
+gression of the dense item representation and the user side
+information. For users, they can encode the genre, the age,
+job, circle of friends and so on. For items, they can be tags,
+a bag of words etc.
+Unfortunately, those methods cannot be directly applied to
+Neural Networks because Autoencoders optimize U and
+V independently. New strategies must be designed to in-
+corporate side information. One notable example for bi-
+text word alignment was recently made by (Ammar et al.,
+2014).
+In our case, the ﬁrst idea would be to append the side
+information to the sparse input vector. For simplicity
+purpose, the next equations will only focus on shallow
+U-Autoencoders with no output transfer functions. Yet,
+this can be extended to more complex Networks and V-
+Autoencoders. Therefore, we would get:
+
+nn({ui, xi}) = V σ(W(cid:48)
+
+1{ui, xi} + b1) + b2
+
+= ˆui,
+
+1 ∈ Rk×(n+p) is a weight matrix . When no pre-
+where W(cid:48)
+vious rating exist, it enables the Neural Networks to have at
+
+1When side information is sparse, the dimension of the side
+information can be assimilated to the number of non-zero param-
+eters
+
+Hybrid Collaborative Filtering with Neural Networks
+
+tion is used as it empirically provides excellent results:
+F ro+nj(cid:107)vj(cid:107)2
+
+i vj)2+λ(ni(cid:107)ui(cid:107)2
+
+(rij−uT
+
+L2 =
+
+F ro),
+
+(cid:88)
+
+(i,j)∈K(R)
+
+where ni is the number of rating for the ith user and nj is
+the number of rating for the jth item. Experiments are run
+with the Apache Mahout Software. 2
+SVDFeature (Chen et al., 2012) is a Machine Learning
+Toolkit for feature-based Collaborative Filtering. He won
+the KDD Cup for two consecutive years. Ratings are given
+by the following equation:
+
+ˆr =
+
+xpb(u)
+
+p +
+
+yqb(v)
+
+q +
+
+N +P(cid:88)
+
+p
+
+M +Q(cid:88)
+(cid:32)N +P(cid:88)
+
+q
+
+ +
+
+(cid:33)
+
+(cid:107)R(cid:107)(cid:88)
+(cid:33)T(cid:32)M +Q(cid:88)
+
+zrb(g)
+
+r
+
+r
+
+xpup
+
+yqvq
+
+p
+
+q
+
+where b(u) ∈ RN +P , b(i) ∈ RM +Q, b(g) ∈ R(cid:107)R(cid:107) are
+the the side information bias, and U ∈ RN +P×K, V ∈
+RM +Q×K encode the latent factors. The model parameters
+are computed by gradient descent.
+
+5.2. Data
+
+Experiments are conducted on MovieLens and Douban
+datasets.
+The MovieLens-1M, MovieLens-10M and MovieLens-
+20M datasets respectively provide 1/10/20 millions discrete
+ratings from 6/72/138 thousands users on 4/10/27 thou-
+sands movies. Side information for MovieLens-1M is the
+age, sex and gender of the user and the movie category (ac-
+tion, thriller etc.). Side information for MovieLens-10/20M
+is a matrix of tags T where Tij is the occurrence of the jth
+tag for the ith movie and the movie category. No side in-
+formation is provided for users.
+The Douban dataset (Ma et al., 2011) provides 17 million
+discrete ratings from 129 thousands users on 58 thousands
+movies. Side information is the bi-directional user/friend
+relations for the user. The user/friend relation are treated
+like the matrix of tags from MovieLens. No side informa-
+tion is provided for items.
+
+Preprocessing For each of these datasets, the full dataset
+is considered and the ratings are normalized from -1 to 1.
+We split them into random 80%-20% train-test datasets and
+inputs are unbiased before the training process: denoting µ
+the mean over the training set, bui the mean of the ith user
+and bvi the mean of the vth item, SVD algorithms, U-CFN
+= rij + µ −
+and V-CFN respectively learn from runbiased
+= rij − bvi.
+= rij − bui and runbiased
+bui − bvj , runbiased
+
+ij
+
+ij
+
+ij
+
+2http://mahout.apache.org/
+
+Postprocessing The bias computed on the training set is
+added back while evaluating the ﬁnal RMSE.
+
+Side Information In order to enforce the side informa-
+tion constraint, Q (cid:28) Kv (cid:28) M, Principal Component
+Analysis is performed on the matrix of tags. We keep the
+50 greatest eigenvectors3 and normalize them by the square
+root of their respective eigenvalue: given T = PDQT
+with D the diagonal matrix of eigenvalues sorted in de-
+scending order, the movie tags are represented by Y =
+K(cid:48)×K(cid:48) with K(cid:48) the number of kept eigenvectors.
+PJ×K(cid:48)D0.5
+Binary representation such as the movie category is then
+concatenated to Y.
+
+5.3. Error Function
+
+Two Mean Square Errors (MSE) co-exist for Autoencoders
+and one must be careful to use the right estimator for bench-
+marking. The classic Autoencoder loss estimates the qual-
+ity of the input reconstruction:
+
+M SErec(Xtr) =
+
+1
+|Rtr|
+
+[nn(x)k − xk]2,
+
+where |Rtr| is the number of ratings in the training dataset.
+In Collaborative Filtering context, while this loss provides
+useful information during the training phase, the quality of
+the learned Autoencoder is given by its prediction accuracy
+for unknown inputs. This prediction accuracy is summed
+up couples (xte, xtr) of training-testing examples:
+
+(cid:88)
+
+(cid:88)
+
+x∈Xtr
+
+k∈K(x)
+
+M SEpred(Xte, Xtr) =
+
+(cid:88)
+
+(cid:88)
+
+1
+|Rte|
+
+(xte,xtr)∈(Xte,Xtr)
+
+k∈K(xte)
+
+[nn(xtr)k − xte,k]2.
+
+We use M SEpred to evaluate both the baselines and CFN.
+5.4. Training Settings
+
+(cid:104)− 1√
+
+We train 4-layers Autoencoders for MovieLens-1M and
+2-layers Autoencoders for MovieLens-10/20M and the
+Douban datasets. The ﬁrst and second layers have from 500
+to 700 hidden neurons. The decoding layers have the same
+dimension in the reverse order. Weights are initialized us-
+ing the fan-in rule Wij ∼ U
+(LeCun et al.,
+1998). Transfer functions are hyperbolic tangents. The
+Neural Network is optimized with stochastic backpropaga-
+tion with minibatch of size 30 and a weight decay is added
+for regularization. Hyperparameters 4 are tuned by a sim-
+ple genetic algorithm already used by (Teytaud et al., 2007)
+in a different context.
+
+n ,− 1√
+
+(cid:105)
+
+n
+
+3The number of eigenvalues is arbitrary selected. We do not
+
+focus on optimizing the quality of this representation.
+
+4Hyperparameters used for the experiments are provided with
+
+the source code.
+
+Hybrid Collaborative Filtering with Neural Networks
+
+Table 1. RMSE with a training ratio of 90%/10%. The ++ acronym is appended to algorithms with side information. When no side
+information is available, the N/A acronym is used. When results were too low after two days of computation, the * character is used.
+
+Algorithms
+ALS-WR
+SVDFeature
+U-CFN
+U-CFN++
+V-CFN
+V-CFN++
+
+MovieLens-1M MovieLens-10M MovieLens-20M
+0.8526 ± 2.4e-3
+0.7864 ± 3.2e-3
+0.8631 ± 2.5e-3
+0.7896 ± 1.4e-4
+0.8574 ± 2.4e-3
+0.8572 ± 1.6e-3
+0.7669 ± 2.6e-4
+0.8388 ± 2.5e-3
+0.8377 ± 1.8e-3
+0.7762 ± 4.6e-4
+
+0.7949 ± 1.8e-3
+0.7907 ± 8.4e-4
+0.7954 ± 7.4e-4
+0.7780 ± 5.4e-4
+0.7764 ± 6.3e-4
+
+N/A
+
+N/A
+
+*
+
+Douban
+
+*
+
+0.7117 ± 3.3e-3
+0.7049 ± 2.2e-4
+0.7050 ± 1.2e-4
+0.6911 ± 3.2e-4
+
+N/A
+
+Table 2. RMSE computed by cluster of items sorted by their re-
+spective number of ratings on MovieLens-10M with a training
+ratio of 90%/10%. For instance, the ﬁrst cluster contains the 20%
+of items with the lowest number of ratings. The provided ﬁgures
+are the mean reported through k-cross validation. The last cluster
+far outweigh other clusters and hide more subtle results.
+
+Interval V-CFN V-CFN++
+0.0-0.2
+0.2-0.4
+0.4-0.6
+0.6-0.8
+0.8-1.0
+Full
+
+0.9373
+0.8644
+0.8446
+0.8097
+0.7671
+0.7764
+
+0.9568
+0.8746
+0.8501
+0.8130
+0.7675
+0.7780
+
+Improvement %
+
+1.811
+1.215
+0.760
+0.398
+0.052
+0.206
+
+5.5. Results
+
+Table 1 summarizes the RMSE on MovieLens and Douban
+datasets. Reported results are computed through k-fold
+cross-validation and conﬁdence intervals correspond to a
+95% range. To the best of our knowledge, the best results
+published regarding MovieLens-1M and MovieLens-10M
+are reported by both (Lee et al., 2013; Sedhain et al., 2015)
+with a ﬁnal RMSE of 0.831 ± 0.003 and 0.782 ± 0.003.
+These scores are obtained with a training ratio of 90%/10%
+and without side information.
+(Kim & Choi, 2014) use
+a scalable version of BPMF with side information and
+they report respectively 0.844 and 0.6856 RMSE score
+on MovieLens-10M and Douban with a training ratio of
+80%/20% while V-CFN++ returns 0.782 and 0.694 with
+the same experimental conditions.
+
+5.6. Discussion
+
+V-CFNs have excellent performance in our experiments
+for every dataset we run.
+It is competitive compared
+to the state-of-the-art Collaborative Filtering algorithms
+and clearly outperforms them for MovieLens-10M. For in-
+stance, recent works still reports a global RMSE above 0.8
+even using some side information with MovieLens-10M
+(Kim & Choi, 2014; Kumar et al., 2014). The conﬁdence
+interval of CFN is also low on large datasets which make
+him a robust algorithm for Collaborative Filtering.
+In the experiments, V-CFN outperforms U-CFN. It sug-
+
+gests that the structure on the items is stronger than the one
+on users i.e. it is easier to guess tastes based on movies you
+liked than to ﬁnd some users similar to you. Of course, the
+behavior could be different on some other data .
+At ﬁrst sight, the use of side information has a limited im-
+pact on the RMSE. This statement has to be mitigated: as
+the repartition of known entries in the dataset is not uni-
+form, the estimates are biased towards users and items with
+a lot of ratings. For theses users and movies, the dataset al-
+ready contains a lot of information, thus having some extra
+information will have a marginal effect. Users and items
+with few ratings should beneﬁt more from some side infor-
+mation but the estimation biais hides them.
+In order to exhibit the utility of side information, we report
+in Table 2 the RMSE conditionally to the number of miss-
+ing values for items. As expected, the fewer number of rat-
+ings for an item, the more important the side information.
+A more careful analysis of the RMSE improvement in this
+setting shows that the improvement is uniformly distributed
+over the users whatever their number of ratings. This corre-
+sponds to the fact that the available side information is only
+about items. This is very desirable for a real system: the ef-
+fective use of side information to the new items is crucial
+to deal with the ﬂow of new products.
+In the end, we trained V-CFN on MovieLens-10M with ei-
+ther the movie genre or the matrix of tags. Both side infor-
+mation increase the global RMSE by 0.13% and concate-
+nating them increase the ﬁnal score by a small margin of
+0.20%. Therefore, V-CFN could handle the heterogeneity
+of side information. However, the U-CFN failed to use the
+friendship relationship to increase the RMSE.
+
+6. Remarks
+6.1. Source code
+
+Torch is a powerful framework written in Lua to quickly
+prototype Neural Networks. It is a widely used (Facebook,
+Deep Mind) industry standard. However, Torch lacks some
+important basic tools to deal with sparse inputs. Thus, we
+develop several new modules to deal with DAE loss, sparse
+
+Hybrid Collaborative Filtering with Neural Networks
+
+Table 3. MAE with a training ratio of 90%/10%. The ++ acronym is appended to algorithms with side information. When no side
+information is available, the N/A acronym is used.
+0.6773 ± 2.2e-3
+0.6727 ± 2.3e-4
+0.6725 ± 9.7e-4
+0.6564 ± 1.9e-3
+0.6548 ± 1.3e-3
+
+Algorithms MovieLens-1M MovieLens-10M MovieLens-20M
+0.6104 ± 5.3e-4
+ALS-WR
+0.6004 ± 1.2e-4
+U-CFN
+U-CFN++
+0.5824 ± 2.4e-4
+V-CFN
+0.5817 ± 1.9e-4
+V-CFN++
+
+0.6199 ± 1.8e-4
+0.6089 ± 2.4e-4
+0.5951 ± 1.3e-4
+0.5936 ± 3.6e-4
+
+N/A
+
+Douban
+
+0.5669 ± 3.4e-4
+0.5561 ± 2.4e-4
+0.5563 ± 1.8e-4
+0.5442 ± 3.1e-4
+
+N/A
+
+N/A
+
+DAE loss and sparse inputs on both CPU and GPU. They
+can easily be plugged into existing code. An out-of-the-box
+tutorial is available to directly run the experiments. The
+code is freely available on Github and Luarocks. 5
+
+6.2. Scalability
+
+One major problem that most Collaborative Filtering have
+to resolve is scalability since dataset often have hundred of
+thousands users and items. An efﬁcient algorithm must be
+trained in a reasonable amount of time and provide quick
+feedback during evaluation time.
+Recent advances in GPU computation managed to reduce
+the training time of Neural Networks by several orders of
+magnitude. However, Collaborative Filtering deals with
+sparse data and GPUs are designed to perform well on
+dense data.
+(Salakhutdinov et al., 2007; Sedhain et al.,
+2015) face this sparsity constraint by building small dense
+Networks with shared weights. Yet, this approach may
+lead to important synchronisation latencies. In our case, we
+tackle the issue by selectively densifying the inputs just be-
+fore sending them to the GPUs cores without modiﬁcation
+of the result of the computation. It introduces an overhead
+on the computational complexity but this implementation
+allows the GPUs to work at their full strength.
+In prac-
+tice, vectorial operations overtake the extra cost. Such ap-
+proach is an efﬁcient strategy to handle sparse data which
+achieves a balance between memory footprint and compu-
+tational time. We are able to train Large Neural Networks
+within a few minutes as shown in Table 4. At the time of
+writing, alternative strategies to train networks with sparse
+inputs on GPUs are under development.
+
+6.3. Future Works
+
+Implicit feedback may greatly enhance the quality of Col-
+laborative Filtering algorithms (Koren et al., 2009; Rendle,
+2010). For instance, Implicit feedback would be incorpo-
+rated to CFN by feeding the Network with an additional
+binary input. By doing so, (Salakhutdinov et al., 2007) en-
+hance the quality of prediction for Restricted Boltzmann
+Machine on the Netﬂix Dataset. Additionally, Content
+Based Technique with Deep learning such as (den Oord
+et al., 2013; Wang et al., 2014b) would be plugged to CFN.
+
+5https://github.com/fstrub95/Autoencoders cf
+
+The idea would be to train a joint Network that would di-
+rectly link the raw item features to the ratings such as mu-
+sic, pictures or word representations. As a different topic,
+V-CFN and U-CFN does not always report the same type of
+errors. This is more likely to happen when they are fed with
+side information. One interesting work would be to com-
+bine a suitable Network that mix them both. Finally, other
+metrics exist to estimate the quality of Collaborative Fil-
+tering to ﬁt other real-world constraints. Normalized Dis-
+counted Cumulative Gain (J¨arvelin & Kek¨al¨ainen, 2002) or
+F-score are often sometimes preferred to RMSE/MAE and
+should be benchmarked.
+
+Table 4. Training time and memory footprint for a 2-layers CFN
+without side information. The GPU is a standard GTX 980. T ime
+is the average training duration (around 20 epochs/networks). Pa-
+rameters are the weight and bias matrices. Memory is retrieved
+by the GPU driver during the training.
+It includes the dataset,
+the model parameters and the training buffer. Although the mem-
+ory footprint highly depends on the implementation, it provides
+a good order of magnitude. Adding side information would in-
+crease by fewer than 5% the ﬁnal time and memory footprint.
+
+Type
+
+# Param
+
+Dataset
+MLens-1M
+MLens-10M
+MLens-20M
+MLens-1M
+MLens-10M
+MLens-20M
+
+V
+V
+V
+U
+U
+U
+
+8M 2m03s
+100M 18m34s
+194M 34m45s
+5M 7m17s
+15M 34m51s
+38M 59m35s
+
+Time Memory
+250MiB
+1532MiB
+2905MiB
+262MiB
+543MiB
+1044Mib
+
+7. Conclusion
+In this paper, we have introduced a Neural Network archi-
+tecture, aka CFN, to perform Collaborative Filtering with
+side information. Contrary to other attempts with Neu-
+ral Networks, this joint Network integrate side information
+and learn a non-linear representation of users or items into
+a unique Neural Network. This approach manages to both
+beats state of the art results in CF and ease the cold start
+problem on the MovieLens and Douban datasets. CFN is
+also scalable and robust to deal with large size dataset. We
+made several claims that Autoencoders are closely linked
+to low-rank Matrix Factorization in Collaborative Filtering.
+Finally, a reusable source code is provided in Torch and hy-
+perparameters are provided to reproduce the results.
+
+Hybrid Collaborative Filtering with Neural Networks
+
+Acknowledgements
+
+The authors would like to acknowledge the stimulating en-
+vironment provided by SequeL research group, Inria and
+CRIStAL. This work was supported by French Ministry
+of Higher Education and Research, by CPER Nord-Pas de
+Calais/FEDER DATA Advanced data science and technolo-
+gies 2015-2020, the Projet CHIST-ERA IGLU and by FUI
+Herm`es. Experiments were carried out using Grid’5000
+tested, supported by Inria, CNRS, RENATER and several
+universities as well as other organizations.
+
+References
+Adams, R. P. and Murray, G. E. Dahland I.
+
+Incor-
+porating side information in probabilistic matrix fac-
+arXiv preprint
+torization with gaussian processes.
+arXiv:1003.4944, 2010.
+
+Ammar, W., Dyer, C., and Smith, N. A. Conditional ran-
+dom ﬁeld autoencoders for unsupervised structured pre-
+diction. In Advances in Neural Information Processing
+Systems, pp. 3311–3319, 2014.
+
+Bishop, C. M. Neural networks for pattern recognition.
+
+Oxford university press, 1995.
+
+Chen, T., Zhang, W., Lu, Q., Chen, K., Zheng, Z., and
+Yong, Y. Svdfeature: a toolkit for feature-based col-
+laborative ﬁltering. The Journal of Machine Learning
+Research, 13(1):3619–3622, 2012.
+
+den Oord, A. Van, Dieleman, S., and Schrauwen, B. Deep
+In Advances in
+content-based music recommendation.
+Neural Information Processing Systems, pp. 2643–2651,
+2013.
+
+Dziugaite, G.K. and Roy, D.M. Neural network matrix fac-
+
+torization. arXiv preprint arXiv:1511.06443, 2015.
+
+Glorot, X. and Bengio, Y. Understanding the difﬁculty of
+training deep feedforward neural networks. In Interna-
+tional conference on artiﬁcial intelligence and statistics,
+pp. 249–256, 2010.
+
+Glorot, X., Bordes, A., and Bengio, Y. Deep sparse rec-
+In International Conference on
+tiﬁer neural networks.
+Artiﬁcial Intelligence and Statistics, pp. 315–323, 2011.
+
+Gomez-Uribe, C. and Hunt, N. The netﬂix recommender
+system: Algorithms, business value, and innovation.
+ACM Trans. Manage. Inf. Syst., 6(4):13:1–13:19, 2015.
+
+J¨arvelin, K. and Kek¨al¨ainen, K. Cumulated gain-based
+evaluation of ir techniques. ACM Transactions on In-
+formation Systems (TOIS), 20(4):422–446, 2002.
+
+Kim, Yong-Deok and Choi, Seungjin. Scalable variational
+bayesian matrix factorization with side information. In
+Proceedings of the International Conference on Arti-
+ﬁcial Intelligence and Statistics (AISTATS), Reykjavik,
+Iceland, 2014.
+
+Koren, Y., Bell, R., and Volinsky, C. Matrix factorization
+techniques for recommender systems. Computer, (8):
+30–37, 2009.
+
+Kramer, M. A. Nonlinear principal component analysis us-
+ing autoassociative neural networks. AIChE journal, 37
+(2):233–243, 1991.
+
+Kumar, R., Verma, B. K., and Rastogi, S. S. Social popu-
+larity based svd++ recommender system. International
+Journal of Computer Applications, 87(14), 2014.
+
+Lawrence, N.D. and Urtasun, R. Non-linear matrix fac-
+In Proceedings of
+torization with gaussian processes.
+the 26th Annual International Conference on Machine
+Learning, pp. 601–608. ACM, 2009.
+
+LeCun, Y., Bengio, Y., and Hinton, G. Deep learning. Na-
+
+ture, 521(7553):436–444, 2015.
+
+LeCun, Y.A., Bottou, L., Orr, G.B., and Muller, K.R. Efﬁ-
+cient backprop. In Neural networks: Tricks of the trade,
+pp. 9–48. Springer, 1998.
+
+Lee, H., Battle, A., Raina, R., and Ng, A.Y. Efﬁcient sparse
+In Advances in neural information
+
+coding algorithms.
+processing systems, pp. 801–808, 2006.
+
+Lee, J., Sun, M., and Lebanon, G. A comparative study
+arXiv preprint
+
+of collaborative ﬁltering algorithms.
+arXiv:1205.3193, 2012.
+
+Lee, J., Kim, S., Lebanon, G., and Singerm, Y. Local low-
+rank matrix approximation. In Proceedings of The 30th
+International Conference on Machine Learning, pp. 82–
+90, 2013.
+
+Li, S., Kawale, J., and Fu, Y. Deep collaborative ﬁltering
+In Proceed-
+via marginalized denoising auto-encoder.
+ings of the 24th ACM International on Conference on
+Information and Knowledge Management, pp. 811–820.
+ACM, 2015.
+
+Lops, P., Gemmis, M. De, and Semeraro, G. Content-based
+recommender systems: State of the art and trends.
+In
+Recommender systems handbook, pp. 73–105. Springer,
+2011.
+
+Ma, H., Zhou, D., Liu, C., Lyu, M. R., and King, I. Rec-
+In Pro-
+ommender systems with social regularization.
+ceedings of the fourth ACM international conference on
+Web search and data mining, WSDM ’11, pp. 287–296,
+Hong Kong, China, 2011.
+
+Hybrid Collaborative Filtering with Neural Networks
+
+Vincent, P., Larochelle, H., Lajoie, I., Bengio, Y., and Man-
+zagol, P. Stacked Denoising Autoencoders: Learning
+Useful Representations in a Deep Network with a Local
+Denoising Criterion. Journal of Machine Learning Re-
+search, 11(3):3371–3408, 2010. ISSN 15324435. doi:
+10.1111/1467-8535.00290.
+
+Wang, H., Wang, N., and Yeung, D. Y. Collaborative
+deep learning for recommender systems. arXiv preprint
+arXiv:1409.2944, 2014a.
+
+Wang, H., Wang, N., and Yeung, D. Y. Improving content-
+based and hybrid music recommendation using deep
+learning. In Proceedings of the ACM International Con-
+ference on Multimedia, pp. 627–636. ACM, 2014b.
+
+Zhou, Y., Wilkinson, D., Schreiber, R., and Pan, R. Large-
+scale parallel collaborative ﬁltering for the netﬂix prize.
+In Algorithmic Aspects in Information and Management,
+pp. 337–348. Springer, 2008.
+
+Miranda, V., Krstulovic, J., Keko, H., Moreira, C., and
+Pereira, J. Reconstructing Missing Data in State Estima-
+tion With Autoencoders. IEEE Transactions on Power
+Systems, 27(2):604–611, 2012. ISSN 0885-8950.
+
+Mnih, A. and Salakhutdinov, R. Probabilistic matrix fac-
+torization. In Advances in neural information processing
+systems, pp. 1257–1264, 2007.
+
+Porteous, I. and A. U. Asuncion, M. Welling. Bayesian
+matrix factorization with side information and dirichlet
+process mixtures. In AAAI, 2010.
+
+Rendle, S.
+
+Factorization machines.
+
+In Data Mining
+(ICDM), 2010 IEEE 10th International Conference on,
+pp. 995–1000. IEEE, 2010.
+
+Salakhutdinov, R. and Mnih, A. Bayesian probabilistic ma-
+trix factorization using markov chain monte carlo.
+In
+Proceedings of the 25th international conference on Ma-
+chine learning, pp. 880–887. ACM, 2008.
+
+Salakhutdinov, R., Mnih, A., and Hinton, G. Restricted
+boltzmann machines for collaborative ﬁltering. In Pro-
+ceedings of the 24th international conference on Ma-
+chine learning, pp. 791–798. ACM, 2007.
+
+Sedhain, S., Menon, A. K., Sanner, S., and Xie, L. Au-
+torec: Autoencoders meet collaborative ﬁltering. In Pro-
+ceedings of the 24th International Conference on World
+Wide Web Companion, pp. 111–112. International World
+Wide Web Conferences Steering Committee, 2015.
+
+Srivastava, N, Hinton, G., Krizhevsk, A., Sutskever, I., and
+Salakhutdinov, R. Dropout: A simple way to prevent
+neural networks from overﬁtting. The Journal of Ma-
+chine Learning Research, 15(1):1929–1958, 2014.
+
+Strub, F. and Mary, J. Collaborative Filtering with Stacked
+In NIPS
+Denoising AutoEncoders and Sparse Inputs.
+Workshop on Machine Learning for eCommerce, Mon-
+treal, Canada, 2015.
+
+Teytaud, O., S., and Mary, J. Active learning in regres-
+sion, with application to stochastic dynamic program-
+ming.
+In International Conference On Informatics in
+Control, Automation and Robotics (eds.), ICINCO and
+CAP, pp. 373–386, 2007.
+
+Tresp, V., Ahmad, S., and Neuneier, R. Training Neural
+Networks with Deﬁcient Data. Advances in Neural In-
+formation Processing Systems 6, pp. 128–135, 1994. doi:
+10.1.1.23.6971.
+
+Truyen, T. T., Phung, D.Q., and Venkatesh, S. Ordinal
+boltzmann machines for collaborative ﬁltering. In Pro-
+ceedings of the Twenty-ﬁfth Conference on Uncertainty
+in Artiﬁcial Intelligence, pp. 548–556. AUAI Press,
+2009.
+
+

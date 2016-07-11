@@ -1,0 +1,1805 @@
+Symbolic Reachability Analysis of B through
+
+ProB and LTSmin
+
+Jens Bendisposto1, Philipp Körner1, Michael Leuschel1, Jeroen Meijer2∗, Jaco
+
+van de Pol2, Helen Treharne3, and Jorden Whiteﬁeld3†
+
+1 Institut für Informatik, Heinrich Heine University Düsseldorf, Germany
+{bendisposto@cs., p.koerner@, leuschel@cs.}uni-duesseldorf.de
+2 Formal Methods and Tools, University of Twente, The Netherlands
+
+{j.j.g.meijer, j.c.vandepol}@utwente.nl
+
+3 Department of Computer Science, University of Surrey, United Kingdom
+
+{h.treharne, j.whitefield}@surrey.ac.uk
+
+Abstract. We present a symbolic reachability analysis approach for
+B that can provide a signiﬁcant speedup over traditional explicit state
+model checking. The symbolic analysis is implemented by linking ProB
+to LTSmin, a high-performance language independent model checker. The
+link is achieved via LTSmin’s Pins interface, allowing ProB to beneﬁt
+from LTSmin’s analysis algorithms, while only writing a few hundred
+lines of glue-code, along with a bridge between ProB and C using ØMQ.
+ProB supports model checking of several formal speciﬁcation languages
+such as B, Event-B, Z and Tla+. Our experiments are based on a wide
+variety of B-Method and Event-B models to demonstrate the eﬃciency of
+the new link. Among the tested categories are state space generation and
+deadlock detection; but action detection and invariant checking are also
+feasible in principle. In many cases we observe speedups of several orders
+of magnitude. We also compare the results with other approaches for
+improving model checking, such as partial order reduction or symmetry
+reduction. We thus provide a new scalable, symbolic analysis algorithm
+for the B-Method and Event-B, along with a platform to integrate other
+model checking improvements via LTSmin in the future.
+
+Keywords: B-Method, Event-B, ProB, LTSmin, symbolic reachability
+
+1
+
+Introduction
+
+In this paper we describe the process, technique and design decisions we made for
+integrating the two tooling sets: LTSmin and ProB. Bicarregui et al. suggested,
+in a review of projects which applied formal methods [5], that providing useable
+tools remained a challenge. Recent use of the ProB tool in a rail system case
+study [15], where model checking large industrial sized complex speciﬁcations
+was performed, illustrated that there continues to be limitations with the tooling.
+
+∗Supported by STW SUMBAT grant: 13859
+†Partly supported by EPSRC grant: EP/M506655/1
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+4
+1
+
+ 
+ 
+]
+E
+S
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+1
+0
+4
+4
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+2
+
+Bendisposto et al.
+
+Speciﬁcation
+Languages
+
+mcrl2
+
+Promela
+
+. . .
+
+ProB
+
+Pins2Pins
+Wrappers
+
+Transition
+Caching
+
+Variable Reordering,
+Transition Grouping
+
+Partial Order
+Reduction
+
+Reachability
+Tools
+
+Distributed
+
+Multi-core
+
+Symbolic
+
+Fig. 1: Modular Pins architecture of LTSmin [16]
+
+front-end
+
+back-end
+
+Model checking CSP(cid:107)B [32] speciﬁcations in ProB was the original motivator
+for this research, and based on a promising initial exploration [34], this paper
+deﬁnes a systematic integration of the two tooling sets.
+
+LTSmin is a high-performance language-independent model checker that
+allows numerous modelling language front-ends to be connected to various anal-
+ysis algorithms, through a common interface, as shown in Figure 1. It oﬀers a
+wide spectrum of parallel and symbolic algorithms to deal with the state space
+explosion of diﬀerent veriﬁcation problems. This connecting interface is called
+the Partitioned Interface to the Next-State function (Pins), the basis of
+which consists of a state-vector deﬁnition, an initial state, a partitioned successor
+function (NextState), and labelling functions [16]. It is through Pins that we
+have been able to leverage the ProB tool, therefore allowing us to take advantage
+of LTSmin’s algorithmic back-ends. In this paper we focus on the new ProB
+language front-end, the grouping of transitions, and the symbolic back-end. In
+Section 5 we also brieﬂy discuss state variable orders.
+ProB [20] is an animator and model checker for many diﬀerent formal
+languages [29], including the classical B-Method [2], Event-B [1], CSP, CSP(cid:107)B,
+Z and Tla+. ProB can perform automatic or step by step animation of B
+machines, and can be used to systematically verify the behaviour of machines.
+The veriﬁcation can identify states which do not meet the invariants, do not
+satisfy assertions or that deadlock. At the heart of ProB is a constraint solver,
+which enables the tool to animate and model check high-level speciﬁcations. The
+built-in model checker is a straightforward, explicit state model checker (albeit
+augmented with various features such as symmetry reduction [21] or partial order
+reduction [10]). The explicit state model checker Tlc can also be used as a
+backend [11].
+
+The purpose of this paper is to make use of the advanced features of the
+LTSmin model checker, such as symbolic reachability analysis, by linking the
+ProB state exploration engine with LTSmin. This is achieved through a C
+programming interface [4] within the ProB tool, allowing the representation of a
+state to be compatible for LTSmin’s consumption. In this paper the integration
+focuses on what is required in order to perform symbolic reachability analysis of
+
+Symbolic Reachability Analysis of the B-Method
+
+3
+
+B-Method and Event-B speciﬁcations. The contribution of this research is a new
+tool integration, which can be used as a platform for further extensions.
+
+The paper is structured as follows: Section 2 presents an overview of the
+B-Method, a running example and an illustration of deﬁnitions of transition
+systems used by LTSmin. Section 3 details the symbolic reachability analysis
+and Section 4 outlines the implementation details. Section 5 provides empirical
+results from performing reachability analysis benchmarking examples in ProB
+alone and using the new integration of the two tools. The paper concludes in
+Section 6 with reﬂections and future work.
+
+2 Preliminaries: B-Method and Transition Systems
+
+In this section we provide an overview of the B-Method and the foundations used
+within LTSmin.
+
+A B machine consists of a collection of clauses and a collection of operations.
+The machine clause declares the abstract machine and gives it its name. The
+variables clause declares the variables that are used to carry the state informa-
+tion within the machine. The invariant clause gives the type of the variables,
+and more generally it also contains any other constraints on the allowable machine
+states. The initialisation clause determines the initial state(s) of the machine.
+Operations in a machine are events that change the state of a machine and can
+have input parameters. Operations can be of the form SELECT P THEN S
+END where P is a guard and S is the action part of the operation. The predicate
+P must include the type of any input variables and also give conditions on when
+the operation can be performed. When the guard of an operation is true then the
+operation is enabled and can be performed. If the guard is the simple predicate
+true then the operation form is simpliﬁed to BEGIN S END. An operation can
+also be of the form PRE P THEN S END so that the predicate is a precondition
+and if the operation is invoked outside its precondition then this results in a
+divergence (we do not illustrate this in our running example). Finally, the action
+part of an operation is a generalised substitution, which can consist of one or
+more assignment statements (in parallel) to update the state or assign to the
+output variables of an operation. Conditional statements and nondeterministic
+choice statements are also permitted in the body of the operation. The example
+in Figure 2 illustrates the MutexSimple machine with three variables and ﬁve
+operations. Its initial state is deterministic and wait is set to MAXINT. For
+MAXINT=1 we get 4 states; the state space constructed by ProB can be found
+in Figure 3. From the initial state only the guards for Enter and Leave are true.
+Following an Enter operation the value of the cs variable is true which means
+that the guard of the CS Active operation is true and the system can indicate
+that it is in the critical section by performing the CS Active operation.
+
+The example presented could also be considered as an Event-B example
+since it is a simple guarded system. We do not elaborate further on the notation
+of Event-B in this paper but note that the results in the subsequent sections are
+also applicable to Event-B.
+
+4
+
+Bendisposto et al.
+
+INVARIANT
+
+1 MACHINE MutexSimple
+2 VARIABLES cs , wait ,
+3
+4
+5
+6 OPERATIONS
+7
+
+Enter
+
+f i n i s h e d
+
+c s : BOOL & wait : NATURAL & f i n i s h e d : NATURAL
+
+INITIALISATION c s := FALSE | | wait := MAXINT | |
+
+f i n i s h e d := 0
+
+= SELECT c s = FALSE & wait >0 THEN
+
+c s := TRUE | | wait := wait − 1 END;
+
+Exit
+
+= SELECT c s = TRUE THEN
+
+c s := FALSE | |
+
+f i n i s h e d := f i n i s h e d + 1 END;
+
+= BEGIN c s := FALSE END;
+
+Leave
+CS_Active = SELECT c s = TRUE THEN s k i p END;
+R e s t a r t
+
+= SELECT f i n i s h e d >0 THEN
+
+wait := wait + 1 | |
+
+f i n i s h e d := f i n i s h e d − 1 END
+
+8
+
+9
+10
+11
+
+12 END
+
+Fig. 2: MutexSimple B-Method machine example
+
+Leave
+
+INITIALISATION
+
+root
+
+cs=FALSE,wait=1,finished=0
+
+Enter
+
+cs=TRUE,wait=0,finished=0
+
+cs=FALSE,wait=0,finished=1
+
+Leave
+
+cs=FALSE,wait=0,finished=0
+
+Restart
+
+Exit
+
+Leave
+
+CS Active
+
+Leave
+
+Fig. 3: MutexSimple statespace for MAXINT=1
+
+As far as symbolic reachability analysis is concerned, a formal model is seen
+
+to denote a transition system. LTSmin adopts the following deﬁnition:
+
+Deﬁnition 1 (Transition System). A Transition System (TS) is a structure
+(S ,→, I ), where S is a set of states, → ⊆ S × S is a transition relation and
+I ⊆ S is a set of initial states. Furthermore, let →∗ be the reﬂexive and transitive
+closure of →, then the set of reachable states is R = {s ∈ S | ∃ s(cid:48) ∈ I . s(cid:48) →∗ s}.
+A B-Method and Event-B model induces such a transition system: initial
+states are deﬁned by the initialisation clause and the individual operations
+together deﬁne the transition relation →. Figure 3 shows the transition system4
+for the machine in Figure 2. As can be seen in Figure 3, the transition relation is
+annotated with operation names. For symbolic reachability analysis it is actually
+very important that we divide the transition relation into groups, leading to the
+concept of a partitioned transition system:
+
+4One subtle issue is that LTSmin actually only supports a single initial state; this
+is solved by introducing the artiﬁcial root state linked to the initial states proper. We
+ignore this technical issue in the paper.
+
+Symbolic Reachability Analysis of the B-Method
+
+5
+
+Deﬁnition 2 (Partitioned Transition System). A Partitioned Transition
+System (PTS) is a structure P = (S n, G,→m, I n), where
+– S n = S1 × . . . × Sn is the set of states, which are vectors of n values,
+– G = (→1, . . . ,→m) is a vector of M transition groups →i ⊆ S n × S n (∀ 1 ≤
+i=1 →i is the overall transition relation induced by G, i.e., the union
+
+– →m =(cid:83)m
+
+i ≤ m)
+
+of the m transition groups , and
+
+– I n ⊆ S n is the set of initial states.
+We write s →i t when (s, t) ∈ →i for 1 ≤ i ≤ m, and s →m t when (s, t) ∈ →m.
+For example I n = {(FALSE , MAXINT , 0)} in the running example. Note
+that G in Deﬁnition 2 does not necessarily form a partition of →m, overlap is
+allowed between the individual groups.
+
+3 Symbolic Reachability Analysis for B
+
+Computing the set of reachable states (R) of a transition system can be done
+eﬃciently with symbolic algorithms if many transition groups →i touch only
+a few variables. This concept is known as event locality [8]. Many models of
+transition systems in the B-Method employ event locality. In the B-Method
+event locality occurs in operations, where only a few variables are read from, or
+written to. For example in Figure 2 operation CS Active only reads from cs and
+Leave only writes to cs. This event locality beneﬁts the symbolic reachability
+analysis, so that the algorithm is capable of coping with the well known state
+space explosion problem. Since the B-Method employs event locality we build on
+the foundations of earlier work on LTSmin [6, 24] and extend it to ProB. To
+perform symbolic reachability analysis of the B-Method, ProB should provide
+LTSmin with read matrices and write matrices. These matrices inform LTSmin
+about the locality of events in the B-Method.
+Read independence is an important concept, it allows one to reuse the suc-
+cessor states computed in one state s for all states s(cid:48) which diﬀer just by
+read-independent variables from s, and vice versa.
+Deﬁnition 3 (Read independence). Two state vectors s, s(cid:48) are equivalent
+except on index j , denoted by s ≈j s(cid:48), iﬀ ∀ k (cid:54)= j : sk = s(cid:48)
+∀ s, s(cid:48), t ∈ S n such that s ≈j s(cid:48) and s →i t, we have that s(cid:48) →i t.
+t ∈ S n such that s ≈j s(cid:48) and s →i t, we have that s(cid:48) →i (t1, . . . , tj−1, s(cid:48)
+. . . , tn).
+
+Transition group i is read-overwrite independent from state variable j , iﬀ
+Transition group i is read-copy independent from state variable j , iﬀ ∀ s, s(cid:48),
+j , tj +1,
+
+k.
+
+A transition group is read independent iﬀ it is either read-overwrite or
+
+read-copy independent.
+
+If an event never reads but may write to a variable j it generally does not
+satisfy the above deﬁnition. For example, the operation MayReset = IF cs =
+true THEN wait := 0 END would neither be read-copy nor read-overwrite
+
+6
+
+Bendisposto et al.
+
+independent (for state vectors with cs = false it satisﬁes the deﬁnition of
+the former and for cs = true the latter, but neither for all state vectors).
+LTSmin can also deal with more liberal independence notions, but we have not
+yet implemented this in the present paper.
+
+Deﬁnition 4 (Write independence). Transition group i is write-independent
+from state variable j , if ∀ s, t ∈ S n : (s1, . . . , sj , . . . , sn) →i (t1, . . . , tj , . . . , tn) =⇒(sj =
+tj ), i.e. state variable j is never modiﬁed by transition group i.
+
+We illustrate the above deﬁnitions below.
+
+Deﬁnition 5 (Dependency Matrices). For a PTS P = (S n, G,→m, I n), the
+write matrix is an m × n matrix WM (P) = WM P
+m×n ∈ {0, 1}m×n, such that
+(WMi,j = 0) =⇒ transition group i is write independent from state variable j.
+Furthermore, the read matrix is an m × n matrix RM (P) = RM P
+m×n ∈ {0, 1}m×n,
+such that (RMi,j = 0) =⇒ transition group i is read independent from state
+variable j.
+
+In this paper we will use suﬃcient syntactic conditions to ensure Deﬁnitions 3
+and 4 and obtain the read and write matrix from Deﬁnition 5. Indeed, we compute
+for every operation syntactically which variables are read from and which variables
+are written to.
+
+– If an operation does not write to a variable, its transition group is write
+independent according to Deﬁnition 4 and the corresponding entry in WM is
+0.
+
+– If an operation does not read a variable, its transition group is read inde-
+pendent according to Deﬁnition 3, unless it maybe written to (e.g., because
+the assignment is in the branch of an if-then-else). In this case, we will mark
+the variable as both write and read independent. Also, note that when the
+assignment within an operation is of the form f(X) := E then the operation
+should have a read dependency on the function f (in addition to the write
+dependency).
+
+For our example in Figure 2 the syntactic read-write information is as follows:
+
+
+
+cs wait finished
+1
+Enter
+1
+Exit
+0
+Leave
+CS Active 1
+0
+Restart
+
+0
+1
+0
+0
+1
+(a) Read matrix (RM )
+
+1
+0
+0
+0
+1
+
+
+
+
+
+Enter
+Exit
+Leave
+CS Active
+Restart
+
+cs wait finished
+1
+1
+1
+0
+0
+
+0
+1
+0
+0
+1
+(b) Write matrix (WM )
+
+1
+0
+0
+0
+1
+
+
+
+Fig. 4: Dependency matrices
+
+From the matrices we can infer if a variable is read-copy or read-overwrite
+independent: a variable that is read independent and not written to (i.e., write
+independent) is read-copy independent, otherwise it is read-overwrite independent.
+We can thus infer that:
+
+– the transition group of Enter is read-copy and write independent on finished.
+
+Symbolic Reachability Analysis of the B-Method
+
+7
+
+– Exit is read-copy and write independent on wait.
+– Leave is read-copy and write independent on wait and finished and read-
+
+overwrite independent on cs.
+
+– CS Active is read-copy and write independent on wait and finished and
+
+write independent on cs (but not read-independent on cs).
+
+– Leave is read-copy and write independent on cs.
+
+i
+
+3.1 Exploration Algorithm
+We now present the core of the symbolic reachbility analysis algorithm of LTSmin.
+Algorithm 1 computes the set of reachable states R (represented as a decision
+diagram) and it uses the independence information to minimise the number of
+next state computations that have to be carried out, i.e., re-using the next states
+{t | s →i t} computed for a single state s for many other states s(cid:48) according to
+Deﬁnitions 3 and 4. Algorithm 1 will, while it keeps ﬁnding new states, expand
+the partial transition relation with potential successor states, and apply the
+expanded relation to the set of new states.
+
+i = πRM
+
+and (2) write projection πw
+
+Four key functions that make Algorithm 1 highly performant are the follow-
+ing.5 The (1) read projection πr
+i = πWM
+take as argument a state vector and produce a state vector restricted to the
+read and write dependent variables of group i, respectively. Furthermore these
+function are extended to apply to sets directly, e.g., given the examples in Fig-
+3 ({(FALSE , 0, 0) , (FALSE , 0, 1) ,
+ures 2 and 4, a read projection for Leave is πr
+(FALSE , 1, 0)}) = {(FALSE )}. This is illustrated in Figure 6 and used at Line 2
+in Algorithm 2. The read projection prevents LTSmin from doing two unnecessary
+next state calls to ProB, since Leave is read-copy independent on wait and
+finished.
+The function (3) NextStatei takes a read projected state and projects (with
+i ) all successor states of transition group i. The partial transition relation (cid:44)→p
+πw
+i
+is learned on the ﬂy, and NextStatei is used to expand (cid:44)→p
+i . An example next
+state call for Enter is NextState1((FALSE , 1)) = {(TRUE , 0)}.
+
+i
+
+Lastly, (4) next takes a set of states, a partial transition relation, a row of the
+read and write matrix and outputs a set of successor states. For example, applying
+the partial relation of Enter to the initial state yields next({(FALSE , 1, 0)},
+{((FALSE , 1) , (TRUE , 0))}, (1, 1, 0) , (1, 1, 0)) = {(TRUE , 0, 0)}. Note that in
+this example Enter is read-copy independent on finished and thus next will
+copy its value from the initial state.
+shows that ﬁrst the projection is done for Enter, then (cid:44)→p
+NextStatei call, lastly relation (cid:44)→p
+the ﬁrst successor state.
+
+The usage of these four key functions is also illustrated in Figure 5. The ﬁgure
+is expanded with a
+is applied to the initial state, producing
+
+Figure 6 shows for each operation the transition relation (cid:44)→p
+
+i and the projected
+states on which they are computed. Deﬁnition 3 ensures that the projected state
+
+i
+
+i
+
+5We refrain from giving their formal deﬁnitions; they can be found in [24].
+
+8
+
+Bendisposto et al.
+
+Algorithm 1: ReachBreadthFirst
+
+Input
+Output : The set of reachable states R
+
+, M ∈ N, RM , WM
+
+: I n ⊆ S n
+1 R ← I n; L ← R;
+2 for 1 ≤ i ≤ M do Rp
+
+i ← ∅; (cid:44)→p
+
+i ← ∅ while
+
+L (cid:54)= ∅ do
+
+3
+4
+5
+6
+7 return R
+
+LearnTrans(); N ← ∅;
+for 1 ≤ i ≤ M do
+N ← N ∪ next(L, (cid:44)→p
+L ← N − R; R ← R ∪ N ;
+
+i , RMi , WMi );
+
+Algorithm 2: LearnTrans
+
+i
+
+Description : Extends (cid:44)→p
+
+1 for 1 ≤ i ≤ M do
+i (L);
+2
+3
+i ← (cid:44)→p
+4
+
+Lp ← πr
+for s p ∈ Lp − Rp
+(cid:44)→p
+d p ∈
+NextStatei (s p)};
+i ← Rp
+Rp
+
+i ∪ Lp;
+
+i do
+
+5
+
+6
+
+i ∪ {(s p, d p) |
+
+Fig. 5: Illustrating one iteration of Algorithm 1 for MutexSimple and Enter
+operation
+
+space shown in Figure 6 can be used to compute the eﬀect of each of these
+operations for the entire state space (using next).
+
+3.2 List Decision Diagrams
+The symbolic reachability algorithm in Section 3.1 uses List Decision Diagrams
+(LDDs) to store the reachable states and transition relations. Similar to a Binary
+Decision Diagram, an LDD [6] represents a set of vectors. Due to the sharing
+of state vectors within an LDD, the memory usage can be very low, even for
+very large state spaces. Three example LDDs for the running example are given
+in Figure 7. The LDDs represent the set of reachable states R in Algorithm 1
+at each iteration of Line 2. In an LDD every path from the top left node to
+{} is a state, e.g., the initial state (FALSE , 1, 0) in Figure 7b. A node in an
+LDD represents a unique set of (sub) vectors, e.g., {} represents the set of zero-
+length vectors and the right-most 0 of variable wait in Figure 7d encodes the set
+{(0, 0) , (0, 1) , (1, 0)}. Figure 7c shows that ﬁring Enter will add (TRUE , 0, 0)
+to R. In Figure 7d (FALSE , 0, 0) and (FALSE , 0, 1) are added to R, by ﬁring
+Leave and Exit respectively. The beneﬁt of using LDDs for state storage is
+due to the sharing of state vectors. For example, the subvector (FALSE ) of the
+states {(FALSE , 0, 0) , (FALSE , 0, 1) , (FALSE , 1, 0) , (FALSE , 1, 1)} in iteration
+3 is encoded in the LDD with a single node. For bigger state spaces the sharing
+can be huge; resulting in a low memory footprint for the reachability algorithm.
+
+3.3 Performance: NextState function
+
+There are two big diﬀerences of Algorithm 1 with classical explicit state model
+checking as used by ProB [20]. First, the state space is represented using an
+
+cs = FALSE,wait = 1,ﬁnished = 0cs = FALSE,wait = 1cs = TRUE,wait = 0EnterLiπ   and →ipcs = TRUE,wait = 0,ﬁnished = 0RprojectionnextSymbolic Reachability Analysis of the B-Method
+
+9
+
+Fig. 6: MutexSimple, operations computed on their projected state space
+
+(a) Variables
+
+(b) Iteration 1
+
+(c) Iteration 2
+
+(d) Iteration 3
+
+Fig. 7: LDDs of the reachable states
+
+LDD datastructure, which enables sharing amongst states. Second, independence
+is used to apply the NextState function not state by state, but for entire
+sets of states in one go. For each of the 4 states in Figure 3, the explicit model
+checking algorithm of ProB would check whether each of the 5 operations is
+enabled; resulting in 20 next-state calls. With LTSmin’s symbolic reachability
+Algorithm 1, only 12 NextState calls are made. This is shown in the following
+table, where + means enabled, - means disabled, and C means that LTSmin has
+reused the results of a previous call to ProB.
+
+State#
+
+cs
+
+wait ﬁnished Enter Exit Leave CS Active Restart
+
+1
+2
+3
+4
+
+FALSE 1
+TRUE 0
+FALSE 0
+FALSE 0
+
+0
+0
+0
+1
+
++
+-
+-
+C
+
+C
++
+-
+-
+
+C
++
+C
+C
+
+C
++
+-
+C
+
+-
+-
+C
++
+
+If we initialise wait with MAXINT = 500, the state space has 251,002 states.
+The runtime with ProB is 70 seconds, with LTSmin+ProB 48 seconds and
+LTSmin performs only 6012 NextState calls. The example does not have a lot
+of concurrency and uses only simple data structures (and thus the overhead of
+the LTSmin’s ProB front-end is more of a factor compared to the runtime of
+
+cs = FALSEcs = TRUECS_Activecs = FALSE,wait = 1cs = TRUE,wait = 0Entercs = FALSE,wait = 0cs = FALSE,ﬁnished = 0cs = TRUE, ﬁnished = 0Exitcs = FALSE,ﬁnished = 1wait=1,ﬁnished = 0wait=0, ﬁnished = 0Restartwait=0,ﬁnished = 1read-copy independent on csread-copy independent on waitread-copy independent on ﬁnishedread-copy independent on wait, ﬁnishedcs = FALSELeaveread-copy independent onwait, ﬁnishedand read-overwriteindependent on cscs:BOOLwait:NATURALﬁnished:NATURALFALSE10{ε}TRUEFALSE010{ε}TRUEFALSE001001{ε}10
+
+Bendisposto et al.
+
+ProB for computing successor states); other examples will show greater speedups
+(see Section 5). But the purpose of this example is to illustrate the principles.
+
+4 Technical Aspects and Implementation
+
+We used a distributed approach to integrate ProB and LTSmin. Both tools are
+stand-alone applications, so a direct integration, i.e., turning one of the tools into
+a shared library would require considerable eﬀort. We therefore added extensions
+to both tools that convert the data formats and use sockets to communicate with
+each other. A high level view of the integration is shown in Figure 8. We use the
+ØMQ [13] library for communication. ØMQ is oriented around message queues
+and can be used as both, a networking library with very high throughput and as
+a concurrency framework. We have chosen ØMQ because it worked very well in
+previous work [4]. Although we do not (yet) have to care about concurrency in
+this work, the reactor abstraction provided by ØMQ was very handy in the ProB
+extension. It allows to implement a server that receives and processes messages
+without much eﬀort. The communication is always initiated by LTSmin; it sends
+a message and blocks until it receives the answer from ProB.
+
+We usually run both tools on a single computer using interprocess (IPC)
+sockets, but it is only a matter of conﬁguration to run the tools on diﬀerent
+machines using TCP sockets. We currently only support Linux and Mac OS.
+The communication protocol is straightforward. Reachability analysis is initiated
+from LTSmin by sending an initialisation packet. ProB answers with a message
+containing the relevant static information about a model, such as the dependency
+matrices that LTSmin requires (see Section 3).
+
+Each matrix is
+
+encoded as a 2-dimensional
+array, which is not
+optimal for a sparse
+matrix but
+is not
+an issue because we
+only send the matri-
+ces once. The packet also contains the list of variables, their types, the list of
+transition groups, and the initial state.
+
+Fig. 8: High level design showing the integration
+
+States are represented as a list of so called chunks. A chunk is one of the
+elements in the state vector according to Deﬁnition 2. In the case of B, each
+chunk is a value of one of the state variables. Because LTSmin will not look inside
+the chunks, we simply use the binary representation of ProB’s Prolog term that
+represents the value of a variable. This has the advantage, that ProB does not
+have to keep information about the state space. It can always recover a state
+from the chunks that are sent by LTSmin. The transition groups correspond to
+B operations as explained in Figure 3. Like chunks the transition groups are only
+used as names in LTSmin.
+
+Once the initial setup is done, LTSmin will start to ask ProB for successor
+states for speciﬁc transition groups. It will send a next-state message containing
+
+LTSMINSymbolicBackendProB Link LibraryZero MQIPC SocketPINSLTSMIN ExtensionProBfastread/fastwriteLTSMINProcessProB ProcessSymbolic Reachability Analysis of the B-Method
+
+11
+
+a state and a transition group. The state, that LTSmin sends is a list of chunks
+and ProB’s LTSmin extension can directly consume them and construct a
+Prolog term that internally represents a state. Using this constructed state and
+the transition group, the extension will then ask ProB for all successor states.
+The result is a list of Prolog terms, each representing a successor state. The
+extension transforms the list of states into a list of lists of chunks and sends them
+back to LTSmin. This is repeated until LTSmin has explored all necessary states
+and sends a termination signal.
+
+The next-state messaging is similar to Figure 5, the projection is achieved by
+
+replacing all read independent variables by a dummy value.
+
+5 Experiments
+
+To demonstrate that the combination of ProB and LTSmin improves the
+performance of the reachability analysis and deadlock detection compared with the
+standalone version of ProB, we use a wide range of B and Event-B models. Our
+benchmark suite contains puzzles (e.g., towers of Hanoi) as well as speciﬁcations
+of protocols (e.g., Needham-Schroeder), algorithms (e.g., Simpson’s four slot
+algorithm) and industrial speciﬁcations (e.g., a choreography model by SAP, a
+cruise control system by Volvo and a fault tolerant automatic train protection
+system by Siemens).6
+
+The experiments were run on Ubuntu 15.10 64-bit, with 8 GB RAM, 120 GB
+SSD and an Intel Sandybridge Mobile i5 2520M 2.50 GHz Dual core. The version of
+ProB used in this paper is 1.5.1-beta3, and LTSmin tag LTSminProBiFM20167
+Figure 9 summarises a selection of the experiments that we ran. The last two
+models are Event-B models. In these experiments we used Breadth-First Search
+(BFS) and looked for deadlocks. A deadlock was found only for the Philosophers
+model (this is also why there are no next state call statistics for this model).
+The table also contains the number of next state calls for ProB reachability
+analysis on its own and when called from LTSmin’s symbolic reachability analysis
+algorithm (i.e., our new integration see Section 3.3) without deadlock checking.
+One can clearly see that we obtain a considerable reduction in wallclock time.
+The ProB time is the walltime of the ProB reachability analysis and initial
+state computation and does not include parsing and loading. The LTSmin CPU
+time column shows how much time is spent in the LTSmin side of the symbolic
+reachability analysis algorithm. The LTSmin wall time shows the total walltime,
+and this also contains the time spent in the communication layer and waiting for
+the ProB process to compute the next states. To compare the beneﬁt of our new
+algorithm we compute the speedup of the walltime in the last column by dividing
+the ProB walltime from column 5 with the LTSmin walltime in column 7.
+
+6More detailed descriptions can be found in Appendix A.
+7The software and models can be found online at https://github.com/utwente-
+
+fmt/ProB-LTSmin-iFM16.
+
+12
+
+Bendisposto et al.
+
+We can see that for some of the smaller models the overhead of setting
+up LTSmin does not pay oﬀ. However, for all larger models, except for the
+Train1 Lukas POR model considerable speedups were obtained.
+
+Benchmark
+
+Events States
+
+CAN BUS
+ConcurrentCounters
+Cruise ﬁnite1
+ﬁle system
+MutexSimple
+Philosophers
+SiemensMiniPilot Abrial0
+Simpson Four Slot
+Train1 Lukas POR
+nota
+pkeyprot2
+Ref5 Switch mch
+obsw M001
+
+ProB LTSmin ProB LTSmin LTSmin Speedup
+Nxt St NxtSt Wall
+Calls
+(ms)
+3534 122850
+21820
+2900
+1900
+10
+480
+100
+17310
+33660
+588 287970
+2004
+22190
+1281 160600
+23406 2051320
+
+CPU Wall
+(ms)
+(ms)
+1590
+660
+13820
+2760
+1020
+100
+4660
+180
+10
+190
+590
+40
+260
+20
+860
+200
+6480
+50260
+130
+210
+490
+1620
+
+77.264
+1.579
+2.843
+0.41
+0.053
+0.814
+0.385
+20.128
+0.670
+660 436.318
+1710
+12.977
+1260 127.460
+12420 165.163
+
+443249 113032
+1667
+35361
+1198
+5577
+46
+26
+
+Calls
+21 132600 2784560
+4 110813
+1361
+26
+698
+8
+5
+10
+5
+182
+1621
+9
+181
+419906
+2089
+9 46658
+197082 101441
+8 24637
+887899
+11 80719
+10
+44111
+4412
+38 29861 1134681
+21 589279 12374779
+
+Fig. 9: B and Event-B Machines, with BFS and deadlock detection
+
+A major result we achieved with non default settings for LTSmin, is for
+elevator12.eventb. This model is not listed in Figure 9, because ProB runs out
+of memory on the hardware conﬁguration used for this experiment. LTSmin
+computed in 34 seconds, with 96,523 NextState calls, that the model has
+1,852,655,841 states. As reachability algorithm we chose chaining [30], and to
+compute a better variable order, we ran Sloan’s bandwidth reduction algorithm
+[33] on the dependency matrix.
+
+As far as memory consumption is concerned; when performing reachability
+analysis on CAN BUS, the ProB process consumes 370 MB real memory, while
+the LTSmin process consumes 633 MB, with the default settings. With the
+default settings LTSmin will allocate 222 elements (≈ 100 MB) for the node
+table and 224 elements (≈ 500 MB) for the operations cache. If we choose a
+smaller node table and operations cache for the LDD package (both 218 elements),
+LTSmin consumes only 22 MB. The default settings for LTSmin are geared
+towards larger symbolic state spaces than that of CAN BUS. The default node
+table and cache are too big for CAN BUS, and thus not completely ﬁlled during
+reachability.
+
+We have also run our new symbolic reachability analysis on Z and Tla+
+models. For example, we successfully validated the video rental Z model from [9].
+For 2 persons and 2 titles and maximum stock level of 4, LTSmin generates
+the 23009 states in 1.75 seconds compared to 52.4 seconds with ProB alone.
+The model contained useless constants; after removing them ProB runs in 1.6
+seconds; the runtime of LTSmin stays unchanged. We were unable to use the
+output of z2sal [9] using SAL [26] and its symbolic model checker for comparison.
+In summary, Figure 9 shows that for several non-trivial B and Event-B models,
+considerable improvements can be obtained using the symbolic reachability
+analysis technique described in this paper.
+
+Symbolic Reachability Analysis of the B-Method
+
+13
+
+Alternate Approaches Other techniques for improving model checking for
+B-Method and Event-B models have been developed and evaluated in the recent
+years. We have run a further set of experiments using a selection of those methods;
+the complete results can be found in Appendix B. For technical reasons, the
+experiments were run on diﬀerent hardware than above, a MacBook Air with
+2.2 GHz i7 processor and 8GB of RAM. We summarise the ﬁndings here and
+compare the results with our new symbolic model checking algorithm.
+
+Benchmark
+
+ProB POR
+
+ProB Hash
+
+Tlc
+
+ms Speedup
+
+CAN BUS
+ConcurrentCounters
+ﬁle system
+Simpson Four Slot
+Train1 Lukas POR
+nota
+Ref5 Switch mch
+obsw M001
+
+138720
+50
+2380
+20860
+34030
+490
+215160
+2150520
+
+0.80 98390
+345.8 18400
+210
+0.37
+0.70
+9550
+0.75 28930
+509.22 14780
+0.59 124500
+0.80 76190
+
+ms Speedup sec Speedup
+37
+17
+0.03
+15
+6
+25
+21
+31
+
+3
+1.12
+1.06
+1
+4.24 29
+1
+1.52
+0.88
+4
+16.88 10
+1.01
+6
+22.53 55
+
+ProB no opt.
+ms
+110400
+17290
+890
+14530
+25740
+249520
+126170
+1716770
+
+The authors in [11] presented a translation from the B-Method to Tla+,
+with the goal of using the Tlc model checker [36] as backend. Tlc has no
+constraints solving capabilities, and as such that it can only deal with lower level
+models. On the other hand, its execution can be considerably faster than ProB,
+and its explicit state model checking engine (which stores ﬁngerprints) is very
+eﬃcient. On the downside, there is a small probability that ﬁngerprint collisions
+can occur. The experiments show that Tlc does not deal well with benchmark
+programs which require constraint solving (graph isomorphism, JobsPuzzle, . . . ),
+running up to three orders of magnitude slower than ProB or LTSmin with
+ProB. However, it does deal very well with lower level models, e.g., it is faster
+than LTSmin for ConcurrentCounters. For many benchmark models, even those
+not requiring constraint solving, our symbolic reachability analysis is faster. For
+example, for the nota example, Tlc runs in about 10 seconds—faster than ProB
+without any optimisation—but slower than LTSmin by less than a second.
+
+Symmetry reduction [21] can be very useful; but exponential improvements
+usually occur only on academic examples. Here we have experimented with the
+hash marker symmetry reduction, which is ProB’s fastest symmetry method, but
+is generally not guaranteed to explore all states. The method gives the best results
+for certain models (e.g., ﬁle system). But for several of the larger, industrial
+examples shown above, its beneﬁt is not of the same scale as LTSmin. In future,
+we will investigate combining ProB’s symmetry reduction with the new LTSmin
+algorithm.
+
+We have also experimented with partial order reduction. [10] uses a se-
+mantic preprocessing phase to determine independence (diﬀerent from our purely
+syntactic determination; see Section 3). As such, it can induce a slow down for
+some examples where this does not pay oﬀ (e.g., ﬁle system). ProB’s partial
+order reduction obtains the best times for certain models with a large degree of
+concurrency (ConcurrentCounters, SiemensMiniPilot Abrial, and nota). However,
+once we start doing invariant checking, [10] does not scale nearly as well (e.g., it
+
+14
+
+Bendisposto et al.
+
+takes 134 seconds instead of 0.5 seconds for LTSmin checking the nota model).
+But even without invariant checking, there are plenty examples where the sym-
+bolic reachability analysis approach is better (e.g., Cruise ﬁnite1, Philosophers,
+Simpson Four Slot and almost two orders of magnitude for CAN BUS). In
+summary:
+
+– Tlc is good for models not requiring constraint solving. It is a very eﬃcient,
+explicit state model checker. However, models often have to be rewritten (such
+as CAN BUS), and there is a small chance of having ﬁngerprint collisions.
+– Symmetry reduction excels when models make use of deferred sets. However,
+
+the hash marker method is not guaranteed to explore all states.
+
+– Partial order reduction is very good for models with a large degree of con-
+currency. However, it can cause slow downs and is less suited for invariant
+checking.
+
+– The new symbolic reachability analysis algorithm deals well with concurrency
+and is by far the fastest method for certain larger, industrial models, such as
+CAN BUS, obsw M001, elevator12, the ABZ landing gear model or Abrial’s
+mechanical press. LTSmin is currently the only tool set that uses a symbolic
+representation of the state space that is connected to ProB.
+
+6 More Related Work, Future Work and Conclusion
+
+We have already evaluated the use of Tlc [36] for model checking B. Another
+explicit state model checker for B has been presented in [22], which uses lazy
+enumeration. Symbolic model checking [7] has been used for railway applications
+in [35]. The best known symbolic model checker is probably SMV [23], which uses
+a low-level input language. Some comparisons between using SMV and ProB
+have been conducted in [14], where models were translated by hand. For abstract
+state machines there is the AsmetaSMV [3] tool, which automatically translates
+ASM speciﬁcations to SMV. It is our impression that the translation often leads
+to a considerable blowup of the model, encoded in SMV’s low-level language, also
+aﬀecting performance. We did one experiment on a Tic-Tac-Toe model provided
+for AsmetaSMV: NuSMV 2.6 took over 13 seconds to ﬁnd a conﬁguration where
+the cross player wins; ProB (without LTSmin) took 0.2 seconds model checking
+time for the same property on a similar B model. Another experiment involved
+puzzle 3 of the RushHour game: ProB solves this in 5 seconds, while NuSMV
+still had not found a solution after 120 minutes.
+
+Other symbolic model checkers that perform comparable well to LTSmin
+
+include Marcie [12] and PetriDotNet [25].
+
+The paper provides a stable architectural link between ProB and LTSmin
+that can be extended. First, we plan to provide LTSmin with more ﬁne-grained
+information about the models, both statically and dynamically. Dynamically,
+ProB will transmit to LTSmin which variables have actually been written by an
+operation, enabling a more extensive independence notion to be used. Statically,
+ProB will transmit the individual guards of operations and provide variable read
+matrices for the guards. We will also transmit the individual invariants in the
+
+Symbolic Reachability Analysis of the B-Method
+
+15
+
+same manner, to enable analysis of the invariants. (It is actually already possible
+to check invariants using the present integration, simply by encoding invariants
+as operations. We have done so with success for some of the examples, e.g., the
+nota from Section 5.) When ProB transmits individual guards, we also hope to
+use the guard-based partial order optimisations of LTSmin [17] and enable LTL
+model checking with LTSmin.
+
+These future directions will strengthen the capability of the veriﬁcation tools
+and hence further encourage the application of formal methods within industry
+as identiﬁed in [5], for example to support complex railway systems veriﬁcation in
+CSP(cid:107)B. This will require both more ﬁne-grained static and dynamic information.
+In summary, we have presented a new scalable, symbolic analysis algorithm
+for the B-Method and Event-B, along with a platform to integrate other model
+checking improvements via LTSmin in the future.
+
+References
+
+1. Abrial, J.R.: Modeling in Event-B: System and Software Engineering. Cambridge
+
+2. Abrial, J.: The B-book - assigning programs to meanings. Cambridge University
+
+University Press (2010)
+
+Press (2005)
+
+3. Arcaini, P., Gargantini, A., Riccobene, E.: Asmetasmv: A way to link high-level
+ASM models to low-level nusmv speciﬁcations. In: Proceedings ABZ’10. pp. 61–74
+(2010)
+
+4. Bendisposto, J.: Directed and Distributed Model Checking of B Speciﬁcations.
+Ph.D. thesis, University of Düsseldorf (2015), http://docserv.uni-duesseldorf.
+de/servlets/DocumentServlet?id=34472
+
+5. Bicarregui, J., Fitzgerald, J.S., Larsen, P.G., Woodcock, J.C.P.: Industrial practice
+in formal methods: A review. In: FM 2009: Formal Methods, Second World Congress,
+Eindhoven, The Netherlands, November 2-6, 2009. Proceedings. pp. 810–813 (2009)
+6. Blom, S., van de Pol, J.: Symbolic Reachability for Process Algebras with Recursive
+Data Types. In: Theoretical Aspects of Computing - ICTAC 2008, 5th International
+Colloquium, Istanbul, Turkey, September 1-3, 2008. Proceedings. pp. 81–95 (2008)
+7. Burch, J.R., Clarke, E.M., McMillan, K.L., Dill, D.L., Hwang, L.J.: Symbolic model
+checking: 1020 states and beyond. Information and Computation 98(2), 142–170
+(1992)
+
+8. Ciardo, G., Marmorstein, R.M., Siminiceanu, R.: The saturation algorithm for
+
+symbolic state-space exploration. STTT 8(1), 4–25 (2006)
+
+9. Derrick, J., North, S., Simons, A.J.H.: Z2SAL - building a model checker for Z. In:
+Börger, E., Butler, M., Bowen, J.P., Boca, P. (eds.) Proceedings ABZ 2008. pp.
+280–293. LNCS 5238 (2008)
+
+10. Dobrikov, I., Leuschel, M.: Optimising the ProB model checker for B using partial
+
+order reduction. In: SEFM 2014. pp. 220–234. LNCS 8702, Grenoble (2014)
+
+11. Hansen, D., Leuschel, M.: Translating B to TLA + for validation with TLC. In:
+
+Proceedings ABZ’14. pp. 40–55. LNCS 8477 (2014)
+
+12. Heiner, M., Rohr, C., Schwarick, M.: MARCIE - Model checking And Reachability
+analysis done eﬃCIEntly. In: Colom, J., Desel, J. (eds.) Proc. PETRI NETS 2013.
+LNCS, vol. 7927, pp. 389–399 (June 2013)
+
+13. Hintjens, P.: ZeroMQ: Messaging for Many Applications. O’Reilly Media, Inc. (2013)
+
+16
+
+Bendisposto et al.
+
+14. Hörne, T., van der Poll, J.A.: Planning as model checking: the performance of ProB
+vs NuSMV. In: Botha, R., Cilliers, C. (eds.) SAICSIT Conf. ACM International
+Conference Proceeding Series, vol. 338, pp. 114–123. ACM (2008)
+15. James, P., Moller, F., Nguyen, H.N., Roggenbach, M., Schneider, S., Treharne, H.,
+Trumble, M., Williams, D.M.: Veriﬁcation of scheme plans using CSP | | B. In:
+SEFM 2013 Collocated Workshops. pp. 189–204 (2013)
+
+16. Kant, G., Laarman, A., Meijer, J., van de Pol, J., Blom, S., van Dijk, T.: LTSmin:
+High-performance language-independent model checking. In: TACAS 2015, London,
+UK, April 11-18, 2015. Proceedings. pp. 692–707 (2015)
+
+17. Laarman, A., Pater, E., van de Pol, J.C., Hansen, H.: Guard-based partial-order
+
+reduction. STTT (2014)
+
+18. Ladenberger, L., Hansen, D., Wiegard, H., Bendisposto, J., Leuschel, M.: Validation
+of the ABZ landing gear system using prob. International Journal on Software
+Tools for Technology Transfer pp. 1–17 (2015)
+
+19. Legeard, B., Peureux, F., Utting, M.: Automated boundary testing from Z and B.
+In: Eriksson, L.H., Lindsay, P. (eds.) Proceedings FME’02. pp. 21–40. LNCS 2391,
+Springer-Verlag (2002)
+
+20. Leuschel, M., Butler, M.J.: ProB: an automated analysis toolset for the B method.
+
+STTT 10(2), 185–203 (2008)
+
+21. Leuschel, M., Massart, T.: Eﬃcient approximate veriﬁcation of B via symmetry
+
+markers. Annals of Mathematics and Artiﬁcial Intelligence 59(1), 81–106 (2010)
+
+22. Matos, P.J., Fischer, B., Silva, J.P.M.: A lazy unbounded model checker for event-b.
+
+In: Breitman, K., Cavalcanti, A. (eds.) ICFEM. pp. 485–503. LNCS 5885 (2009)
+
+23. McMillan, K.L.: Symbolic Model Checking. Ph.D. thesis, Boston (1993)
+24. Meijer, J., Kant, G., Blom, S., van de Pol, J.: Read, Write and Copy Dependencies
+for Symbolic Model Checking. In: HVC 2014, Haifa, Israel, November 18-20, 2014.
+Proceedings. pp. 204–219 (2014)
+
+25. Molnár, V., Darvas, D., Vörös, A., Bartha, T.: Saturation-Based Incremental LTL
+Model Checking with Inductive Proofs. In: TACAS Proceedings. pp. 643–657 (2015)
+26. de Moura, L., Owre, S., Shankar, N.: The SAL language manual. Tech. rep., SRI
+
+International (2003), technical Report SRI-CSL-01-02 (Rev.2)
+
+27. Needham, R., Schroeder, M.: Using encryption for authentication in large networks
+
+of computers 21(12), 993–999 (Dezember 1978)
+
+28. Oliver, I.: Experiences in using B and UML in industrial development. In: Julliand,
+J., Kouchnarenko, O. (eds.) B’2007. pp. 248–251. LNCS 4355, Springer-Verlag
+(2007)
+
+29. Plagge, D., Leuschel, M.: Seven at a stroke: LTL model checking for high-level
+
+speciﬁcations in B, Z, CSP, and more. STTT 11, 9–21 (2010)
+
+30. Roig, O., Cortadella, J., Pastor, E.: Veriﬁcation of Asynchronous Circuits by BDD-
+based Model Checking of Petri Nets. In: Proceedings Application and Theory of
+Petri Nets. pp. 374–391 (1995)
+
+31. Scheuermann, B., Lochert, C., Mauve, M.:
+
+Implicit hop-by-hop conges-
+in wireless multihop networks. Ad Hoc Networks (2007), doi:
+
+tion control
+10.1016/j.adhoc.2007.01.001
+
+32. Schneider, S., Treharne, H.: CSP theorems for communicating B machines. Formal
+Asp. Comput. 17(4), 390–422 (2005), http://dx.doi.org/10.1007/s00165-005-
+0076-7
+
+33. Sloan, S.W.: A FORTRAN program for proﬁle and wavefront reduction. Interna-
+
+tional Journal for Numerical Methods in Engineering 28(11), 2651–2679 (1989)
+
+34. Whiteﬁeld, J.: Linking ProB and LTSmin (2015), Final Year Dissertation, Univer-
+
+sity of Surrey
+
+Symbolic Reachability Analysis of the B-Method
+
+17
+
+35. Winter, K.: Optimising ordering strategies for symbolic model checking of railway
+interlockings. In: Margaria, T., Steﬀen, B. (eds.) ISoLA (2). LNCS, vol. 7610, pp.
+246–260. Springer (2012)
+
+36. Yu, Y., Manolios, P., Lamport, L.: Model checking TLA+ speciﬁcations. In: Pierre,
+
+L., Kropf, T. (eds.) Proceedings CHARME’99. pp. 54–66. LNCS 1703 (1999)
+
+A Models for experiments (for referees)
+
+These model descriptions will be uploaded to a website, also containing the
+publicly available models.
+
+The classical B models shown in the tables in Section 5 are:
+
+– CAN BUS
+
+– ConcurrentCounters
+
+– Cruise ﬁnite1
+
+A model of a controller area network (CAN) bus developed by Colley.
+
+This is a very simple model with three concurrent counters that can be incremented
+independently.
+
+Volvo Vehicle Function. The B speciﬁcation machine has 15 variables, 550 lines
+of B speciﬁcation, and 26 operations. The invariant consists of 40 conjuncts. This
+B speciﬁcation was developed by Volvo as part of the European Commission IST
+Project PUSSEE (IST-2000-30103).
+
+– ﬁle system is a simple model of a ﬁle system with users, groups and access control.
+– MutexSimple
+
+This is the model shown in Fig. 2 of the paper.
+
+– Philospohers
+
+This is a B model of the well-known dining philosphers problem.
+
+– SiemensMiniPilot Abrial0
+
+This Siemens Mini Pilot was developed within the Deploy Project. It is a speciﬁcation
+of a fault-tolerant automatic train protection system that ensures that only one
+train is allowed on a part of a track at a time. The model contains a single reﬁnement
+level and rather complex invariants. The model was translated to classical B from
+Event-B.
+
+– Simpson Four Slot
+
+A model of Simpson’s four slot algorithm. This B model only represents the
+individual steps of the algorithm. It is intended to be used in conjunction with a
+CSP model to describe the sequencing of the steps. Here, the B model on its own
+is model checked (thus leading to invariant violations).
+
+– Train1 Lukas POR
+
+This is the ﬁrst level of reﬁnement of the railway interlocking model in Chapter 17
+of [1]. It uses a simpliﬁed topology and routes are released immediately when all
+blocks are free (to reduce the state space).
+
+– nota
+
+A model developed by Nokia within the RODIN Project8 for the validation and
+veriﬁcation of Nokia’s NoTA hardware platform; see [28].
+
+– pkeyprot2 (Needham-Schroeder)
+
+The Needham-Schroeder public key protocol is an authentication protocol for
+
+8http://rodin.cs.ncl.ac.uk/
+
+18
+
+Bendisposto et al.
+
+creating a secure connection over a public network [27]. The model consists of a
+network with the two normal users called Alice and Bob, an attacker named Eve
+and the keyserver. The ﬁrst version of this protocol, developed in 1978, contains an
+error which was found in 1995 by Lowe. This model is a slightly simpliﬁed version
+(reducing the messages sent by Eve).
+
+The Event-B models shown in the tables in Section 5 are:
+
+– Ref5 Switch mch This is the ﬁfth level of reﬁnement of a solution [18] to the
+
+ABZ’14 landing gear challenge.
+
+– obsw1 M001
+
+The Space Systems Finland example is a model of a subsystem used for the ESA
+BepiColombo mission. The model is a speciﬁcation of parts of the BepiColombo
+On-Board software, that contains a core software and two subsystems used for
+telecommand and telemetry of the scientiﬁc experiments, the Solar Intensity X-ray
+and particle Spectrometer (SIXS) and the Mercury Imaging X-ray Spectrometer
+(MIXS). The model was a mini pilot of the Deploy project.
+
+– elevator12
+
+This is the twelfth reﬁnement of an elevator model by ETH Zürich.
+
+Here are additional experiments that were run, but whose results are not
+
+shown in the main paper (due to page limit restrictions).
+
+– BlocksWorldGeneric6
+
+A model of blocksworld, with six blocks; the goal being to put all blocks in the
+right-order on top of each other.
+
+The Echo algorithm is designed to ﬁnd the shortest paths in a network topology.
+
+– Echo
+
+– Hanoi6
+
+The well-known towers of Hanoi puzzle with 6 discs.
+
+– scheduler bztt
+
+The process scheduler from [19].
+
+– RushHour
+
+The Rush Hour puzzle.9 This is the hardest puzzle (number 40 in the regular version
+of the game). The shortest solution needs 83 moves; here we have explored the full
+state space of 4782 states and 29890 transitions.
+
+– Cansell Contention
+
+– CXCC0
+
+A Firewire-Leader election protocol by Dominique Cansell.
+
+CXCC (Cooperative Crosslayer Congestion Control) [31] is a cross-layer approach
+to prevent congestion in wireless networks. The invariants used in the model are
+rather complex.
+– press 7b mch
+
+This is the seventh level of reﬁnement of Abrial’s model of a mechanical press.
+
+9See http://en.wikipedia.org/wiki/Rush Hour (board game).
+
+Symbolic Reachability Analysis of the B-Method
+
+19
+
+B More Experiments: Partial order reduction, Symmetry
+
+and TLC (for referees)
+
+We have run a further set of experiments using a selection of alternate methods
+for improving model checking for B and Event-B models. These experiments were
+run on a MacBook Air with 2.2 GHz i7 processor. For the ﬁnal version of the
+paper, these experiments will be re-run on the same hardware as in Sect. 5, for
+all relevant ProB and LTSmin settings. The experiments, models and setup will
+be put onto a website for open access.
+
+– [11] presented a translation from classical B to TLA+, with the goal of
+using the Tlc . We used this to run Tlc with one worker, no invariant,
+no deadlock and no assertion and no LTL checking. The table in Sect. 5
+of the paper contains just the Tlc model checking time (as measured by
+Tlc to a one second accuracy). However, the table below includes the full
+runtime; including JVM startup and parsing. The factor removes 1 second
+from runtime; in the ﬁnal version of the paper we will obtain more precise
+model checking times for Tlc. It can also not be directly applied to Event-B
+or Z models (requiring a translation to classical B ﬁrst); hence the numbers
+for the Event-B models are missing.
+
+– Hash marker symmetry reduction [21]. It is the fastest symmetry method,
+but is generally not guaranteed to explore all states The time is the walltime
+of the model checking and initial state computation and does not include
+parsing and loading.
+
+– partial order reduction method of [10]. It uses a semantic preprocessing phase
+to determine independence. The time is the walltime of the model checking
+and initial state computation and does not include parsing and loading.
+
+An analysis of these results can be found in Section 5. First, we present the
+models also shown in Figure 9 in Section 5:
+Hash
+
+Benchmark
+
+POR
+
+TLC
+
+ms Factor
+
+No opt.
+ms
+0.04 110400
+0.89 5340
+0.07
+17290
+1.06 2130
+2630
+0.89 2950
+0.74
+20
+1.50 1660 33.00
+80
+8.63
+1.25 1690
+100
+4.40
+1.00 1440
+0.66 2670
+0.11
+14530
+0.22
+1.12 6650
+25740
+0.04 249520
+0.06 11780
+18770
+0.96 1190
+0.01
+126170
+-
+0.99
+0.04
+-
+1716770
+
+ms Factor
+
+ms Factor
+
+CAN BUS
+ConcurrentCounters
+Cruise ﬁnite1
+MutexSimple
+Philosophers
+SiemensMiniPilot Abrial 0
+Simpson Four Slot
+Train1 Lukas POR
+nota
+pkeyprot2
+Ref5 Switch mch
+obsw M001
+
+138720
+50
+5060
+30
+
+1.26 98390
+0.00 18400
+2330
+1.92
+30
+1.50
+100
+4180 52.25
+100
+0.70
+1.44
+9550
+1.32 28930
+0.00 14780
+1.29 17990
+1.71 124500
+1.25 76190
+
+70
+20860
+34030
+490
+24140
+215160
+2150520
+
+These are some additional experiments that we performed; Tlc could not run
+on the RushHour model due to a bug in Tlc.
+
+20
+
+Bendisposto et al.
+
+Benchmark
+
+POR
+
+Hash
+
+TLC
+
+BlocksWorldGeneric6
+CAN BUS normalized
+CSM
+EchoAlg
+GardnerSwitchingPuzzle v2
+GraphIsoMedium
+Hanoi6
+JobsPuzzle
+NQueens
+PhilRing
+Reading
+brueckenproblem
+fahrzeugverwaltung2
+ﬁle system
+scheduler bztt
+RushHour v2 TLC
+cont0
+Model 4 NoDeadlock v6
+VM 4 mch
+cxcc0
+press 7b mch
+scheduler
+
+ms Factor
+ms Factor
+0.94
+950
+1.43 77090
+50
+1.37
+280
+3.57
+1.78
+780
+110
+0.83
+440
+0.98
+80
+1.11
+30
+1.00
+1.95
+120
+40
+1.00
+300
+1.89
+90
+1.18
+210
+2.67
+3.25
+60
+1.25 16520
+320
+0.65
+590
+0.50
+860
+1.62
+5.86
+70
+1.23 2500
+1.25
+30
+
+ms Factor
+0.39
+0.30 2240
+0.05
+1.05 4590
+1.55
+0.10 1790
+6.18
+1.00 2730
+4.50
+1.00 4510
+1.83 40360 656.00
+0.98 1540
+1.20
+0.89 32410 349.00
+0.75 20550 488.75
+0.16 1820
+1.06
+3.92
+0.33 1470
+4.11
+1.07 2150
+0.04 2840
+0.75
+0.24 28600 31.01
+0.75 1340
+4.25
+-
+1.11
+err
+0.63 1290
+0.57
+-
+0.35
+-
+1.32
+1.00
+-
+-
+0.31
+0.75
+-
+
+2980
+105460
+700
+1000
+1390
+50
+440
+100
+40
+1500
+120
+530
+2880
+2380
+260
+18670
+330
+850
+1050
+410
+9960
+50
+
+No opt.
+ms
+3160
+73530
+510
+280
+780
+60
+450
+90
+40
+770
+120
+280
+2440
+890
+80
+14920
+510
+1710
+650
+70
+8090
+40
+
+

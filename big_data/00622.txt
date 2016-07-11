@@ -1,0 +1,1651 @@
+PLATO: Policy Learning using Adaptive Trajectory Optimization
+
+Gregory Kahn
+Tianhao Zhang
+Sergey Levine
+Pieter Abbeel
+University of California, Berkeley, Department of Electrical Engineering and Computer Sciences
+
+GKAHN@BERKELEY.EDU
+TIANHAO.Z@BERKELEY.EDU
+SVLEVINE@EECS.BERKELEY.EDU
+PABBEEL@CS.BERKELEY.EDU
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+2
+
+ 
+
+ 
+ 
+]
+
+G
+L
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+2
+2
+6
+0
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Abstract
+
+Policy search can in principle acquire complex
+strategies for control of robots, self-driving vehi-
+cles, and other autonomous systems. When the
+policy is trained to process raw sensory inputs,
+such as images and depth maps, it can acquire
+a strategy that combines perception and con-
+trol. However, effectively processing such com-
+plex inputs requires an expressive policy class,
+such as a large neural network. These high-
+dimensional policies are difﬁcult to train, espe-
+cially when training must be done for safety-
+critical systems. We propose PLATO, an algo-
+rithm that trains complex control policies with
+supervised learning, using model-predictive con-
+trol (MPC) to generate the supervision. PLATO
+uses an adaptive training method to modify the
+behavior of MPC to gradually match the learned
+policy, in order to generate training samples at
+states that are likely to be visited by the policy
+while avoiding highly undesirable on-policy ac-
+tions. We prove that this type of adaptive MPC
+expert produces supervision that leads to good
+long-horizon performance of the resulting pol-
+icy, and empirically demonstrate that MPC can
+still avoid dangerous on-policy actions in unex-
+pected situations during training. Compared to
+prior methods, our empirical results demonstrate
+that PLATO learns faster and often converges to
+a better solution on a set of challenging simulated
+experiments involving autonomous aerial vehi-
+cles.
+
+1. Introduction
+Policy search via optimization or reinforcement learning
+(RL) holds the promise of automating a wide range of de-
+cision making and control tasks, in domains ranging from
+robotics to self-driving vehicles and other autonomous sys-
+tems. One particularly appealing prospect is to use pol-
+
+icy search techniques to automatically acquire policies
+that subsume explicit perception and control engineering,
+thereby acquiring end-to-end perception-control systems
+that are adapted to the task.
+However, representing policies that combine perception
+and control requires either a careful choice of features or
+the use of rich and expressive function approximators. Re-
+cent results in perception domains, such as computer vi-
+sion, natural language processing, and speech recognition,
+suggest that large, expressive function approximators, such
+as neural networks, can outperform hand-designed features
+when trained directly on raw input data (Krizhevsky et al.,
+2012; Dahl et al., 2012; Sutskever et al., 2014) while re-
+quiring substantially less manual engineering. This makes
+large neural network models an appealing choice for repre-
+senting policies that combine perception and control.
+Unfortunately, training such large, high-dimensional poli-
+cies on real physical systems is exceedingly challenging
+for two reasons. First, standard model-free reinforcement
+learning algorithms are difﬁcult to apply to large non-linear
+function approximators (Deisenroth et al., 2011). Sev-
+eral recent methods demonstrate RL-based training of large
+neural networks (Mnih et al., 2013; Schulman et al., 2015),
+but these approaches require a very large amount of ex-
+perience, making them difﬁcult to run on physical systems.
+The second obstacle to using RL in the real world is that, al-
+though a fully trained neural network controller can be very
+robust and reliable, a partially trained policy can perform
+unreasonable and even unsafe actions. This can be a major
+problem when the agent is a mobile robot or autonomous
+vehicle and unsafe actions can cause the destruction of the
+robot or damage to its surroundings.
+In this work, we propose PLATO (Policy Learning us-
+ing Adaptive Trajectory Optimization), a method for train-
+ing complex policies that combine perception and control
+by using a trajectory optimization teacher in the form of
+model-predictive control (MPC). At training time, MPC
+chooses actions that make a tradeoff between succeeding
+at the task and matching the behavior of the current policy.
+
+PLATO: Policy Learning using Adaptive Trajectory Optimization
+
+By gradually adapting to the policy, MPC ensures that the
+states visited during training will allow the policy to learn
+good long-horizon performance. MPC makes use of full
+state information, which could be obtained, for example,
+by instrumenting the environment at training time. The ﬁ-
+nal policy, however, is trained to mimic the MPC actions
+using only the observations available to the robot, which
+makes it possible to run the resulting policy at test time
+without any instrumentation. The algorithm requires ac-
+cess to at least a rough model of the system dynamics in
+order to run MPC during training, but does not require any
+knowledge of the observation model, making it feasible to
+use with complex, raw observation signals, such as images
+and depth scans. Since MPC is used to select all actions at
+training time, the algorithm never requires running a par-
+tially trained and potentially unsafe policy. Our empirical
+results demonstrate that PLATO can learn complex policies
+for simulated quadrotor ﬂight with laser rangeﬁnder obser-
+vations and camera observations in cluttered environments
+and at high speeds. We also show that PLATO outperforms
+a number of previous approaches, including the DAgger
+algorithm (Ross & Bagnell, 2011), DAgger with coaching
+algorithm (He et al., 2012) and supervised learning.
+
+2. Related Work
+Deep neural networks have emerged as powerful general-
+purpose models for processing complex sensory data in
+computer vision (Krizhevsky et al., 2012), natural language
+processing (Sutskever et al., 2014), and speech recogni-
+tion (Dahl et al., 2012). Motivated in part by these suc-
+cesses, recent years have seen an increasing amount of re-
+search on using deep neural networks to represent control
+policies for control tasks, including playing Atari games
+(Mnih et al., 2013), locomotion (Schulman et al., 2015),
+robotic manipulation from camera images (Levine et al.,
+2015), and various other continuous control tasks (Lilli-
+crap et al., 2015; Heess et al., 2015). Broadly speaking,
+these methods fall into two categories: methods based on
+reinforcement learning (RL), including Q-learning (Mnih
+et al., 2013) and policy search (Schulman et al., 2015; Lill-
+icrap et al., 2015), and methods based on supervised learn-
+ing, including DAgger (Ross & Bagnell, 2011) and guided
+policy search (Levine & Koltun, 2013a).
+RL-based methods are typically more general, but require a
+very large amount of system experience, which limits their
+applicability to real physical systems (Deisenroth et al.,
+2011). Furthermore, the need to explore using partially
+learned policies, or worse, using random actions, causes
+these methods to exhibit potentially dangerous and unstable
+behavior during training. These limitations make it difﬁcult
+to deploy RL-based algorithms directly on safety-critical
+systems such as aerial and ground vehicles.
+
+Methods based on supervised learning are dramatically
+more sample-efﬁcient, but require a viable source of su-
+pervision. In the case of guided policy search, this super-
+vision comes from a simpler RL algorithm that does not
+directly optimize a neural network policy, but a much sim-
+pler trajectory-centric controller (Levine & Abbeel, 2014).
+This approach assumes that the task can be decomposed
+into a set of simpler subtasks, each of which can be solved
+with a much simpler controller. This approach also typi-
+cally requires the ability to deterministically reset the envi-
+ronment, which is not always feasible when learning in the
+real world. In the case of DAgger, supervision can come
+from a human expert (Ross & Hebert, 2013) or a computa-
+tional expert, such as Monte Carlo tree search (Guo et al.,
+2014). However, this expert does not adapt to the learned
+neural network policy, and successful application of DAg-
+ger assumes that the learned policy can mimic the expert up
+to a small bounded error (Ross & Bagnell, 2011). This as-
+sumption is not always realistic (Levine & Koltun, 2013b).
+Furthermore, DAgger requires executing the learned pol-
+icy at training time to acquire samples from its own state
+distribution. When learning is performed online in non-
+stationary environments, this can expose the agent to dan-
+gerous situations for which the learned policy has not yet
+been fully trained.
+In this paper, we propose PLATO, an algorithm that trains
+neural network control policies with supervised learning,
+using model-predictive control (MPC) to generate the su-
+pervision. In contrast to DAgger, PLATO adapts the com-
+putational “expert” (the MPC algorithm) to the learned pol-
+icy, but does not actually execute the learned policy in the
+real world until training is completed. We show that this
+still enforces a bound on the difference between the state
+distribution of the learned policy and that of the MPC ex-
+pert, but has the beneﬁt of not exposing the agent to dan-
+gerous situations since MPC can still avoid dangerous on-
+policy actions in unexpected situations. Furthermore, our
+empirical results demonstrate that PLATO learns substan-
+tially faster and often converges to a better solution on
+a set of challenging simulated experiments involving au-
+tonomous aerial vehicles, compared to supervised learning,
+DAgger (Ross & Bagnell, 2011) and DAgger with coach-
+ing (He et al., 2012).
+Furthermore, we demonstrate that PLATO can be used to
+train a policy that uses raw perceptual input, while the MPC
+teacher uses the true state, which allows us to train the pol-
+icy without access to a model of the sensors, similarly to
+recent work on guided policy search (Levine et al., 2015;
+Zhang et al., 2016). This allows PLATO to train policies
+that combine perception and control in an instrumented en-
+vironment with access to the full state, but then run the
+resulting policy in a partially observed setting using only
+the robot’s onboard sensors. In this respect, the require-
+
+PLATO: Policy Learning using Adaptive Trajectory Optimization
+
+ments and limitations of PLATO are similar to a recent ex-
+tension of guided policy search to use MPC supervision
+(Zhang et al., 2016). However, PLATO lifts a major limita-
+tion of this approach, which is the requirement to reset the
+environment between episodes – in fact, PLATO does not
+even assume an episodic formulation of the task; a practi-
+cal training scenario might consist, for example, of a robot
+continuously and autonomously exploring its environment
+with MPC for the duration of the training period. Since re-
+setting the environment for episodic tasks can be complex
+and time-consuming when training on physical hardware,
+not requiring such resets is a major advantage.
+
+(cid:2)(cid:80)T
+t(cid:48)=t c(xt(cid:48), ut(cid:48))|xt
+
+(cid:2)(cid:80)T
+t=1 c(xt, ut)(cid:3). We will use
+(cid:3) as shorthand for the
+(cid:2)J1(π|x1)(cid:3), where p(x1) is
+
+3. Preliminaries and Overview
+We address the problem of learning control policies for dy-
+namical systems, such as robots and autonomous vehicles.
+The system is deﬁned by states x and actions u. The pol-
+icy must control the system using observations o, which
+are in general insufﬁcient for determining the full state x.
+The policy is a conditional probability distribution over ac-
+tions πθ(u|ot), parameterized by θ. At test time, the agent
+chooses actions according to πθ(u|ot) at each time step
+t, and experiences a loss c(xt, ut). We assume without
+loss of generality that c(xt, ut) is restricted to the inter-
+val [0, 1]. The agent is then taken to the next state ac-
+cording to the system dynamics p(xt+1|xt, ut). The goal
+is to learn a policy πθ(u|ot) that minimizes the total ex-
+pected cost J(π) = Eπ
+Jt(π|xt) = Eπ
+total expected cost when starting from state xt at time step
+t, such that J(π) = Ex1∼p(x1)
+the initial state distribution.
+In this work, we further assume that during training, our
+algorithm has access to the true underlying states x. This
+additional assumption allows us to use simple and efﬁcient
+model-predictive control (MPC) methods to generate train-
+ing actions. We do not require knowing the true states x
+at test time since the learned policy πθ(u|ot) only requires
+observations. This type of training setup could be imple-
+mented in various ways in practice, including instrument-
+ing the training environment (e.g. using motion capture
+to track a mobile robot) or using more effective hardware
+at training time (such as a more accurate GPS system),
+while substituting cheaper and more practical hardware at
+test time. While this additional assumption does introduce
+some restrictions, we will show that it enables very efﬁcient
+and relatively safe training, making it an appealing option
+for safety-critical systems.
+We will train the policy πθ(u|ot) by mimicking a computa-
+tional “teacher,” rather than attempting to learn the policy
+directly with reinforcement learning. There are three key
+advantages to this approach: ﬁrst, the teacher can exploit
+
+the true state x, while the ﬁnal policy πθ is only trained
+on the observations o; second, we can choose a teacher
+that will remain safe and stable, avoiding dangerous actions
+during training; third, we can train the ﬁnal policy πθ us-
+ing standard, robust supervised learning algorithms, which
+will allow us to construct a simple and highly data-efﬁcient
+algorithm that scales easily to complex, high-dimensional
+policy parameterizations. Speciﬁcally, we will use MPC
+as the teacher. MPC uses the true state x and a model of
+the system dynamics (which we assume to be known in
+advance, but which in general could also be learned from
+experience). MPC plans locally optimal trajectories with
+respect to the dynamics, and by replanning every time step,
+is able to achieve considerable robustness to unexpected
+perturbations and model errors (Mayne et al., 2005), mak-
+ing it an excellent choice for sample-efﬁcient learning.
+
+4. Policy Learning using Adaptive Trajectory
+
+Optimization
+
+One na¨ıve approach to learn a policy from a computa-
+tional teacher such as MPC would be to generate a train-
+ing dataset from MPC, and then train the policy with su-
+pervised learning to maximize the log-likelihood of this
+dataset.
+In this approach, the teacher can safely choose
+robust, near-optimal trajectories. However, this type of su-
+pervision ignores the fact that the state distribution for the
+teacher and that of the learner are different. Formally, the
+distribution of states at test time will not match the distribu-
+tion at training time, and we therefore cannot expect good
+long-horizon performance from the learned policy.
+In order to overcome this challenge, PLATO uses an adap-
+tive MPC teacher that modiﬁes its actions in order to bring
+the state distribution in the training data closer to that of
+the learned policy, while still producing robust trajectories
+and reacting intelligently to unexpected perturbations that
+cannot be handled by a partially trained policy. To that end,
+the teacher generates actions at each time step t from a con-
+troller obtained by optimizing the following objective:
+
+λ(u|xt, θ) ← arg minπ Jt(π|xt) + λDKL
+πt
+
+(cid:0)π(u|xt)||πθ(u|ot)(cid:1)
+
+(1)
+
+where λ determines the relative importance of matching
+the learner πθ versus optimizing the expected return J(·).
+Since the teacher consists of an MPC algorithm, this ob-
+jective is reoptimized at each time step to obtain a lo-
+cally optimal controller for the current state. The only
+difference from a standard MPC algorithm is the inclu-
+sion of the KL-divergence term. The particular MPC algo-
+rithm we use is based on iterative LQG (iLQG) (Todorov
+& Li, 2005), using a maximum entropy variant that pro-
+duces linear-Gaussian stochastic controllers of the form
+πλ(u|xt) = N (Ktxt + kt, Σt) (Levine & Koltun, 2013a).
+The details of this maximum entropy variant of iLQG may
+
+PLATO: Policy Learning using Adaptive Trajectory Optimization
+
+Algorithm 1 PLATO algorithm
+1: Initialize data D ← ∅
+2: for i = 1 to N do
+3:
+4:
+5:
+6:
+7:
+8:
+9:
+10:
+11:
+12: end for
+
+Append(cid:0)ot, u∗
+
+end for
+Train πθi+1 on D
+
+for t = 1 to T do
+λ with respect to Equation (1)
+Optimize πt
+Sample ut ∼ πt
+Optimize π∗ with respect to Equation (2)
+Sample u∗
+State evolves xt+1 ∼ p(xt+1|xt, ut)
+
+(cid:1) to the dataset D
+
+λ(u|xt, θ)
+t ∼ π∗(u|xt)
+
+t
+
+be found in prior work (Levine & Abbeel, 2014). We de-
+scribe the details of PLATO and its relation to prior meth-
+ods in Sec. 4.1 and theoretically show that PLATO pro-
+duces a good learned policy in Sec. 5.
+
+4.1. Algorithm Description
+Algorithm 1 outlines PLATO. We collect training trajec-
+tories by choosing actions ut according to an adaptive
+λ(u|xt, θ), which is generated by optimiz-
+teacher policy πt
+ing the objective in Equation 1 at each time step via iLQG.
+We then update the learner policy πθ(u|ot) with supervised
+learning at the observations ot corresponding to the visited
+states xt to minimize the difference between πθ(u|ot) and
+the locally optimal policy
+
+∗
+
+π
+
+(u|xt) ← arg min
+
+π
+
+J(π)
+
+(2)
+
+which is also obtained via MPC, but without considering
+the KL-divergence term. This approach ensures the teacher
+visits states that are similar to those that would be visited
+by the learner policy πθ, while still providing supervision
+from a near-optimal policy. Note that the MPC policy is
+conditioned on the state of the system xt, while the learned
+policy πθ(u|ot) is only conditioned on the observations.
+MPC requires access to at least a rough model of the system
+dynamics, as well as the system state, in order to robustly
+choose near-optimal actions. However, by training πθ on
+the corresponding observations, instead of the true states,
+πθ can learn to process raw sensory inputs without requir-
+ing true state observations, making it possible to run the
+learned policy with only the raw observations at test time.
+In the rest of this section, we describe the MPC teacher and
+the supervised learning procedure in detail.
+Adaptive MPC teacher: The teacher’s policy πt
+λ must
+take reasonable, robust actions while visiting states that
+are similar to those that would be seen by the learner pol-
+icy πθ. However, we do not know the state distribution of
+πθ in advance, since although we have some approximate
+knowledge of the system dynamics, we do not assume a
+model of the observation function that produces observa-
+
+tions ot from states xt, making it impossible to simulate
+the policy πθ into the future. Instead, we choose the ac-
+λ that
+tions at each time step according to an MPC policy πt
+λ|xt),
+minimizes the expected long-term sum of costs Jt(πt
+but only greedily minimizes the KL-divergence against πθ
+at the current time step t, where the observation ot is al-
+ready available, resulting in the objective in Equation 1.
+Since MPC reoptimizes the local policy at each time step,
+this method produces a sequence of policies π1:T
+λ , each of
+which is optimized with respect to its long-horizon cost and
+immediate disagreement with πθ.
+As discussed previously, our iLQG-based MPC algorithm
+λ(u|xt) =
+produces linear-Gaussian local controllers πt
+N (µλ(xt), Σt) where µλ(xt) = Ktxt + kt. We will fur-
+ther assume that our learner policy is conditionally Gaus-
+sian (but nonlinear), though other parametric distributions
+are also possible. The policy therefore has the form
+πθ(u|ot) = N (µθ(ot), Σπθ ) where µθ(ot) is the output
+of a nonlinear function, such as a neural network, and Σπθ
+is a learned covariance. Then the MPC objective can be
+expressed in closed form:
+
+min
+
+π
+
+Jt(π|xt)+
+1
+2
+
+(cid:104)(cid:0)µθ(ot) − µλ(xt)(cid:1)(cid:124)
+(cid:18)|Σπθ|
+tr(cid:0)Σ
+(cid:1) + ln
+
+−1
+πθ
+
+−1
+πθ Σt
+
+Σ
+
+λ
+
+|Σt|
+
+(cid:0)µθ(ot) − µλ(xt)(cid:1)+
+(cid:19)
+
+(cid:105)
+
++ const
+
+The KL-divergence term in this objective is quadratic in
+ut and linear in the covariance Σt, with an entropy max-
+imization term − ln|Σt|. This is precisely the objective
+that is optimized by the maximum entropy variant of iLQG
+(Levine & Abbeel, 2014), and optimization requires us
+only to expand the cost-to-go Jt to second order, which
+is a standard procedure in iLQG.
+Training the learner’s policy: We want the learner’s pol-
+icy πθ to approach the optimal policy π∗(u|xt). We can
+estimate a (locally) optimal policy π∗ at each state xt with
+iLQG, simply by repeating the optimization at each time
+step but excluding the KL-divergence term. During the su-
+pervised learning phase, we minimize the KL-divergence
+between the learner πθ and the precomputed near-optimal
+policies π∗ at the observations stored in the dataset D:
+
+(cid:88)
+
+(cid:0)πθ(u|ot)||π
+
+∗
+
+(u|xt)(cid:1)
+
+DKL
+
+(3)
+
+θ ← arg min
+
+θ
+
+(xt,ot)∈D
+
+Since both πθ and π∗ are again conditionally Gaussian, the
+KL-divergence can be expressed in closed-form:
+
+(cid:88)
+
+min
+
+θ
+
+1
+2
+
+(xt,ot)∈D
+
+∗
+
+(xt)− µθ(ot)(cid:1)(cid:124)
+(cid:0)µ
++ tr(cid:0)Σ
+(cid:1) + ln
+
+−1
+π∗ Σπθ
+
+Σ
+
+∗
+
+−1
+
+π∗(cid:0)µ
+(cid:18)|Σπ∗|
+
+(xt)− µθ(ot)(cid:1)
+(cid:19)
+
++ const
+
+|Σπθ|
+
+Ignoring the terms that do not involve the learner policy
+mean µθ(ot), the objective function can be rewritten in the
+
+PLATO: Policy Learning using Adaptive Trajectory Optimization
+
+form of a weighted Euclidean loss:
+
+(cid:88)
+
+min
+
+θ
+
+(xt,ot)∈D
+
+∗
+
+||π
+
+(xt) − µθ(ot)||2
+
+Σ
+
+−1/2
+π∗
+
+This optimization can then be solved using standard regres-
+sion methods. In our experiments, µθ is represented by a
+neural network, and the above optimization problem corre-
+sponds to standard neural network regression, solvable by
+stochastic gradient descent. The covariance of πθ can be
+solved for in closed form, and corresponds to the inverse of
+the average precisions of π∗ at the training points (Levine
+& Koltun, 2013a).
+
+4.2. Relationship to previous work
+
+PLATO can be viewed as a generalization of the Dataset
+Aggregation (DAgger) algorithm (Ross & Bagnell, 2011),
+which samples trajectories according to the mixture policy
+πMIXi = βiπ∗ + (1 − βi)πθ i. The training data is gen-
+(cid:80)N
+erated from the observations sampled by executing πMIXi
+but labelled with actions from π∗. DAgger converges if
+i=1 βi → 0 as N → ∞. A related extension to DAg-
+1
+N
+ger is the method of He et al. (2012), which modiﬁes the
+supervision policy π∗ to adapt to the learned policy πθ.
+This method, referred to as coaching, labels the training
+data with a coach policy πCOACH that encourages the ac-
+tion training labels to be similar to the actions πθ i would
+choose.
+Aside from the use of MPC, which exploits the true state
+xt, and training the learner policy on observations ot, the
+principle distinction of PLATO is the use of an adaptive
+MPC policy π1:T
+to select the actions at each time step,
+rather than the mixture policy πMIX used in the prior meth-
+ods. As demonstrated in our evaluation, this allows PLATO
+to robustly avoid catastrophic failure during training, which
+is particularly important on safety-critical domains such as
+aerial vehicles. Our experiments also demonstrate that poli-
+cies trained using PLATO empirically outperform policies
+trained by either DAgger or coaching. Table 1 summarizes
+the teacher and supervision policies used by PLATO and
+prior work.
+
+λ
+
+5. Theoretical Analysis
+In this section, we present a proof that the PLATO algo-
+rithm allows the learned policy πθ to converge to a policy
+with bounded cost. Our result is analogous to the DAg-
+ger convergence proof, but applies to the case where the
+actions are chosen according to the adaptive MPC policy
+π1:T
+
+rather than a mixture policy.
+λ
+Given a policy π, we denote dt
+π as the state distribution
+at time t when executing policy π from time 1 to t − 1.
+Let Qt(x, π, ˜π) denote the cost of executing π for one time
+step starting from initial state x, and then executing ˜π for
+
+approach
+
+supervised learning
+
+DAgger
+
+DAgger + coaching
+
+PLATO
+
+teacher
+policy
+π∗
+πMIX
+πMIX
+πλ
+
+supervision
+
+policy
+π∗
+π∗
+πCOACH
+π∗
+
+Table 1. Overview of teacher-based policy optimization meth-
+ods: For PLATO and each prior approach (supervised learning,
+DAgger, and DAgger with coaching), we list which teacher pol-
+icy is used for sampling trajectories and which supervision policy
+is used for generating training actions from the sampled trajecto-
+ries. Note that the prior methods execute the mixture policy πMIX,
+which requires running the learned policy πθ, potentially execut-
+ing dangerous actions when πθ has not been fully trained.
+the remaining t − 1 time steps.
+When optimizing Equation 1 to obtain the teacher pol-
+icy πλ, we choose λ such that DKL(πλ(u|x)||πθ(u|o)) ≤
+λθ for all state-observation pairs (x, o). We can always
+guarantee this bound when optimizing Equation 1 because
+DKL(πλ(u|x)||πθ(u|o)) → 0 as λ → ∞.
+When optimizing the supervised learning objective in
+Equation 3 to obtain the learner policy πθ, we assume the
+supervised learning objective function error is bounded by
+a constant DKL(πθ(u|o)||π∗(u|x)) ≤ θ∗ for all states x
+(and corresponding observations o) in the dataset, which
+were sampled from the teacher policy distribution dπλ.
+Since the policy πθ is trained with supervised learning pre-
+cisely on these states x ∼ dπλ, this bound θ∗ corresponds
+to assuming that the learner policy πθ attains bounded
+training error.
+We can then prove the following theorem:
+Theorem 5.1 Let Qt(x, πθ, π∗) − Qt(x, π∗, π∗) ≤ δ for
+all t ∈ {1, ..., T} . Then for PLATO, J(πθ) ≤ J(π∗) +
+√
+δ
+
+θ∗O(T ) + O(1)
+
+π and dt
+
+The outline of the proof of Theorem 5.1 is as follows. First,
+in Appendix A we generalize the DAgger result bound-
+ing the distance between the mixture state distribution dt
+πMIX
+πθ to any two state dis-
+and the learned state distribution dt
+˜π with a bounded KL-divergence. Then
+tributions dt
+in Appendix B, we derive an upper bound on the expected
+cost of the learned policy πθ under its own state distribu-
+T 2 ) to obtain the result
+tion. We can then choose λθ = O( 1
+in Theorem 5.1.
+As with DAgger, in the worst case δ = O(T ). However, in
+many cases δ = O(1) or is sub-linear in T , for instance if
+π∗ is able to quickly recover from mistakes made by πθ.
+We also note that this bound is the same as the bound ob-
+tained by DAgger, but without actually needing to directly
+execute πθ at training time.
+
+PLATO: Policy Learning using Adaptive Trajectory Optimization
+
+6. Experiments
+We evaluate PLATO on a series of simulated quadrotor nav-
+igation tasks. MPC is a standard choice for quadrotor con-
+trol because approximate models are typically known in
+advance from standard rigid body physics and the speci-
+ﬁcations of the vehicle. However, effective use of MPC
+requires explicit state estimation, including the localization
+of any relevant obstacles, and can be computationally in-
+tensive. It is therefore very appealing to be able to train an
+entirely feedforward, reactive policy to control a quadro-
+tor performing navigation in obstacle-rich environments,
+directly in response to raw sensor inputs. During training,
+the vehicle might be placed in a known, instrumented train-
+ing environment to collect data using MPC, while at test
+time, the learned feedforward policy could control the air-
+craft directly from raw observations. This makes simulated
+quadrotor navigation an ideal domain in which to compare
+PLATO to prior work.
+
+6.1. Prior Methods and Baselines
+
+We compare PLATO to two prior methods. The ﬁrst
+method is DAgger, which, as discussed in Section 4.2, ex-
+ecutes a mixture of the learned policy and teacher policy,
+which in this case is MPC (without a KL-divergence term).
+DAgger has previously been used for learning quadro-
+tor control policies from human demonstrations (Ross &
+Hebert, 2013). While DAgger carries the same conver-
+gence guarantees as PLATO, successful use of DAgger re-
+quires the learned policy to be executed at training time,
+before the policy has converged to a near-optimal behav-
+ior. The second method is the coaching algorithm of He
+et al. (2012) which, like DAgger, executes a mixture of the
+learned and teacher policies, but supervises the learner us-
+ing the adapted policy. In these experiments, we chose the
+coaching policy πCOACH to be the teacher policy πλ from
+PLATO. As discussed in Section 4.2, the nature of this
+adaption is quite different from the approach proposed in
+this work. For both DAgger and coaching, we must choose
+the mixing parameter βi at each iteration i. Since the per-
+formance of these algorithms is quite sensitive to the sched-
+ule of the βi parameter, we include four schedules for com-
+parison: three linear schedules that interpolate βi from 1 at
+the ﬁrst iteration to 0 at the last iteration (“linear full”), the
+halfway iteration (“linear half”), and the quarter-way itera-
+tion (“linear quarter”), as well as the more standard “1-0”
+schedule that sets βi = 1[i = 1]. In addition to these prior
+methods, we also compare our approach to a standard su-
+pervised learning baseline, which always executes the MPC
+policy without any adaptation.
+
+6.2. Policy Representation
+
+For all of the methods, we represent πθ as a conditional
+Gaussian policy, with a constant covariance and a mean
+given by a neural network function of the observation ot.
+The neural network architecture and optimization method
+are described in Appendix E.
+
+6.3. Experimental Domains
+
+The comparisons are conducted on two test environments:
+a winding canyon with randomized turns, and a dense for-
+est of cylindrical trees with randomized positions. An ex-
+ample environment is shown in Figure 1. Further details
+are provided in Appendix C.
+The dynamical system is a
+quadrotor with dynamics de-
+scribed by (Martin & Salaun,
+2010). The state of the vehi-
+cle x ∈ R13 consists of the po-
+sition and orientation, as well
+as their time derivatives, and
+the control u ∈ R4 consists of
+motor velocities. The observa-
+tions o consist of orientation,
+linear velocity, angular veloc-
+ity and either (i) a set of 30 equally spaced 1-d laser depth
+scanners arranged in 180 degree fan in front of the vehi-
+cle (o ∈ R40) or (ii) a 5 × 20 grayscale camera image
+(o ∈ R110). Learning neural network policies with these
+observations forces the policies to perform both perception
+and control, since success on each of the domains requires
+avoiding obstacles using only raw sensory input.
+The cost function for the MPC teacher encourages the
+quadrotor to ﬂy at a speciﬁc linear velocity and orienta-
+tion while minimizing control effort and avoiding colli-
+sions. The desired velocity and direction are either kept
+constant or, in the case of policies with commanded veloc-
+ity discussed in subsection 6.7, varied at random intervals
+to simulate user commands. A more formal deﬁnition of
+the cost function is provided in Appendix D.
+
+Figure 1. Quadrotor
+forest with laserscans
+
+in
+
+6.4. Performance of Learned Policies
+
+In Figures 2a, 2d, 2b, and 2e, we present the mean time
+to failure (MTTF) of the learned policy πθ on the canyon
+and forest environments using the laser or camera sensors.
+The graphs show the MTTF of each policy at each iteration
+of the learning process, averaged over 10 training runs of
+each method with 20 repetitions each. Failure occurs when
+the quadrotor crashes into an obstacle, with the maximum
+ﬂight time for each domain listed on the graphs. The results
+indicate that the PLATO algorithm is able to learn effective
+policies faster, and converges to a solution that is better than
+
+PLATO: Policy Learning using Adaptive Trajectory Optimization
+
+(a) canyon (laser)
+
+(b) canyon (camera)
+
+(c) canyon/forest switching (camera)
+
+(d) forest (laser)
+
+(e) forest (camera)
+
+(f) velocity commands in forest (laser)
+
+Figure 2. Experiments: We compare PLATO to baseline methods in a winding canyon, a dense forest, and an alternating canyon/forest.
+For each scenario and learning method, we trained 10 different policies using different random seeds. Then for each policy, we evaluated
+the neural network policy trained at each iteration by ﬂying through the scenario 20 times. Therefore each datapoint corresponds to 200
+samples.
+
+or comparable to the baseline methods. For some choices
+of β schedule and supervision scheme, some DAgger vari-
+ants achieve similar ﬁnal MTTFs, but always at a slower
+rate and, as discussed next, with signiﬁcantly more training
+crashes.
+
+6.5. Robustness During Training
+
+In Figures 2a, 2d, 2b, and 2e, we show the number
+of crashes experienced during training at each iteration.
+PLATO on average experiences less than one crash per it-
+eration, comparable in performance to the baseline MPC
+method (supervised learning), indicating that mimicking
+the learner with a KL-divergence penalty does not sub-
+stantially degrade the robustness of MPC. In contrast, both
+DAgger and coaching begin to experience a substantial
+number of failures when the mixing constant β drops.
+By carefully selecting the schedule for β, the number of
+crashes can be reduced.
+However, even with a carefully chosen schedule, these
+prior methods are vulnerable to non-stationary training en-
+vironments, as illustrated in Figure 2c. In this experiment,
+the vehicle switched from the canyon domain to the for-
+est halfway through training, and then switched back to
+
+the forest domain. PLATO still experienced on average
+less than one crash per episode in this mode, but the prior
+methods that directly execute πθ during training could not
+cope with this condition, since a policy trained only on
+the canyon cannot succeed on the forest without additional
+training. While this example might appear pathological,
+one might imagine a plausible training setup for a real
+quadrotor that consists, for example, of ﬂying through var-
+ious ﬂoors of a building to collect a breadth of data. If the
+walls on one ﬂoor are painted, e.g., a different color then
+the rest, the learned policy could easily experience a catas-
+trophic failure when entering the ﬂoor for the ﬁrst time,
+even if it was consistently successful on preceding ﬂoors.
+
+6.6. Sensitivity to KL-Divergence Weight
+
+Figure 3 compares different settings of the λ parameter.
+Recall that λ determines the degree to which MPC prior-
+itizes following the learner πθ versus performing the de-
+sired task. For very small values of λ, the performance
+of PLATO approaches standard supervised learning, while
+for very large values, it is similar to DAgger. However,
+the results suggest that a relatively broad range of λ values
+produces successful policies.
+
+PLATO: Policy Learning using Adaptive Trajectory Optimization
+
+a number of previous methods, both in terms of the robust-
+ness and effectiveness of the ﬁnal policy, and in terms of
+the safety of the training procedure.
+PLATO has two key advantages that make it well-suited
+for learning control policies for real-world robotic systems.
+First, since the learned neural network policy does not need
+to be executed at training time, the method beneﬁts from
+the robustness of model-predictive control (MPC), mini-
+mizing catastrophic failures at training time. This is partic-
+ularly important when the distribution over training states
+and observations is non-stationary, as in the canyon/forest
+switching scenario. Here, methods that execute the learned
+policy, such as DAgger, can suffer a catastrophic failure
+when the agent encounters observations that are too dif-
+ferent from those seen previously. Mitigating these issues
+typically requires hand-designed safety mechanisms, while
+PLATO automatically switches to a more off-policy behav-
+ior.
+The second advantage of PLATO is that the learned pol-
+icy can use a different set of observations than MPC. Ef-
+fective use of MPC requires observing or inferring the full
+state of the system, which might be accomplished, for in-
+stance, by instrumenting the environment with motion cap-
+ture, or using a known map with relocalization (Williams
+et al., 2007). The policy, however, can be trained directly
+on raw input from onboard sensors, forcing it to perform
+both perception and control. Once trained, such a policy
+can be used in uninstrumented natural environments.
+PLATO shares these beneﬁts with recently developed
+guided policy search algorithms (Zhang et al., 2016). How-
+ever, in contrast with guided policy search, PLATO does
+not require a carefully designed episodic environment. In
+fact, the policy can be learned equally well for inﬁnite hori-
+zon tasks without any episodic structure or reset mecha-
+nism, making it practical, for example, for learning naviga-
+tion policies in complex environments.
+One of the most appealing prospects of learning expressive
+neural network policies with an automated MPC teacher is
+the possibility of acquiring real-world policies that directly
+use rich sensory inputs, such as camera images, depth sen-
+sors, and other inputs that are difﬁcult to process with stan-
+dard model-based techniques. Because of this, one very in-
+teresting avenue for future work is to apply PLATO on real
+physical platforms, especially ones equipped with novel
+and unusual sensors.
+
+References
+Dahl, G. E., Yu, D., Deng, L., and Acero, A. Context-
+dependent pre-trained deep neural networks for large-
+In IEEE Transactions
+vocabulary speech recognition.
+on Audio, Speech, and Language Processing, 2012.
+
+Figure 3. Effect of KL-divergence weight λ
+
+6.7. Policies with Velocity Commands
+
+Figure 2f shows the performance of PLATO when learning
+policies that take an additional input in the form of a com-
+manded velocity, to simulate high-level user control. These
+policies are useful because instead of training multiple poli-
+cies for different target velocities, we can train one gener-
+alizable policy. This input modiﬁes the cost function used
+by MPC, producing command-aware supervision. During
+training, the commands vary in the range of ±1 m/s side-
+ways and 1 to 2.5 m/s forward. At test time, we sample
+velocity commands uniformly at random; the velocity com-
+mands are re-sampled whenever the quadrotor reaches the
+current sampled velocity. The results indicate that PLATO
+can successfully learn such policies, outperforming prior
+methods and again minimizing the number of crashes dur-
+ing training.
+Supplementary material can be viewed online 1.
+
+7. Discussion
+In this paper, we presented PLATO, an algorithm for learn-
+ing complex, high-dimensional policies that combine per-
+ception and control into a single expressive function ap-
+proximator, such as a deep neural network. PLATO uses a
+trajectory optimization teacher to provide supervision to a
+standard supervised learning algorithm, allowing for a sim-
+ple and data-efﬁcient learning method. The teacher adapts
+to the behavior of the neural network policy to ensure that
+the distribution over states and observations is sufﬁciently
+close to the learned policy, allowing for a bound on the
+long-term performance of the learned policy. Our empiri-
+cal evaluation, conducted on a set of challenging simulated
+quadrotor domains, demonstrates that PLATO outperforms
+
+1sites.google.com/site/platopolicy
+
+PLATO: Policy Learning using Adaptive Trajectory Optimization
+
+Deisenroth, M. P., Neumann, G., and Peters, J. A survey on
+policy search for robotics. In Foundations and Trends in
+Robotics, 2011.
+
+Martin, P. and Salaun, E. The true role of accelerometer
+feedback in quadrotor control. In Proc. IEEE Int. Conf.
+Robotics and Automation (ICRA), 2010.
+
+Guo, X., Singh, S., Lee, H., Lewis, R. L., and Wang, X.
+Deep learning for real-time Atari game play using of-
+ﬂine Monte-Carlo tree search planning. In Advances in
+Neural Information Processing Systems (NIPS), 2014.
+
+He, H., Eisner, J., and Daume, H.
+
+Imitation learning by
+coaching. In Advances in Neural Information Processing
+Systems (NIPS), 2012.
+
+Heess, N., Wayne, G., Silver, D., Lillicrap, T., Tassa, Y.,
+and Erez, T. Learning continuous control policies by
+stochastic value gradients. In Advances in Neural Infor-
+mation Processing Systems (NIPS), 2015.
+
+Jia, Yangqing, Shelhamer, Evan, Donahue, Jeff, Karayev,
+Sergey, Long, Jonathan, Girshick, Ross, Guadarrama,
+Sergio, and Darrell, Trevor. Caffe: Convolutional ar-
+chitecture for fast feature embedding. arXiv preprint
+arXiv:1408.5093, 2014.
+
+Kingma, D.P. and Ba, J. Adam: A method for stochastic
+optimization. In International Conference on Learning
+Representations (ICLR), 2015.
+
+Krizhevsky, A., Sutskever, I., and Hinton, G.
+
+Imagenet
+classiﬁcation with deep convolutional neural networks.
+In Advances in Neural Information Processing Systems
+(NIPS), 2012.
+
+Levin, D. A., Peres Y. and Wilmer, E. L. Markov chains
+and mixing times. American Mathematical Soc., 2009.
+
+Levine, S. and Abbeel, P. Learning neural network poli-
+cies with guided policy search under unknown dynamics.
+In Advances in Neural Information Processing Systems
+(NIPS), 2014.
+
+Levine, S. and Koltun, V. Guided policy search. In Interna-
+tional Conference on Machine Learning (ICML), 2013a.
+
+Levine, S., Finn, C., Darrell, T., and Abbeel, P. End-to-
+end training of deep visuomotor policies. arXiv preprint
+arXiv:1504.00702, 2015.
+
+Levine, Sergey and Koltun, Vladlen. Variational policy
+search via trajectory optimization. In Advances in Neu-
+ral Information Processing Systems 26, pp. 207–215.
+2013b.
+
+Lillicrap, T. P., Hunt, J. J., Pritzel, A., Heess, N., Erez, T.,
+Tassa, Y., Silver, D., and Wierstra, D. Continuous control
+with deep reinforcement learning. In arXiv:1411.0247,
+2015.
+
+Mayne, D.Q., Seron, M. M., and Rakovic, S. V. Robust
+model predictive control of constrained linear systems
+with bounded disturbances. In Automatica, 2005.
+
+Mnih, V., Kavukcuoglu, K., Silver, D., Graves, A.,
+Antonoglou, I., Wierstra, D., and M., Riedmiller. Play-
+ing atari with deep reinforcement learning. In Workshop
+on Deep Learning, Advances in Neural Information Pro-
+cessing Systems (NIPS), 2013.
+
+Nair, V. and Hinton, G. Rectiﬁed linear units improve re-
+In International Confer-
+
+stricted boltzmann machines.
+ence on Machine Learning (ICML), 2010.
+
+Nguyen, X., Wainwright, M. J., and Jordan, M. I. Di-
+vergences, surrogate loss functions and experimental de-
+sign. In Advances in Neural Information Processing Sys-
+tems (NIPS), 2005.
+
+Pollard, D. Asymptopia: an exposition of statistical asymp-
+totic theory. 2000. URL http://www.stat.yale.
+edu/˜pollard/Books/Asymptopia/.
+
+Ross, S., Gordon G. J. and Bagnell, J. A. A reduction of
+imitation learning and structured prediction to no-regret
+online learning. In Proceedings of the 14th International
+Conference on Artiﬁcial Intelligence and Statistics (AIS-
+TATS), 2011.
+
+Ross, S., Melik-Barkhudarov N. Shankar K. S. Wendel A.
+Dey D. Bagnell J. A. and Hebert, M. Learning monocu-
+lar reactive uav control in cluttered natural environments.
+In Proceedings of the IEEE International Conference on
+Robotics and Automation (ICRA), 2013.
+
+Schulman, J., Levine, S., Moritz, P., Jordan, M. I., and
+Abbeel, P. Trust region policy optimization. In Proceed-
+ings of the International Conference on Machine Learn-
+ing (ICML), 2015.
+
+Sutskever, I., Vinyals, O., and Le, Q. V. Sequence to se-
+In Advances in
+
+quence learning with neural networks.
+Neural Information Processing Systems (NIPS), 2014.
+
+Todorov, E. and Li, W. A generalized iterative LQG method
+for locally-optimal feedback control of constrained non-
+linear stochastic systems. In American Control Confer-
+ence, 2005.
+
+Williams, B., Klein, G., and Reid, I. Real-time slam re-
+localisation. In International Conference on Computer
+Vision (ICCV), 2007.
+
+PLATO: Policy Learning using Adaptive Trajectory Optimization
+
+Zhang, T., Kahn, G., Levine, S., and Abbeel, P. Learn-
+ing deep control policies for autonomous aerial vehicles
+with mpc-guided policy search. In Proc. IEEE Int. Conf.
+Robotics and Automation (ICRA), 2016.
+
+PLATO: Policy Learning using Adaptive Trajectory Optimization
+
+TV (πMIX(·|x)||πθ(·|x)). By Lemma A.3, we can deﬁne
+Dmax
+uπMIX , uπθ on a common probability space so that
+
+p(uπMIX (cid:54)= uπθ ) = DTV(πMIX(·|x)||πθ(·|x)) ≤ β
+
+We note the following relationship between total varia-
+tion divergence and the KL divergence (Pollard, 2000):
+DTV(p||q)2 ≤ DKL(p||q). Substituting for β in Lemma
+A.1:
+
+||dt
+
+πMIX − dt
+
+πθ||1 ≤ 2tβ
+
+= 2tDmax
+
+≤ 2t(cid:112)Dmax
+
+KL
+
+TV (πMIX, πθ)
+
+(πMIX, πθ)
+
+Note that the last equation makes no assumption about πMIX
+being a mixture involving πθ. Therefore for any two poli-
+cies π and ˜π:
+
+˜π||1 ≤ 2t(cid:112)Dmax
+
+KL
+
+||dt
+
+π − dt
+
+(π, ˜π)
+
+(cid:3)
+
+π as the state distribution at
+
+A. Proof of State Distribution Bound
+Given a policy π, we denote dt
+time t when executing policy π from time 1 to t − 1.
+We will ﬁrst re-derive the following state distribution
+bound:
+Lemma A.1 (Ross & Bagnell, 2011) ||dt
+2tβi
+
+− dt
+πθi
+
+||1 ≤
+
+πMIX i
+
+is
+
+policy
+
+The mixture
+
+Proof.
+deﬁned
+as
+πMIXi = βiπ∗ + (1 − βi)πθ i Deﬁne dt as
+the distri-
+bution of states over t steps conditioned on πMIXi choosing
+π∗ at least once over t steps. Since πMIXi always executes
+πθi over t steps with probability (1 − βi)t we have
+dπMIX i = (1 − βt
+i )dt
+πMIX i − dt
+
++ (1 − (1 − βi)t)dt. Thus
+πθi
+||1 = (1 − (1 − βi)t)||dt − dt
+πθi
+
+||dt
+
+||1
+
+πθi
+
+≤ 2(1 − (1 − βi)t)
+≤ 2tβi
+
+The last inequality follows from the fact that (1 − β)t ≥
+1 − βt for β ∈ [0, 1].
+(cid:3)
+We will now adapt Lemma A.1 to the case where πMIX is
+not necessarily a mixture involving πθ, but instead con-
+sists of two arbitrary policies π and ˜π and the maxi-
+mum KL-divergence between the two policies. Deﬁne
+KL (πMIX, πθ) = maxx DKL(πMIX(·|x)||πθ(·|x)), then:
+Dmax
+Lemma A.2 ||dt
+
+˜π||1 ≤ 2t(cid:112)Dmax
+
+π − dt
+
+KL (π, ˜π)
+
+Proof. Similar to (Schulman et al., 2015), the main idea
+is to couple the two policies so that they choose the same
+action with probability 1 − β.
+
+Lemma A.3 (Levin & Wilmer, 2009) Suppose pX and
+pY are distributions with total variation divergence
+DTV(pX||pY ) = β. Then there exists a joint distribution
+(X, Y ) whose marginals pX , pY , for which X = Y is with
+probability 1 − β.
+
+This joint distribution is constructed as follows:
+
+(i) With
+
+probability
+max(pX − pY , 0)/β
+max(pY − pX , 0)/β
+
+β, we
+
+and
+
+sample X from
+from
+sample
+
+Y
+
+(ii) With probability 1 − β, we sample X = Y from
+
+min(pX , pY )/(1 − β)
+
+The sampling distribution in (i) places all the probability
+mass in regions where X (cid:54)= Y and (ii) is chosen such that
+the joint is a valid distribution.
+Let uπMIX , uπθ be random variables which represent the
+actions chosen by policies πMIX and πθ.
+Let β =
+
+PLATO: Policy Learning using Adaptive Trajectory Optimization
+
+2t(cid:112)Dmax
+
+KL (π, ˜π) proven in Appendix A. This lemma im-
+[f (x)] ≤
+
+[f (x)] + 2f maxt(cid:112)Dmax
+
+plies that for an arbitrary function f (x), Ex∼dt
+Ex∼dt
+
+KL (π, ˜π)
+
+π
+
+˜π
+
+B. Proof of PLATO Convergence
+B.1. Preliminaries
+
+π as the state distribution at
+
+Given a policy π, we denote dt
+time t when executing policy π from time 1 to t − 1.
+Deﬁne the cost function c(xt, ut) as a function of state xt
+and control ut, with c(xt, ut) ∈ [0, 1] without loss of gen-
+erality. We wish to learn a policy πθ(u|ot) that minimizes
+the total expected cost over time horizon T :
+
+J(π) =
+
+Ext∼dt
+
+πθ
+
+[Eut∼πθ(u|ot)[c(xt, ut)|xt]]
+
+T(cid:88)
+
+t=1
+
+Let Jt(π, ˜π) denote the expected cost of executing π for t
+time steps, and then executing ˜π for the remaining T − t
+time steps.
+Let Qt(x, π, ˜π) denote the cost of executing π for one time
+step starting from initial state x, and then executing ˜π for
+the remaining t − 1 time steps. We assume the cost-to-
+go difference between the learned policy and the optimal
+policy is bounded: Qt(x, πθ, π∗) − Qt(x, π∗, π∗) ≤ δ.
+When optimizing Equation 1 to obtain the teacher pol-
+icy πλ, we choose λ such that DKL(πλ(u|x)||πθ(u|o)) ≤
+λθ for all state-observation pairs (x, o). We can always
+guarantee this bound when optimizing Equation 1 because
+DKL(πλ(u|x)||πθ(u|o)) → 0 as λ → ∞.
+When optimizing the supervised learning objective in
+Equation 3 to obtain the learner policy πθ, we assume the
+supervised learning objective function error is bounded by
+a constant DKL(πθ(u|o)||π∗(u|x)) ≤ θ∗ for all states x
+(and corresponding observations o) in the dataset, which
+were sampled from the teacher policy distribution dπλ.
+Since the policy πθ is trained with supervised learning pre-
+cisely on these states x ∼ dπλ, this bound θ∗ corresponds
+to assuming that the learner policy πθ attains bounded
+training error.
+Let l(x, πθ, π∗) denote the expected 0-1 loss of πθ with
+respect to π∗ in state x: Euθ∼πθ(u|o),u∗∼π∗(u|x)[1[uθ (cid:54)=
+u∗]]. We note that the total variation divergence is an up-
+per bound on the 0-1 loss (Nguyen et al., 2005) and the
+KL-divergence is an upper bound on the total variation di-
+vergence (Pollard, 2000). Therefore for all states x ∼ dπλ
+in the dataset used for supervised learning, the 0-1 loss can
+be upper bounded:
+
+l(x, πθ, π∗) = Euθ∼πθ(u|o),u∗∼π∗(u|x)[1[uθ (cid:54)= u∗]]
+
+≤(cid:112)DKL(πθ(u|o)||π∗(u|x))
+≤ DTV(πθ(u|o)||π∗(u|x))
+≤ √
+
+θ∗
+
+We also note the state distribution bound ||dt
+
+π − dt
+
+˜π||1 ≤
+
+B.2. Proof
+We will now prove Theorem 5.1:
+
+t=1
+
+t=0
+
+T−1(cid:88)
+T(cid:88)
+T(cid:88)
+T(cid:88)
+T(cid:88)
+
+t=1
+
+t=1
+
+J(πθ)
+
+= J(π
+
+= J(π
+
+∗
+
+∗
+
+) +
+
+) +
+
+≤ J(π
+
+∗
+
+≤ J(π
+
+∗
+
+≤ J(π
+
+∗
+
+∗
+
+= J(π
+
+Jt+1(πθ, π
+
+∗
+
+) − Jt(πθ, π
+
+∗
+
+)
+
+Ex∼dt
+
+πθ
+
+[Qt(x, πθ, π
+
+∗
+
+) − Qt(x, π
+
+∗
+
+∗
+
+)]
+
+, π
+
+) + δ
+
+) + δ
+
+Ex∼dt
+
+πθ
+
+[l(x, πθ, π
+
+∗
+
+)]
+
+Ex∼dt
+
+πλ
+
+[l(x, πθ, π
+
+∗
+
+)] + 2lmaxt
+
+√
+
+√
+θ∗ + 2t
+
+θ∗
+
+√
+λθ
+√
+
+√
+λθ
+
+) + δ
+
+t=1
+
+√
+
+) + δT
+
+θ∗ + δT (T + 1)
+
+θ∗
+
+(4a)
+
+√
+
+λθ
+
+(4b)
+
+(4c)
+
+Equation 4a follows from the fact that the expected 0-1 loss
+of πθ with respect to π∗ is the probability that πθ and π∗
+pick different actions in x; when they choose different ac-
+tions, the cost-to-go increases by ≤ δ.
+Equation 4b follows from the state distribution bound
+proven in Appendix A.
+Equation 4c follows from the upper bound on the 0-1 loss.
+Although we do not get to choose θ∗ because that is a prop-
+erty of the supervised learning algorithm and the data, we
+are able to choose λθ by varying parameter λ. If we choose
+λ such that λθ = O( 1
+
+T 2 ), then
+√
+J(πθ) ≤ J(π∗) + δ
+
+θ∗O(T ) + O(1)
+
+(cid:3)
+
+As with DAgger, in the worst case δ = O(T ). However, in
+many cases δ = O(1) or is sub-linear in T , for instance if
+π∗ is able to quickly recover from mistakes made by πθ.
+We also note that this bound is the same as the bound ob-
+tained by DAgger, but without actually needing to directly
+execute πθ at training time.
+Figure 4 illustrates how the teacher policy πλ and learner
+policy πθ change while running the PLATO algorithm.
+
+PLATO: Policy Learning using Adaptive Trajectory Optimization
+
+LINVEL, x∗
+
+HEIGHT, x∗
+
+respectively; x∗
+QUAT are the target linear ve-
+locity, height, and orientation, respectively; and uHOVER is
+the rotor velocity when the quadrotor is hovering. The ﬁnal
+term is a hinge loss on the distance of the quadrotor to the
+nearest obstacle; there is no penalty if the nearest obstacle
+is further than dSAFE.
+
+E. Neural Network Details
+We used Caffe (Jia et al., 2014) for our neural network.
+The network has two hidden layers each of size 40. Each
+layer is connected by an inner product, and for the hidden
+layers followed by a Rectiﬁed Linear Unit (ReLU) (Nair &
+Hinton, 2010). We used the ADAM (Kingma & Ba, 2015)
+solver with batch size 50 and 20000 iterations to optimize
+the neural network policy πθ. We used Xavier initialization
+for the weights on the ﬁrst iteration; subsequent iterations
+had initial weights based on those from the previous iter-
+ation. The loss function was a weighted euclidean loss as
+stated in Section 4.1.
+
+Figure 4. PLATO diagram illustrating the policy updates. Let all
+policies be represented as vectors in a vector space. Consider the
+PLATO algorithm at iteration i with the current learned policy
+πθi. The learner policy πλi is then optimized to be within λθ
+“distance” of πθi; however πλi is closer to π∗ than πθi due to
+the formulation of the optimization in Equation 1. We sample
+trajectories with πλi and label the actions using π∗. πθi+1 is then
+trained, which is closer to π∗ than the previous iteration’s learned
+policy πθi. The PLATO algorithm continues until convergence.
+
+C. Domain Details
+The quadrotor has a radius of 0.42m.
+The canyon scenario in Fig. 2b is composed of 0.5m long
+segments that randomly change direction by ±1.0 radians
+with a maximum angle of π
+4 radians. The target velocity
+was 6.0 m/s.
+The forest scenario in Fig. 2e and 3 is composed of cylin-
+ders of radius 0.5m and height 40m with a minimum spac-
+ing of 2.5m and an average spacing of 2.75m between
+cylinders. The target velocity was 2.0 m/s.
+The scenario in Fig. 2c alternates between a canyon sce-
+nario and forest scenario every 20 iterations. The canyon
+scenario is the same as above. The forest scenario is the
+same as above except with a minimum spacing of 3.0m and
+an average spacing of 3.25m between cylinders. The target
+velocity was 4.0 m/s.
+
+D. Teacher Cost Function
+The teacher cost function was
+L(x, u) =103||xLINVEL − x
+LINVEL||2
+∗
+2+
+103||xHEIGHT − x
+HEIGHT||2
+∗
+2+
+104||xQUAT − x
+QUAT||2
+∗
+2+
+250||xANGVEL||2
+2+
+−3||u − uHOVER||2
+5
+2+
+103 max(dSAFE − signed-distance(x), 0)
+
+where xLINVEL, xHEIGHT, xQUAT, xANGVEL are the linear veloc-
+ity, height, orientation, and angular velocity of the state x,
+
+

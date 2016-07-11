@@ -1,0 +1,4081 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+9
+
+ 
+
+ 
+ 
+]
+
+G
+L
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+9
+3
+8
+2
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Starting Small – Learning with Adaptive Sample Sizes
+
+Hadi Daneshmand
+Department of Computer Science, ETH Zurich, Switzerland
+
+Aurelien Lucchi
+Department of Computer Science, ETH Zurich, Switzerland
+
+Thomas Hofmann
+Department of Computer Science, ETH Zurich, Switzerland
+
+HADI.DANESHMAND@INF.ETHZ.CH
+
+AURELIEN.LUCCHI@INF.ETHZ.CH
+
+THOMAS.HOFMANN@INF.ETHZ.CH
+
+Abstract
+
+For many machine learning problems, data is
+abundant and it may be prohibitive to make mul-
+tiple passes through the full training set. In this
+context, we investigate strategies for dynamically
+increasing the effective sample size, when using
+iterative methods such as stochastic gradient de-
+scent. Our interest is motivated by the rise of
+variance-reduced methods, which achieve linear
+convergence rates that scale favorably for smaller
+sample sizes. Exploiting this feature, we show
+– theoretically and empirically – how to obtain
+signiﬁcant speed-ups with a novel algorithm that
+reaches statistical accuracy on an n-sample in 2n,
+instead of n log n steps.
+
+of update steps. This includes the popular family of gra-
+dient descent methods. Often, the computational complex-
+ity increases with the size of the training sample, e.g. in
+steepest-descent, where the cost of a gradient computation
+scales with n. Does one really need a highly accurate gradi-
+ent though, in particular in the early phase of optimization?
+Why not use subsets Tt ⊆ S which are increased in size
+with the iteration count t, matching-up statistical accuracy
+with optimization accuracy in a dynamic manner? This is
+the general program we pursue in this paper. In order to
+make this idea concrete and to reach competitive results,
+we focus on a recent variant of stochastic gradient descent
+(SGD), which is known as SAGA (Defazio et al., 2014). As
+we will show, this algorithm has a particularly interesting
+property in how its convergence rate depends on n.
+
+1. Introduction
+
+In empirical risk minimization (ERM) (Vapnik, 1998) the
+training set S is used to deﬁne a sample risk RS, which
+is then minimized with regard to a pre-deﬁned function
+class. One effectively equates learning algorithms with
+optimization algorithms. However, for all practical pur-
+poses an approximate solution of RS will be sufﬁcient, as
+long as the optimization error is small relative to the sta-
+tistical accuracy at sample size n := |S|. This is impor-
+tant for massive data sets, where optimization to numerical
+precision is infeasible. Instead of performing early stop-
+ping on black-box optimization, one ought to understand
+the trade-offs between statistical and computational accu-
+racy, cf. (Chandrasekaran & Jordan, 2013). In this paper,
+we investigate a much neglected facet of this topic, namely
+how to dynamically control the effective sample size in op-
+timization.
+
+Many large-scale optimization algorithms are iterative:
+they use sampled or aggregated data to perform a sequence
+
+1.1. Empirical Risk Minimization
+Formally, we assume that training examples x ∈ S ⊆ X
+have been drawn i.i.d. from some underlying, but unknown
+probability distribution P. We ﬁx a function class F
+parametrized by weight vectors w ∈ Rd and deﬁne the ex-
+pected risk as R(w) := Efx(w), where f is an x-indexed
+family of loss functions, often convex. We denote the min-
+imum and the minimizer of R(w) over F by R∗ and w∗,
+respectively. Given that P is unknown, ERM suggests to
+rely on the empirical (or sample) risk with regard to S
+RS (w) :=
+
+S := arg min
+
+w∈F RS(w) . (1)
+
+fx(w), w∗
+
+1
+
+n Xx∈S
+
+Note that one may absorb a regularizer in the deﬁnition of
+the loss fx.
+
+1.2. Generalization bounds
+
+The relation between w∗ and w∗
+has been widely studied
+S
+in the literature on learning theory. It is usually analysed
+with the help of uniform convergence bounds that take the
+
+Starting Small – Learning with Adaptive Sample Sizes
+
+generic form (Boucheron et al., 2005)
+
+ES(cid:20) sup
+
+w∈F |R(w) − RS(w)|(cid:21) ≤ H(n) ,
+
+(2)
+
+where the expectation is over a random n-sample S. Here
+H is a bound that depends on n, usually through a ratio
+n/d, where d is the capacity of F (e.g. VC dimension).
+In the realizable case, we may be able to observe a fa-
+vorable H(n) ∝ d/n, whereas in the pessimistic case,
+we may only be able to establish weaker bounds such as
+H(n) ∝ pd/n (e.g. for linear function classes); see also
+
+(Bousquet & Bottou, 2008). We ignore additional log fac-
+tors that can be eliminated using the ”chaining” technique
+(Bousquet, 2002; Bousquet & Bottou, 2008).
+
+1.3. Statistical efﬁciency
+
+Assume now that we have some approximate optimization
+algorithm, which given S produces solutions wS that are
+on average ǫ(n) optimal, i.e. ES [RS (wS) − R∗
+] ≤ ǫ(n).
+S
+One can then provide the following quality guarantee in
+expectation over sample sets S (Bousquet & Bottou, 2008)
+(3)
+
+ESR(wS ) − R∗ ≤ H(n) + ǫ(n) ,
+
+which is an additive decomposition of the expected solu-
+tion suboptimality into an estimation (or statistical) error
+H(n) and an optimization (or computational) error ǫ(n).
+For a given computational budget, one typically ﬁnds that
+ǫ(n) is increasing with n, whereas H(n) is always decreas-
+ing. This hints at a trade-off, which may suggest to chose
+a sample size m < n. Intuitively speaking, concentrating
+the computational budget on fewer data may be better than
+spreading computations too thinly.
+
+1.4. Stochastic Gradient Optimization
+
+For large scale problems, stochastic gradient descent is a
+method of choice in order to optimize problems of the form
+given in Eq. (1). Yet, while SGD update directions equal
+the true (negative) gradient direction in expectation, high
+variance typically leads to sub-linear convergence. This is
+where variance-reducing methods for ERM such as SAG
+(Roux et al., 2012), SVRG (Johnson & Zhang, 2013), and
+SAGA (Defazio et al., 2014) come into play. We focus on
+the latter here, where one can establish the following result
+on the convergence rate (see appendix).
+Lemma 1. Let all fx be convex with L-Lipschitz contin-
+uous gradients and assume that RS is µ-strongly convex.
+Then the suboptimality of the SAGA iterate wt after t steps
+is w.h.p. over a randomly sampled S bounded by
+nCS, ρn = 1 − min(cid:18) 1
+EA(cid:2)RS(wt) − R∗
+
+where the expectation is over the algorithmic randomness.
+
+S(cid:3) ≤ ρt
+
+µ
+
+L(cid:19) ,
+
+,
+
+n
+
+This highlights two different regimes: For small n, the con-
+dition number κ := L
+µ dictates how fast the optimization
+algorithm converges. On the other hand, for large n, the
+convergence rate of SAGA becomes ρn = 1 − 1
+n .
+1.5. Contributions
+
+Our main question is: can we obtain faster convergence
+to a statistically accurate solution by running SAGA on an
+initially smaller sample, whose size is then gradually in-
+creased? Motivated by a simple, yet succinct analysis, we
+present a novel algorithm, called DYNASAGA that imple-
+ments this idea and achieves ǫ(n) ≤ H(n) after only 2n
+iterations.
+
+2. Related Work
+
+Stochastic approximation is a powerful tool for minimizing
+objective Eq. (1) for convex loss functions. The pioneering
+work of (Robbins & Monro, 1951) is essentially a stream-
+ing SGD method where each observation is used only once.
+Another major milestones has been the idea of iterate av-
+eraging (Polyak & Juditsky, 1992). A thorough theoretical
+analysis of asymptotic convergence of SGD can be found
+in (Kushner & Yin, 2003), whereas some non-asymptotic
+results have been presented in (Moulines & Bach, 2011).
+
+A line of recent work known as variance-reduced SGD,
+e.g.
+(Roux et al., 2012; Shalev-Shwartz & Zhang, 2013;
+Johnson & Zhang, 2013; Defazio et al., 2014), has ex-
+ploited the ﬁnite sum structure of the empirical risk to es-
+tablish linear convergence for strongly convex objectives.
+There is also evidence of slightly improved statistical ef-
+ﬁciency (Babanezhad et al., 2015).
+(Frostig et al., 2015)
+provides a non-asymptotic analysis of a streaming SVRG
+algorithm (SSVRG), for which a a convergence rate ap-
+proaching that of the ERM is established.
+
+There have also been approaches of non-uniform sampling
+of data points, e.g. by (Schmidt et al., 2013; He & Tak´ac,
+2015), with the goal of sampling more important data
+points more often. This direction is largely orthogonal to
+our dynamic sizing of the sample, which is purely based on
+random subsampling.
+
+3. Methodology
+
+3.1. Setting and Assumptions
+
+We work under the assumptions made in Lemma 1 and fo-
+cus on the large data regime, where n ≥ κ and the geo-
+metric rate of convergence of SAGA depends on n through
+ρn = 1 − 1/n. This is an interesting regime as the guaran-
+teed progress per update is larger for smaller samples.
+
+This form of ρn implies for the case of performing t = n
+
+Starting Small – Learning with Adaptive Sample Sizes
+
+ǫ(m∗) + H(m∗)
+
+m∗
+
+ǫ(m)
+
+H(m)
+
+m
+
+Figure1.Tradeoff between sample statistical accuracy term
+H(m) and optimization suboptimality ǫ(m) using sample size
+m < n. Note that ǫ(m) is drawn by taking the ﬁrst order approx-
+imation of the upper bound Ce− n
+m . Here, m∗ = O(n/ log n)
+yields the best balance between these two terms.
+
+iterations, i.e. performing one pass1:
+
+E [RS(wn) − R∗
+
+S] ≤(cid:18)1 −
+
+1
+
+n(cid:19)n
+
+CS ≤
+
+CS
+e
+
+.
+
+(4)
+
+So we are guaranteed to improve the solution suboptimality
+on average by a factor 1/e per pass. This in turn implies
+that in order to get to a guaranteed accuracy O(n−α), we
+need O(αn log n) update steps.
+
+3.2. Sample Size Optimization
+
+For illustrative purposes, let us use the above result to select
+a sample size for SAGA, which yields the best guarantees.
+Proposition 2. Assume H(m) = D/m and n is given.
+Deﬁne C to be an upper-bound on CS ,∀S (from Lemma 1),
+then for m ≥ κ, V (m) := D
+m provides a bound
+on the expected suboptimality of SAGA. It is minimized for
+the choice
+
+m + Ce− n
+
+m∗ = max(κ,
+
+n
+
+log n + log C
+
+D) .
+
+Proof. The ﬁrst claim follows directly from the assump-
+tions and Lemma 1. Moreover the tightest bound is ob-
+tained by differentiating V with regard to 1/m and solving
+for m (see Lemma 9 in appendix).
+
+The result implies that we will perform roughly log n +
+log C
+D epochs on the optimally sized sample. Also the value
+of the bound is (for simplicity, assuming C = D)
+
+V (m∗) =
+
+log n
+
+n
+
++
+
+1
+n ≤ V (n) =
+
+1
+n
+
++
+
+1
+e
+
+,
+
+(5)
+
+showing that the single pass approximation error on the full
+sample is too large (constant), relative to the statistical ac-
+curacy.
+
+3.3. Dynamic Sample Growth
+
+As we have seen, optimizing over a smaller sample can be
+beneﬁcial (if we believe the signiﬁcance of the bounds).
+But why chose a single sample size once and for all? A
+smaller sample set seems advantageous early on, but as
+an optimization algorithm approaches the empirical min-
+imizer, it is hit by the statistical accuracy limit. This sug-
+gests that we should dynamically increment the size of the
+sample set. We illustrate this idea in Figure 2. In order to
+analyze such a dynamic sampling scheme, we need to re-
+late the suboptimality on a sub-sample T to a suboptimal-
+ity bound on S. We establish a basic result in the following
+theorem.
+Theorem 3. Let w be an (ǫ,T )-optimal solution,
+i.e. RT (w) − R∗
+T ≤ ǫ, where T ⊆ S, m := |T |, n := |S|.
+Then the suboptimality of w for RS is bounded w.h.p. in
+the choice of T as:
+
+ES [RS (w) − R∗
+
+S] ≤ ǫ +
+
+n − m
+
+n H(m) .
+
+(6)
+
+Proof. Consider the following equality
+
+RS(w) − R∗
+
+S = RS (w)
+
+(1)
+
+∓ RT (w)
+
+(2)
+
+∓ R∗
+T
+
+(3)
+
+− R∗
+S
+
+We bound the three involved differences (in expectation)
+T ≤ ǫ by assumption. (3):
+as follows: (2): RT (w) − R∗
+)] ≤ 0 as T ⊆ S. For (1) we
+ES [RT (w∗
+T
+apply the bound (see Lemma 10 in the appendix)
+
+) − RS (w∗
+S
+
+ES|T [RS(w) − RT (w)] ≤
+Moreover
+
+n − m
+
+n |R(w) − RT (w)| .
+
+ET [R(w)−RT (w)] ≤ sup
+by Eq. (2), which concludes the proof.
+
+w′ |R(w′)−RT (w′)| ≤ H(m)
+
+In plain English, this result suggests the following: If we
+have optimized w to (ǫ,T ) accuracy on a sub-sample T
+and we want to continue optimizing on a larger sample S ⊇
+T , then we can bound the suboptimality on RS by the same
+ǫ plus an additional ”switching cost” of (n− m)/n·H(m).
+4. Algorithms & Analysis
+
+4.1. Computational Limited Learning
+
+1The SAGA analysis holds for i.i.d. sampling, so strictly
+
+speaking this is not a pass, but corresponds to n update steps.
+
+The work of (Bottou, 2010) emphasized that for massive
+data sets the limiting factor of any learning algorithm will
+
+Starting Small – Learning with Adaptive Sample Sizes
+
+Algorithm 2 DYNASAGA
+1: Input:
+
+H(n/4)
+
+)
+
+(
+
+w
+R
+
+H(n/3)
+
+H(n/2)
+
+H(n)
+
+sample size
+
+Figure2.Illustration of an optimal progress path via sample size
+adjustment. The vertical black lines show the progress made at
+each step, thus illustrating the faster convergence for smaller sam-
+ple size.
+
+Table1.Comparison of obtained bounds for different SAGA vari-
+ants when performing T ≥ κ update steps.
+
+METHOD
+
+OPTIMIZATION ERROR
+
+SAMPLES
+
+SAGA (one pass)
+SAGA (optimal size)
+DYNASAGA
+
+const.
+
+O(log T · H(T ))
+
+O(H(T ))
+
+T
+
+T / log T
+
+T /2
+
+be its computational complexity T , rather than the number
+of samples n. For SGD this computational limit typically
+translates into the number of stochastic gradients evaluated
+by the algorithm, i.e. T becomes the number of update
+steps. One obvious strategy with abundant data is to sam-
+ple a new data point in every iteration. There are asymp-
+totic results establishing bounds for various SGD variants
+in (Bousquet & Bottou, 2008). However, SAGA and re-
+lated algorithms rely on memorizing past stochastic gradi-
+ents, cf. (Hofmann et al., 2015), which makes it beneﬁcial
+to revisit data points, and which is at the root of results such
+as Lemma 1. This leads to a qualitatively different behav-
+ior and our ﬁndings indicate that indeed, the trade-offs for
+large scale learning need to be re-visited, cf. Table 1.
+
+4.2. SAGA with Dynamic Sample Sizes
+
+We suggest to modify SAGA to work with a dynamic sam-
+ple size schedule. Let us deﬁne a schedule as a monotonic
+function M : Z+ → Z+, where t is the iteration number
+and M (t) the effective sample size used at t. We assume
+that a sequence of data points X = (x1, . . . , xn) drawn
+from P is given such that M induces a nested sequence of
+samples Tt := {xi : 1 ≤ i ≤ M (t)}.
+
+training examples X = (x1, x2, . . . , xn), xi ∼ P
+total number of iterations T (e.g. T = 2n)
+starting point w0 ∈ Rd (e.g w0 = 0)
+learning rate η > 0 (e.g. η = 1
+sample schedule M : [1 : T ] → [1 : n]
+
+4L )
+
+αi ← ∇fxi(w0) {can also be done on the ﬂy}
+
+2: w ← w0
+3: for i = 1, . . . , n do
+4:
+5: end for
+6: for t = 1, . . . , T do
+7:
+8:
+9:
+
+sample xi ∼ Uniform(x1, . . . , xM(t))
+g ← ∇fxi(wt−1)
+A ←PM(t)
+αi ← g
+
+10: wt ← wt−1 − η (g − αi + A)
+11:
+12: end for
+
+j=1 αj/M (t) {can be done incrementally}
+
+DYNASAGA generalizes SAGA (Defazio et al., 2014) in
+that it samples data points non-uniformly at each iteration.
+Speciﬁcally, for a given schedule M and iteration t, it sam-
+ples uniformly from Tt, but ignores X − Tt. The pseu-
+docode for DYNASAGA is shown in Algorithm 1.
+
+4.3. Upper Bound Recurrence
+
+We pursue the strategy of using the basic inequalities ob-
+tained so far and to stitch them together in the form of a re-
+currence. At any iteration t we allow ourselves the choice
+to augment the current sample of size m by some increment
+△m ≥ 0. We deﬁne an upper bound function U as follows
+
+U(t, n) = min
+
+
+ρnU(t − 1, n)
+m<n(cid:20)U(t, m) + n−m
+min
+
+n H(m)(cid:21),
+
+(7)
+
+such that U(0, m) = ξ, where the initial error ξ is deﬁned
+as:
+
+4L
+
+ξ :=
+
+µ (cid:2)R(w0) − R(w∗)(cid:3) .
+
+(8)
+
+We refer the reader to Lemma 8 in the Appendix for further
+details on how to derive the expression for ξ.
+
+The construction of Eq. (7) is motivated by the following
+result:
+Proposition 4. W.h.p. over the random n-sample X , the
+iterate sequence wt generated by DYNASAGA fulﬁls
+
+EX (cid:2)RTn (wt) − R∗
+
+Tn(cid:3) ≤ U(t, n) .
+
+Proof. By induction over t. The result for t = 0 follows
+directly from Lemma 8. The ﬁrst case in Eq. (7) for the
+
+Starting Small – Learning with Adaptive Sample Sizes
+
+induction step (ﬁxed sample size) follows from Lemma 1.
+The second case holds by virtue of Theorem 3 for any m,
+hence also for the minimum.
+
+Although the U-recursion can be solved for small n us-
+ing dynamic programming (assuming knowledge of all
+constants), we analyse a much simpler heuristics and its
+n → ∞ behavior. This leads to interesting insights, while
+being very practical. In particular, our algorithm is an any-
+time algorithm, which does not require knowledge of the
+total number of iterations T ahead of time.
+
+4.4. Sample Schedules
+
+In this section, we present and analyse two adaptive
+sample-size schemes for DYNASAGA.
+
+LINEAR We start with sample size κ and perform 2κ
+steps. From then on, we add a new sample every other
+iteration. The effective sample size is thus
+
+MLIN(t) = max(cid:8)2κ,(cid:6) t
+2(cid:7)(cid:9)
+
+Note that this strategy deﬁnes an upper bound on U(2t, t)
+and U(2t + 1, t).
+
+(9)
+
+ALTERNATING We have also implemented a variant
+where we perform updates in alternation: every other it-
+eration we sample a new data point, which is added to the
+set. However, we also force an update on this fresh sam-
+ple. In alternation, we simply re-sample an existing data
+point uniformly at random. We do not provide a theoret-
+ical analysis for this scheme but show experimentally that
+it slightly outperforms the LINEAR strategy (see results in
+the appendix). We thus report results for the ALTERNAT-
+ING strategy in the experimental section.
+
+4.5. Analysis
+
+We now provide an analysis that establishes the conver-
+gence rate of the LINEAR strategy.
+Lemma 5. For H(n) = Dn−α, 0 < α ≤ 1, the LINEAR
+strategy obtains the following suboptimality
+
+U(2n, n) ≤ H (n) +
+
+ξ
+
+n(cid:17)2
+2(cid:16) κ
+
+(10)
+
+Proof. By induction over n. The base case follows from
+Cm ≤ ξ. Using Eq. (7) and (10) for the inductive case, we
+get
+
+U (2(n + 1), n + 1)
+
+(7)
+
+≤ ρ2
+ξ
+
+(10)
+
+≤
+
+1
+
+n+1(cid:20)U (2n, n) +
+n + 1(cid:19)2
+2(cid:18) κ
+
+n + 1H(n)(cid:21)
+n2 (n + 2)
+(n + 1)3 H(n)
+
++
+
+Note that by deﬁnition of
+log [n(n + 2)] < 2 log(n + 1), and moreover
+
+the logarithmic function,
+
+n
+
+H(n)
+H(n + 1)
+which completes the proof.
+
+n + 1
+
+=
+
+n1−α
+
+(n + 1)1−α ≤ 1 ,
+
+This means that for large enough n the LINEAR strategy is
+able to approach the statistical accuracy with 2n iterations,
+i.e. two ”passes” over the data. Note the very signiﬁcant
+improvement relative to the log n factor inherent to the op-
+timal ﬁxed sample size choice (see Table 1 for a compari-
+son of these two bounds).
+
+What does that imply for the T = n case that we have been
+emphasizing? It is simple to state an answer as a corollary.
+Corollary 6. Under the same assumptions as Lemma 5, it
+holds for even n
+
+n(cid:17)2
+U(n, n) ≤(cid:0)3 · 2α−1(cid:1)H (n) + 2ξ(cid:16) κ
+
+Proof. Note that with Eq. (7) (a) and Lemma 5 (b) we get
+
+(a)
+
+(b)
+
+3
+
+≤
+
+U(2n, 2n)
+
+1
+2H(n)
+
+≤ U(2n, n) +
+
+2n(cid:17)2
+2H(n) + 2ξ(cid:16) κ
+The fact that H(n) = 2αH(2n) completes the proof.
+The proof of the above corollary suggests to only use
+n = T /2 samples, when performing T steps and to sim-
+ply ignore the other half (that potentially could have been
+sampled). One might wonder if a better strategy than the
+LINEAR one could be deﬁned, e.g. by iterating more than
+twice on each newly added sample or by increasing the
+sample size by more than one. The next lemma answers
+this question and proves that the LINEAR strategy is opti-
+mal for large-scale datasets as long as H(n) ∝ 1/n.
+Lemma 7. Assume that H(n) ∝ D/n, then the LINEAR
+strategy is optimal for all sample size n > κ.
+
+Proof. Here, we brieﬂy state a sketch of the proof . The de-
+tails are presented in Appendix A.2. First, we reformulate
+the problem of the optimal sample size schedule in terms
+of number of iterations on each samples size. Given that
+this problem is convex, we can use the KKT conditions to
+prove the optimality of incrementing by one sample (see
+Lemma 12) and iterating twice on each sample size (see
+Lemma 13).
+
+5. Experimental Results
+
+We present experimental results on synthetic as well as
+real-world data, which largely conﬁrms the above analysis.
+
+Starting Small – Learning with Adaptive Sample Sizes
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+0
+
+0.5
+
+1
+
+1.5
+
+2
+
+2.5
+
+3
+
+3.5
+
+4
+
+4.5
+
+5
+x 104
+
+2. A9A
+
+5
+
+10
+
+5. REAL-SIM
+
+15
+x 104
+
+0.5
+
+1
+
+1.5
+
+2
+
+2.5
+
+3
+
+3.5
+
+4
+x 104
+
+1. RCV
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 104
+
+4. IJCNN1
+
+ 
+
+SGD
+SAGA
+dynaSAGA
+SSVRG
+SGD:0.05
+SGD:0.005
+SGD/SVRG
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 104
+
+3. W8A
+
+−3
+
+−4
+
+−5
+
+−6
+
+−7
+
+−8
+
+−9
+
+−10
+
+−11
+
+−12
+
+0
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+−16
+
+−18
+
+0
+
+0
+
+−5
+
+−10
+
+−15
+
+−20
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 105
+
+−25
+
+0
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 106
+
+6. COVTYPE
+
+7. SUSY
+
+ 
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+−16
+
+−18
+
+−20
+
+0
+
+Figure4. Suboptimality on the empirical
+log2
+vertical red dashed line is drawn after exactly one epoch over the data.
+
+i.e.
+T (cid:3) where the expectation is taken over 10 independent runs. The training set includes 90% of the data. The
+
+risk. The vertical axis
+
+E10 (cid:2)RT (w
+
+t) − R∗
+
+risk,
+
+shows
+
+the suboptimality of
+
+the empirical
+
+−3
+
+−4
+
+−5
+
+−6
+
+−7
+
+−8
+
+]
+|
+)
+∗
+
+w
+(
+n
+R
+−
+
+)
+w
+(
+n
+R
+
+|
+[
+
+n
+
+l
+
+−9
+
+−10
+
+−11
+
+−12
+
+ 
+6
+
+κ = n 0 . 7 5
+
+ 
+
+Suboptimality of Risk
+y = −0.59 x + −1.68
+
+κ = √n
+
+ 
+
+Suboptimality of Risk
+y = −1.04 x + 0.88
+
+−3
+
+−4
+
+−5
+
+−6
+
+−7
+
+−8
+
+−9
+
+−10
+
+−11
+
+7
+
+8
+
+9
+
+l n( n)
+
+10
+
+11
+
+−12
+
+ 
+6
+
+12
+
+7
+
+8
+
+9
+
+l n( n)
+
+10
+
+11
+
+12
+
+Figure3.Results on synthetic dataset. (left) Since, the empirical
+suboptimality is ∝ 1/n, we expect the slope measured on this
+plot to be close to one. (right) Since κ = n0.75 slows down the
+convergence rate, the slope of this plot is less than one.
+
+5.1. Baselines
+
+We compare DYNASAGA (both the LINEAR and ALTER-
+NATING strategy) to various optimization methods pre-
+sented in Section 2. This includes SGD (with constant and
+decreasing step-size), SAGA, streaming SVRG (SSVRG)
+as well as the mixed SGD/SVRG approach presented
+in (Babanezhad et al., 2015).
+
+5.2. Experiment on synthetic data
+We consider linear regression, where inputs a ∈ Rd are
+drawn from a Gaussian distribution N (0, Σd×d) and out-
+puts are corrupted by additive noise y = hx, w∗i + ǫ,
+ǫ ∼ N (cid:0)0, σ2(cid:1). We are given n i.i.d observations of this
+
+Starting Small – Learning with Adaptive Sample Sizes
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+−16
+
+0
+
+−3
+
+−4
+
+−5
+
+−6
+
+−7
+
+−8
+
+−9
+
+−10
+
+−11
+
+−12
+
+−13
+
+0
+
+0.5
+
+1
+
+1.5
+
+2
+
+2.5
+
+3
+
+3.5
+
+4
+
+4.5
+
+5
+x 104
+
+2. A9A
+
+5
+
+10
+
+5. REAL-SIM
+
+15
+x 104
+
+0.5
+
+1
+
+1.5
+
+2
+
+2.5
+
+3
+
+3.5
+
+4
+x 104
+
+1. RCV
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 104
+
+4. IJCNN1
+
+ 
+
+SGD
+SAGA
+dynaSAGA
+SSVRG
+SGD:0.05
+SGD:0.005
+SGD/SVRG
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 104
+
+3. W8A
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 105
+
+6. COVTYPE
+
+ 
+
+0
+
+−5
+
+−10
+
+−15
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+−16
+
+−18
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+0
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+0
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+−16
+
+−18
+
+−20
+
+0
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+7. SUSY
+
+10
+x 106
+
+the
+
+Figure5.Suboptimality on the
+log2
+T . The vertical red dashed line is drawn after exactly one epoch over the data.
+
+expected risk. The vertical axis
+
+T )(cid:3), where S is a test set which includes 10% of the data and w
+
+E10 (cid:2)RS (w
+
+t) − RS (w
+
+shows
+
+∗
+
+suboptimality of
+
+i.e.
+T is the optimum of the empirical risk on
+
+expected risk,
+
+the
+
+∗
+
+i=1 (hai, wi − yi)2.
+
+i=1, from which we compute the
+
+model, S = {(ai, yi)}n
+nPn
+least squares risk RS(w) = 1
+By considering the matrix An to be a row-wise arrange-
+ment of the input vectors ai, we can write the Hessian
+matrix of Rn(w) as Σn = 1
+n An. When n ≫ d, the
+matrix Σn converges to Σ and we can therefore assume
+that Rn(w) is µ-strongly convex and L-Lipschitz where
+the constants µ and L are the smallest and largest eigenval-
+ues of Σ. We experiment with two different values for the
+condition number κ.
+
+n AT
+
+bound U(n, n) < O( 1
+shown in Figure 3.
+
+n ) which is conﬁrmed by the results
+
+3
+
+3
+
+4 : When κ = n
+
+Case κ = n
+inating term in the proposed upper-bound.
+
+n(cid:1)2 is the dom-
+U(n, n) is thus upper-bounded by O(cid:16) 1√n(cid:17), which is once
+
+again veriﬁed experimentally in Figure 3.
+
+4 , the term(cid:0) κ
+
+In this case,
+
+5.3. Experiments on Real Datasets
+
+Case κ = √n: We use a diagonal Σ with elements de-
+creasing from 1 to 1√n , hence κ = √n. In this particu-
+lar case the analysis derived in Lemma 5 predicts an upper
+
+We also ran experiments on several real-world datasets in
+order to compare the performance of DYNASAGA to state-
+of-the-art methods. The details of the datasets are shown
+in Table 2. Throughout all the experiments we used the lo-
+
+Starting Small – Learning with Adaptive Sample Sizes
+
+Table2.Details of the real datasets used in our experiments. All
+datasets were selected from the LIBSVM dataset collection.
+
+DATASET
+
+SIZE
+
+NUMBER OF FEATURES
+
+RCV1.BINARY
+A9A
+W8A
+IJCNN1
+REAL-SIM
+COVTYPE.BINARY
+SUSY
+
+20242
+32561
+49749
+49990
+72309
+581012
+5000000
+
+47236
+123
+300
+22
+
+20958
+
+54
+18
+
+2. Figures 4, and 5
+gistic loss with a regularizer λ = 1√n
+show the suboptimality on the empirical risk and expected
+risk after a single pass over the datasets. The various pa-
+rameters used for the baseline methods are described in Ta-
+ble 3. A critical factor in the performance of most base-
+lines, especially SGD, is the selection of the step-size. We
+picked the best-performing step-size within the common
+range guided by existing theoretical analyses, speciﬁcally
+η = 1/L and η = C
+C+µt for various values of C. Over-
+all, we can see that DYNASAGA performs very well, both
+as an optimization as well as a learning algorithm. SGD
+is also very competitive and typically achieves faster con-
+vergence than the other baselines, however, its behaviour
+is not stable throughout all the datasets. The SGD vari-
+ant with decreasing step-size is typically very fast in the
+early stages but then slows down after a certain number of
+steps. The results on the RCV dataset are somehow sur-
+prising as SGD with constant step-size clearly outperforms
+all methods but we show in the appendix that its behaviour
+gets worse as we increase the condition number. As can be
+seen very clearly, DYNASAGA yields excellent solutions
+in terms of expected risk after one pass (see suboptimality
+values that intersect with the vertical red dashed lines).
+
+6. Conclusion
+
+We have presented a new methodology to exploit the trade-
+off between computational and statistical complexity, in or-
+der to achieve fast convergence to a statistically efﬁcient so-
+lution. Speciﬁcally, we have focussed on a modiﬁcation of
+SAGA and suggested a simple dynamic sampling sched-
+ule that adds one new data point every other update step.
+Our analysis shows competitive convergence rates both in
+term of suboptimality on the empirical risk as well as (more
+importantly) the expected risk in a one pass or a two pass
+setting. These results have been validated experimentally.
+
+Our approach depends on the underlying optimization
+
+2We also present some additional results for various regulariz-
+
+ers of the form λ = 1
+
+np , p < 1 in the appendix
+
+method only through its convergence rate for minimizing
+an empirical risk. We thus suspect that a similar sample
+size adaption is applicable to a much wider range of algo-
+rithms, including to non-convex optimization methods for
+deep learning.
+
+References
+Babanezhad, Reza, Ahmed, Mohamed Osama, Virani,
+Alim, Schmidt, Mark, Koneˇcn`y, Jakub, and Sallinen,
+Scott. Stop wasting my gradients: Practical svrg. Ad-
+vances in Neural Information Processing Systems, 2015.
+
+Bottou, L´eon. Large-scale machine learning with stochas-
+In Proceedings of COMP-
+
+tic gradient descent.
+STAT’2010, pp. 177–186. Springer, 2010.
+
+Boucheron, St´ephane, Bousquet, Olivier, and Lugosi,
+G´abor. Theory of classiﬁcation: A survey of some recent
+advances. ESAIM: probability and statistics, 9:323–375,
+2005.
+
+Bousquet, Olivier. Concentration inequalities and empiri-
+cal processes theory applied to the analysis of learning
+algorithms. PhD thesis, Ecole Polytechnique, 2002.
+
+Bousquet, Olivier and Bottou, L´eon. The tradeoffs of large
+scale learning. In Advances in Neural Information Pro-
+cessing Systems, pp. 161–168, 2008.
+
+Boyd, Stephen and Vandenberghe, Lieven. Convex Opti-
+mization. Cambridge University Press, New York, NY,
+USA, 2004.
+
+Chandrasekaran, Venkat and Jordan, Michael I. Compu-
+tational and statistical tradeoffs via convex relaxation.
+Proceedings of the National Academy of Sciences, 110
+(13):E1181–E1190, 2013.
+
+Defazio, Aaron, Bach, Francis, and Lacoste-Julien, Simon.
+Saga: A fast incremental gradient method with support
+for non-strongly convex composite objectives.
+In Ad-
+vances in Neural Information Processing Systems, pp.
+1646–1654, 2014.
+
+Frostig, Roy, Ge, Rong, Kakade, Sham M., and Sidford,
+Aaron. Competing with the empirical risk minimizer in
+a single pass. In The Conference on Learning Theory,
+pp. 728–763, 2015.
+
+He, Xi and Tak´ac, Martin. Dual free SDCA for empiri-
+cal risk minimization with adaptive probabilities. CoRR,
+abs/1510.06684, 2015.
+
+Hofmann, Thomas, Lucchi, Aurelien, Lacoste-Julien, Si-
+mon, and McWilliams, Brian. Variance reduced stochas-
+tic gradient descent with neighbors. In Advances in Neu-
+ral Information Processing Systems 28, pp. 2296–2304.
+Curran Associates, Inc., 2015.
+
+Starting Small – Learning with Adaptive Sample Sizes
+
+Johnson, Rie and Zhang, Tong. Accelerating stochastic
+gradient descent using predictive variance reduction. In
+Advances in Neural Information Processing Systems, pp.
+315–323, 2013.
+
+Kushner, Harold J and Yin, George. Stochastic approxi-
+mation and recursive algorithms and applications, vol-
+ume 35. Springer Science & Business Media, 2003.
+
+Moulines, Eric and Bach, Francis R. Non-asymptotic anal-
+ysis of stochastic approximation algorithms for machine
+learning. In Advances in Neural Information Processing
+Systems, pp. 451–459, 2011.
+
+Polyak, Boris T and Juditsky, Anatoli B. Acceleration of
+stochastic approximation by averaging. SIAM Journal
+on Control and Optimization, 30(4):838–855, 1992.
+
+Robbins, Herbert and Monro, Sutton. A stochastic approx-
+imation method. The Annals of Mathematical Statistics,
+pp. 400–407, 1951.
+
+Roux, Nicolas L, Schmidt, Mark, and Bach, Francis R. A
+stochastic gradient method with an exponential conver-
+gence rate for ﬁnite training sets. In Advances in Neural
+Information Processing Systems, pp. 2663–2671, 2012.
+
+Schmidt, Mark, Roux, Nicolas Le, and Bach, Francis. Min-
+imizing ﬁnite sums with the stochastic average gradient.
+arXiv preprint arXiv:1309.2388, 2013.
+
+Shalev-Shwartz, Shai and Zhang, Tong. Stochastic dual co-
+ordinate ascent methods for regularized loss. The Jour-
+nal of Machine Learning Research, 14:567–599, 2013.
+
+Vapnik, Vlamimir. Statistical learning theory, volume 1.
+
+Wiley New York, 1998.
+
+Starting Small – Learning with Adaptive Sample Sizes
+
+A. Appendix
+
+A.1. Proofs
+
+Proof of Lemma 1.
+
+Proof. We start with the convergence rate of SAGA established in (Defazio et al., 2014) as
+
+EA(cid:2)kwt − w∗
+
+Sk2(cid:3) ≤ ρt
+
+|S|(cid:20)kw0 − w∗
+
+Sk2 +
+
+|S|
+µ|S| + L(cid:0)RS (w0) − h∇RS (w∗
+
+S), w0 − w∗
+
+S(cid:1)(cid:21) .
+Si − R∗
+
+(11)
+
+We then use the L-smoothness assumption of fx(w) to relate the suboptimality on the function values to the bound in
+Eq. (11).
+
+EA(cid:2)|RS(wt) − RS(w∗
+
+S )|(cid:3) = EA(cid:2)|Ex∈S(cid:2)fx(wt)(cid:3) − Ex∈S [fx(w∗
+
+L−smoothness
+
+S)]|(cid:3)
+
+LEA(cid:2)kwt − w∗
+Sk2(cid:3)
+CS ,
+where CS is the initial suboptimality on the empirical risk deﬁned as:
+
+≤
+Eq. 11
+≤ ρt
+|S|
+
+(12)
+
+CS = L(cid:20)kw0 − w∗
+
+Sk2 +
+
+|S|
+µ|S| + L(cid:0)RS(w0) − h∇RS (w∗
+
+S), w0 − w∗
+
+S(cid:1)(cid:21)
+Si − R∗
+
+Note that this initial error depends on the set S and its size |S|. In the following Lemma, we propose an upper bound on
+this initial error that is independent of S
+Lemma 8. W.h.p, the initial suboptimality error of sample S is bounded by:
+µ (cid:2)R(w0) − R(w∗)(cid:3)
+
+CS ≤ ξ :=
+
+4L
+
+Proof. We ﬁrst use the fact that RS (w) is µ-strongly convex as well as the optimality of w∗
+S
+
+to bound CS as
+
+CS
+
+L
+
+L
+
+≤
+
+S), w0 − w∗
+
+|S|
+µ|S| + L(cid:2)RS(w0) − h∇RS (w∗
+S)(cid:3) + |S|L
+S)(cid:3) + |S|L
+
+:= L(cid:18)kw0 − w∗
+Sk2 +
+µ|S| + L(cid:2)RS(w0) − h∇RS (w∗
+µ (cid:2)RS (w0) − RS (w∗
+S), w0 − w∗
+≤
+µ|S| + L(cid:2)RS(w0) − RS(w∗
+µ (cid:2)RS (w0) − RS (w∗
+S )(cid:3)
+µ (cid:2)RS (w0) − RS(w∗
+S )(cid:3)
+≤
+µ (cid:20)RS(w0)
+2L
+∓ R(w∗)
+∓ R(w0)
+
+S)(cid:21)
+S ) − RS (w∗
+
+∓ R(w∗
+
+(L>0)
+
+≤
+
+2L
+
+[3]
+
+[1]
+
+[2]
+
+S)(cid:3)(cid:19)
+Si − RS (w∗
+Si − RS (w∗
+S)(cid:3)
+
+We use the generalization bounds in (Vapnik, 1998) to upper bound [1] and [2]. For [3], we used the uniform convergence
+rate of the ERM that implies (Vapnik, 1998):
+
+R(w∗
+
+S) − R(w∗) ≤ c sup
+
+w |RS (w) − R(w)|,
+
+where c is a constant. We then get
+
+w.h.p
+
+≤
+
+CS
+
+2L
+
+µ (cid:2)H(|S|) + R(w0) − R(w∗) + cH(|S|) + H(|S|)(cid:3) .
+
+(13)
+
+Starting Small – Learning with Adaptive Sample Sizes
+
+We also make the further assumption that with high probability the initial suboptimality is greater than a constant factor of
+the statistical accuracy, i.e. R(w0) − R(w∗) > (2 + c)H(|S|). We can then further upper bound CS as
+
+CS ≤
+
+4L
+
+µ (cid:2)R(w0) − R(w∗)(cid:3) .
+
+(14)
+
+Lemma 9 (for Proposition 2).
+
+Proof.
+
+V (m) :=
+
+D
+m
+
++ Ce− n
+
+m , then arg min
+0<m≤n
+
+V (m) =
+
+n
+
+log nC
+D
+
+dV
+
+dm−1 = D − nCe− n
+
+m
+
+!= 0
+
+D
+nC
+
+nC
+D
+
+m =
+
+⇐⇒ e− n
+n
+⇐⇒
+m
+
+= log
+
+Solving for m, this indeed corresponds to a minimum which can be veriﬁed by checking the boundary values m = n and
+m → 0.
+Lemma 10 (for Theorem 3).
+
+ES|T [RS(w) − RT (w)] ≤
+
+n − m
+
+n |R(w) − RT (w)| .
+
+Proof.
+
+ES|T [RS (w) − RT (w)] = ES−T |T [RS (w) − RT (w)]
+
+1
+
+1
+
+=
+
+=
+
+fx(w) + Xy∈S−T
+n − m Xy∈S−T
+n − m Xy∈S−T
+
+= ES−T 
+n
+Xx∈T
+
+ES−T 
+n − m
+
+ES−T 
+
+[ES−T [RS−T (w)] − RT (w)]
+[R(w) − RT (w)]
+
+fy(w)
+m Xx∈T
+ −
+fy(w) − RT (w)
+
+fy(w) − RT (w)
+
+
+n − m
+n − m
+
+n
+
+n − m
+
+=
+
+=
+
+1
+
+1
+
+n
+
+n
+
+n
+
+fx(w)
+
+
+Starting Small – Learning with Adaptive Sample Sizes
+
+A.2. Optimality of the LINEAR Strategy
+We here introduce a new notation and chose to represent a sample size schedule by a vector tn = htmi, m < n where
+tm denotes the number of iterations on sample size m. Note that the total number of iterations up to the sample size n is
+T =Pm<n tm. We deﬁne n− as the sample size that we iterate on immediately before sample size n, i.e.
+
+n− = max{k < n : tk > 0}.
+
+(15)
+
+We now rewrite the suboptimality bound in terms of the sample size schedule tn as
+
+A(tn) = ES [RS(w(tn)) − RS(w∗)]
+
+= ρtn
+
+n (cid:18)A(tn−
+
+) +
+
+n − n−
+n H(n−)(cid:19) ,
+
+where the second equality is derived using Lemma 1 and Theorem 3.
+
+One can relate the upper bound U(n, n) to A(tn) using the following constrained program:
+
+U(n, n) = min
+tn
+
+A(tn)
+
+Subject to ∀m ≤ n : −tm ≤ 0
+
+tm = n
+
+Xm≤n
+
+(16)
+
+(17)
+
+In the following we aim at showing that the LINEAR Strategy is the optimal solution of Equation 16. We ﬁrst prove a
+Lemma that will be used in the rest of our analysis.
+Lemma 11 (Expansion of A(tn)). if H(n) = D/n, then
+
+n
+
+A(tn) := C(tn) +
+
+C(tn) := ξ
+
+n
+
+Xm=m0+1
+i (cid:19)ti
+Yi=m0(cid:18) i − 1
+
+Bm(tn), where
+
+, Bm(tn) :=
+
+D
+
+(m − 1)m
+
+n
+
+i (cid:19)ti
+Yi=m(cid:18) i − 1
+
+.
+
+(18)
+
+(19)
+
+Proof. Although one could painstakingly unroll the recursivity in Equation 16, we here provide a simple induction proof.
+First, one can easily verify that the equation holds for n = m0. For the inductive step, we assume it holds for n− and prove
+it holds for all {k : n− < k ≤ n}. According to the deﬁnition of n−, we have tk = 0 for all n− < k < n, and therefore
+
+ρtk
+k =
+
+k
+
+Ym=n−+1
+
+ρtm
+m .
+
+We will also make use of the following equality in our analysis:
+
+k − n−
+
+k H(n−) = H(n−) − H(k)
+
+(H(n)=D/n)
+
+=
+
+k
+
+Xm=n−+1
+
+H(m − 1) − H(m).
+
+(20)
+
+(21)
+
+We are now ready to prove the inductive step.
+
+Starting Small – Learning with Adaptive Sample Sizes
+
+A(tk)
+
+EQ 16
+= ρtk
+
+k (cid:18)A(tn−
+k 
+C(tn−
+
+= ρtk
+
+) +
+
+k − n−
+k H(n−)(cid:19)
+
+n−
+
+Bm(tn−
+
+) +
+
+EQ 19, 20
+
+= C(tk) +
+
+Bm(tk) + ρtk
+
+n−
+
+n−
+
+) +
+
+Xm=m0+1
+Xm=m0+1
+Xm=m0+1
+Xm=m0+1
+Xm=m0+1
+
+n−
+
+k
+
+Bm(tk)
+
+EQ 21
+= C(tk) +
+
+Bm(tk) + ρtk
+k
+
+EQ 20
+= C(tk) +
+
+Bm(tk) +
+
+= C(tk) +
+
+k H(n−)
+k − n−
+
+k H(n−)(cid:19)
+
+D
+
+(m − 1)m
+
+k
+
+k (cid:18) k − n−
+Xm=n−+1
+Xm=n−+1
+
+k
+
+Bm(tk)
+
+Using the deﬁnitions provided in Lemma 11, we investigate the optimality conditions of the optimal sample size strategy.
+In the following, we simplify our notations and write Bm and C instead of Bm(tn) and C(tn).
+As a ﬁrst step in our analysis, we introduce the following equations based on the deﬁnitions of Bm and C.
+
+(22)
+
+(23)
+
+(24)
+
+(25)
+
+(26)
+
+(27)
+
+(28)
+
+(29)
+
+(30)
+
+Bm =
+
+1
+
+i (cid:19)ti
+m(m − 1) Yi≥m(cid:18) i − 1
+exp log (cid:18) i − 1
+
+n
+
+n
+
+i (cid:19)ti
+Yi=m(cid:18) i − 1
+
+=
+
+m + 1
+
+m − 1(cid:18) m − 1
+
+m (cid:19)tm
+
+Bm+1 .
+
+i (cid:19)ti!! = exp" n
+Xi=m
+
+ti log(cid:18)1 −
+
+1
+
+i(cid:19)# .
+
+We now compute the derivative of A(tn
+
+=
+
+Yi=m
+∗ ) as
+∂A(tn
+∗ )
+∂tm
+
+1
+m
+
+= log(1 −
+m C +
+
+≃ −
+
+1
+
+m
+
+) C(tn) +
+Xk=m0+1
+Bk! .
+Xk=m0+1
+
+m
+
+Bk(tn)!
+
+C(tn) and Bm(tn) are log-convex (hence convex) functions with respect to tn. Since the sum operator preserves convexity
+(Boyd & Vandenberghe, 2004), A(tn) is convex as well. Let λi, ν denote the Lagrangian coefﬁcients associated with the
+inequality and equality constraints respectively. According the KKT conditions (Boyd & Vandenberghe, 2004) for the the
+optimal solution, the following inequalities hold:
+
+λm ≥ 0
+−λmt∗m = 0
+∂A(tn
+∗ )
+∂tm − λm + ν = 0
+
+(31)
+(32)
+
+(33)
+
+According the above condition there are two possible cases for the partial derivative ∂A(tn
+∗ )
+∂tm
+
+:
+
+Starting Small – Learning with Adaptive Sample Sizes
+
+• For the case of t∗m > 0, the slackness condition 32 implies that λm = 0. Then, according to the condition 33:
+
+∂A(tn
+∗ )
+∂tm
+m C +
+
+1
+
+m
+
+= −ν
+Xk=m0+1
+
+EQ. 30
+
+=⇒
+
+Bk! = ν
+
+• For the case of t∗m = 0, λi > 0(a.) holds based on the complementary slackness condition 32.
+
+∂A(tn
+∗ )
+∂tm
+m C +
+
+1
+
+m
+
+= λi − ν
+Xk=m0+1
+
+(a.)
+
+> −ν
+Bk! < ν
+
+EQ. 30
+
+=⇒
+
+(34)
+
+(35)
+
+In the following two lemmas we use the conditions of optimality derived in Equations 34 and 35 to prove optimality of
+the LINEAR Strategy. Speciﬁcally, we ﬁrst prove that for the optimal strategy, tm > 0 for m0 < m ≤ n− and tm = 0
+for m > n−. We also prove the optimality of incrementing the sample size by one. In the second lemma, we show that
+t∗m ≃ 2.
+Lemma 12 (Optimality of sample size increment). For large enough m, a schedule with tm = 0 and tm+1 > 0 cannot be
+optimal.
+
+Proof. Note that by repeated application of Equation (28) we obtain
+
+where optimality conditions a. tm− > 0 (EQ.34) and b. tm−+1 = 0 (EQ.35) yeild the last inequality:
+
+Bm+1 < Bm < ··· < Bm−+1
+
+EQ. 34 & 35
+
+<
+
+ν
+
+m−+1
+
+m−
+
+Bm−+1 =
+
+Bk ∓ C
+
+a.=
+
+m−+1
+
+Bk −
+
+Xk=m0+1
+Bk + C − mν
+
+Xk=m0+1
+Xk=m0+1
+< (m + 1)ν − mν = ν
+
+b.
+
+(36)
+
+(37)
+
+(38)
+
+(39)
+
+(40)
+
+(41)
+
+(42)
+
+On the other hand, optimality of a. tm+1 > 0 (EQ.34) and b. tm = 0 (EQ.35) also imply Bm+1 > ν which is in
+contradiction with the previously established Bm+1 < ν. Indeed, we have
+
+m+1
+
+m
+
+Bm+1 =
+
+m
+
+Bk −
+
+Xk=m0+1
+a.= (m + 1)ν −
+
+Xk=m0+1
+Xk=m0+1
+> (m + 1)ν − mν = ν
+
+b.
+
+Bk ∓ C
+
+Bk − C
+
+Lemma 13 (Optimality of two iterations). Consider tn
+∗
+large m : m0 < m ≤ n−, t∗m ≃ 2.
+
+as the minimizer of the optimization problem 17. For sufﬁciently
+
+Starting Small – Learning with Adaptive Sample Sizes
+
+Proof. Using Lemma 12, t∗m > 0 holds for m0 < m ≤ n−. We proceed with optimality conditions a. t∗m > 0 and b.
+t∗m−1 > 0 in equation 34.
+
+m
+
+m−1
+
+Bk ∓ C
+
+Bm =
+
+Bk −
+m−1
+
+Xk=m0+1
+Xk=m0+1
+a.= mν −
+Bk − C
+b.= mν − (m − 1)ν = ν
+
+Xk=m0+1
+
+Consequently, Bm = Bm+1 = ν. Using Equation 28, one conclude that t∗m ≃ 2:
+m+1(cid:17)
+log(cid:16)1 − 2
+m(cid:1) ≃
+log(cid:0)1 − 1
+
+m (cid:19)t∗
+=(cid:18) m − 1
+
+⇐⇒ t∗m =
+
+m − 1
+m + 1
+
+m
+
+(43)
+
+(44)
+
+(45)
+
+(46)
+
+2m
+m + 1 ≃ 2 .
+
+Starting Small – Learning with Adaptive Sample Sizes
+
+A.3. Additional Experimental results
+
+A.3.1. COMPARISON OF THE TWO ADAPTIVE SAMPLE SIZE SCHEMES FOR DYNASAGA
+
+We here compare the LINEAR and ALTERNATING schemes on the collection of real datasets presented in Table 2 for
+a regularizer λ = n− 1
+2 . The results for the empirical and expected risk shown in Figure 6 and Figure 7 show that the
+ALTERNATING scheme slightly outperforms the LINEAR strategy.
+
+ 
+
+ALTERNATING
+LINEAR
+
+0.5
+
+1
+
+1.5
+
+2
+
+2.5
+
+3
+
+3.5
+
+4
+x 104
+
+2. RCV
+
+ 
+
+ALTERNATING
+LINEAR
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 104
+
+5. IJCNN1
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+ 
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+ 
+0
+
+ 
+
+ALTERNATING
+LINEAR
+
+0.5
+
+1
+
+1.5
+
+2
+
+2.5
+
+3
+
+3.5
+
+4
+
+4.5
+
+5
+x 104
+
+3. A9A
+
+ 
+
+ALTERNATING
+LINEAR
+
+5
+
+10
+
+6. REAL-SIM
+
+15
+x 104
+
+−3
+
+−4
+
+−5
+
+−6
+
+−7
+
+−8
+
+−9
+
+ 
+0
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+−16
+
+−18
+
+ 
+0
+
+0
+
+−5
+
+−10
+
+−15
+
+−20
+
+−25
+
+ 
+0
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+ 
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+−16
+
+−18
+
+−20
+
+ 
+0
+
+ 
+
+ALTERNATING
+LINEAR
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 106
+
+1. SUSY
+
+ 
+
+ALTERNATING
+LINEAR
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 104
+
+4. W8A
+
+ 
+
+ALTERNATING
+LINEAR
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 105
+
+7. COVTYPE
+
+Figure6.Suboptimality on the empirical
+log2
+vertical green dashed line is drawn after exactly one epoch over the data.
+
+i.e.
+T (cid:3) where the expectation is taken over 10 independent runs. The training set includes 90% of the data. The
+
+risk. The vertical axis
+
+E10 (cid:2)RT (w
+
+t) − R∗
+
+risk,
+
+shows
+
+the suboptimality of
+
+the empirical
+
+Starting Small – Learning with Adaptive Sample Sizes
+
+−2.5
+
+−3
+
+−3.5
+
+−4
+
+−4.5
+
+−5
+
+−5.5
+
+−6
+
+−6.5
+
+−7
+
+−7.5
+
+ 
+0
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+ 
+0
+
+ 
+
+ALTERNATING
+LINEAR
+
+0.5
+
+1
+
+1.5
+
+2
+
+2.5
+
+3
+
+3.5
+
+4
+x 104
+
+2. RCV
+
+ 
+
+ALTERNATING
+LINEAR
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 104
+
+5. IJCNN1
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+ 
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+ 
+0
+
+ 
+
+ALTERNATING
+LINEAR
+
+0.5
+
+1
+
+1.5
+
+2
+
+2.5
+
+3
+
+3.5
+
+4
+
+4.5
+
+5
+x 104
+
+3. A9A
+
+ 
+
+ALTERNATING
+LINEAR
+
+5
+
+10
+
+6. REAL-SIM
+
+15
+x 104
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+−16
+
+−18
+
+−20
+
+ 
+0
+
+0
+
+−5
+
+−10
+
+−15
+
+ 
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+−16
+
+−18
+
+ 
+0
+
+ 
+
+ALTERNATING
+LINEAR
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 106
+
+1. SUSY
+
+ 
+
+ALTERNATING
+LINEAR
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 104
+
+4. W8A
+
+ 
+
+ALTERNATING
+LINEAR
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 105
+
+7. COVTYPE
+
+Figure7.Suboptimality on the
+log2
+T . The vertical green dashed line is drawn after exactly one epoch over the data.
+
+expected risk. The vertical axis
+
+T )(cid:3), where S is a test set which includes 10% of the data and w
+
+E10 (cid:2)RS (w
+
+t) − RS (w
+
+shows
+
+∗
+
+the
+
+suboptimality of
+
+i.e.
+T is the optimum of the empirical risk on
+
+expected risk,
+
+the
+
+∗
+
+A.3.2. EFFECT OF THE REGULARIZER
+
+We here present additional results for various regularizers of the form λ = 1
+np , p < 1. In the interest of clarity we only
+show results on four datasets. We can see a similar trend to the main results presented in the paper for λ = 1√n where
+DYNASAGAshows very fast convergence in terms of both empirical and expected risk. SGD is also very competitive
+and typically achieves faster convergence than the other baselines, however, its behaviour is not stable throughout all the
+datasets.
+
+ 
+
+ 
+
+−2
+
+−3
+
+−4
+
+−5
+
+−6
+
+−7
+
+−8
+
+−9
+
+−10
+
+0
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+0
+
+−1
+
+−2
+
+−3
+
+−4
+
+−5
+
+−6
+
+−7
+
+−8
+
+−9
+
+−10
+
+0
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+0
+
+Starting Small – Learning with Adaptive Sample Sizes
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+0
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+−16
+
+−18
+
+−20
+
+0
+
+0.5
+
+1
+
+1.5
+
+2
+
+2.5
+
+3
+
+3.5
+
+4
+x 104
+
+1. RCV
+
+0.5
+
+1
+
+1.5
+
+2
+
+2.5
+
+3
+
+3.5
+
+4
+
+4.5
+
+5
+x 104
+
+3. IJCNN1
+
+SGD
+SAGA
+dynaSAGA
+SSVRG
+SGD:0.05
+SGD:0.005
+SGD/SVRG
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 104
+
+ 
+
+2. W8A
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 105
+
+4. COVTYPE
+
+Figure8. Suboptimality on the empirical risk with regularizer λ = n− 2
+
+3
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+0
+
+0.5
+
+1
+
+1.5
+
+2
+
+2.5
+
+3
+
+3.5
+
+4
+x 104
+
+1. RCV
+
+0.5
+
+1
+
+1.5
+
+2
+
+2.5
+
+3
+
+3.5
+
+4
+
+4.5
+
+5
+x 104
+
+3. IJCNN1
+
+SGD
+SAGA
+dynaSAGA
+SSVRG
+SGD:0.05
+SGD:0.005
+SGD/SVRG
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 104
+
+ 
+
+2. W8A
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 105
+
+4. COVTYPE
+
+Figure9. Suboptimality on the expected risk with regularizer λ = n− 2
+
+3
+
+Starting Small – Learning with Adaptive Sample Sizes
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+0
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+−16
+
+−18
+
+0
+
+0.5
+
+1
+
+1.5
+
+2
+
+2.5
+
+3
+
+3.5
+
+4
+x 104
+
+1. RCV
+
+0.5
+
+1
+
+1.5
+
+2
+
+2.5
+
+3
+
+3.5
+
+4
+
+4.5
+
+5
+x 104
+
+3. IJCNN1
+
+SGD
+SAGA
+dynaSAGA
+SSVRG
+SGD:0.05
+SGD:0.005
+SGD/SVRG
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 104
+
+ 
+
+2. W8A
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 105
+
+4. COVTYPE
+
+Figure10. Suboptimality on the empirical risk with regularizer λ = n− 3
+
+4
+
+ 
+
+ 
+
+−1
+
+−2
+
+−3
+
+−4
+
+−5
+
+−6
+
+−7
+
+−8
+
+−9
+
+−10
+
+0
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+0
+
+−1
+
+−2
+
+−3
+
+−4
+
+−5
+
+−6
+
+−7
+
+0
+
+0
+
+−1
+
+−2
+
+−3
+
+−4
+
+−5
+
+−6
+
+−7
+
+−8
+
+−9
+
+0.5
+
+1
+
+1.5
+
+2
+
+2.5
+
+3
+
+3.5
+
+4
+x 104
+
+1. RCV
+
+0
+
+−2
+
+−4
+
+−6
+
+−8
+
+−10
+
+−12
+
+−14
+
+0
+
+−3
+
+−4
+
+−5
+
+−6
+
+−7
+
+−8
+
+−9
+
+−10
+
+−11
+
+−12
+
+−13
+
+0
+
+SGD
+SAGA
+dynaSAGA
+SSVRG
+SGD:0.05
+SGD:0.005
+SGD/SVRG
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 104
+
+ 
+
+2. W8A
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+x 105
+
+4. COVTYPE
+
+−10
+
+0
+
+0.5
+
+1
+
+1.5
+
+2
+
+2.5
+
+3
+
+3.5
+
+4
+
+4.5
+
+5
+x 104
+
+3. IJCNN1
+
+Figure11. Suboptimality on the expected risk with regularizer λ = n− 3
+
+4
+
+Starting Small – Learning with Adaptive Sample Sizes
+
+A.4. Details of Experiments
+
+The various parameters of all baselines and DYNASAGA are represented in Table 3.
+
+Table3. Experimental setting
+
+METHOD
+
+PARAMETER
+
+NOTATION VALUE
+
+SGD
+SAGA
+SSVRG AND SGD/SVRG FACTOR FOR INCREASING SAMPLE SIZE
+
+STEP SIZE
+STEP SIZE
+
+SGD:0.05
+SGD:0.005
+DYNASAGA
+
+A CONSTANT PARAMETER
+STEP SIZE
+INITIAL BATCH SIZE
+NUMBER OF STEPS ON EACH BATCH SIZE
+STEP SIZE
+STEP SIZE
+STEP SIZE FOR SAMPLE SIZE m
+INITIAL BATCH SIZE
+NUMBER OF ITERATIONS ON SAMPLE SIZE m
+
+ηt
+η
+b
+p
+η
+k0
+m
+η
+η
+
+η(m)
+
+k0
+
+t(m)
+
+0.1
+
+0.1+µt
+
+0.3
+
+L+µn
+
+3
+2
+1
+
+10bp
+κ
+κ
+η
+
+0.05
+0.005
+
+0.3
+
+L+µm
+
+κ
+2
+
+

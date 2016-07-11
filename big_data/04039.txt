@@ -1,0 +1,2231 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+ 
+3
+1
+
+ 
+ 
+]
+
+.
+
+A
+N
+h
+t
+a
+m
+
+[
+ 
+ 
+
+1
+v
+9
+3
+0
+4
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+AP-Cloud: Adaptive Particle-in-Cloud Method for
+
+Optimal Solutions to Vlasov-Poisson Equation
+
+Xingyu Wanga, Roman Samulyak1a,b, Xiangmin Jiaoa, Kwangmin Yua,b
+
+aDepartment of Applied Mathematics and Statistics, Stony Brook University, Stony
+
+bComputational Science Center, Brookhaven National Laboratory, Upton, NY 11973
+
+Brook, NY 11794
+
+Abstract
+
+We propose a new adaptive Particle-in-Cloud (AP-Cloud) method for ob-
+taining optimal numerical solutions to the Vlasov-Poisson equation. Unlike
+the traditional particle-in-cell (PIC) method, which is commonly used for
+solving this problem, the AP-Cloud adaptively selects computational nodes
+or particles to deliver higher accuracy and eﬃciency when the particle dis-
+tribution is highly non-uniform. Unlike other adaptive techniques for PIC,
+our method balances the errors in PDE discretization and Monte Carlo in-
+tegration, and discretizes the diﬀerential operators using a generalized ﬁnite
+diﬀerence (GFD) method based on a weighted least square formulation. As
+a result, AP-Cloud is independent of the geometric shapes of computational
+domains and is free of artiﬁcial parameters. Eﬃcient and robust implemen-
+tation is achieved through an octree data structure with 2:1 balance. We
+analyze the accuracy and convergence order of AP-Cloud theoretically, and
+verify the method using an electrostatic problem of a particle beam with
+halo. Simulation results show that the AP-Cloud method is substantially
+more accurate and faster than the traditional PIC, and it is free of artiﬁcial
+forces that are typical for some adaptive PIC techniques.
+
+Keywords: particle method, generalized ﬁnite diﬀerence, PIC, AMR-PIC
+2000 MSC: 65M06, 70F99, 76T10
+
+1Corresponding author, roman.samulyak@stonybrook.edu
+
+Preprint submitted to Journal of Computational Physics
+
+March 15, 2016
+
+1. Introduction
+
+The Particle-in-Cell (PIC) method [1] is a popular method for solving
+the Vlasov-Poisson equations for a class of problems in plasma physics, as-
+trophysics, and particle accelerators, for which electrostatic approximation
+applies, as well as for solving the gravitational problem in cosmology and
+astrophysics. In such a hybrid particle-mesh method, the distribution func-
+tion is approximated using particles and the Poisson problem is solved on a
+rectangular mesh. Charges (or masses) of particles are interpolated onto the
+mesh, and the Poisson problem is discretized using ﬁnite diﬀerences or spec-
+tral approximations. On simple rectangular domains, FFT methods are most
+commonly used for solving the Poisson problem. In the presence of irregular
+boundaries, ﬁnite diﬀerence approximations are often used, complemented
+by a cut-cell (a.k.a. embedded boundary) method [2] for computational cells
+near boundaries, and fast linear solvers (including multigrid iterations) for
+the corresponding linear system. The computed force (gradient of the po-
+tential) on the mesh is then interpolated back to the location of particles.
+For problems with irregular geometry, unstructured grid with ﬁnite element
+method is often used.
+
+The traditional PIC method has several limitations. It is less straight-
+forward to use for geometrically complex domains. The aforementioned em-
+bedded boundary method, while maintaining globally second order accuracy
+for the second order ﬁnite diﬀerence approximation, usually results in much
+larger errors near irregular boundaries [3]. It is also diﬃcult to generalize to
+higher order accuracy.
+
+Another major drawback of the PIC method is associated with highly
+non-uniform distribution of particles. As shown in Section 2, the discretiza-
+tion of the diﬀerential operator and the right hand side in the PIC method is
+not balanced in terms of errors. The accuracy is especially degraded in the
+presence of non-uniform particle distributions. The AMR-PIC [4, 5] improves
+this problem by performing block-structured adaptive mesh reﬁnement of a
+rectangular mesh, so that the number of particles per computational cell is
+approximately the same. However, the original AMR-PIC algorithms suf-
+fered from very strong artiﬁcial self-forces due to spurious images of particles
+across boundaries between coarse and reﬁned mesh patches. Analysis of self-
+force sources and a method for their mitigation was proposed in [6].
+
+In this paper, we propose a new adaptive Particle-in-Cloud (AP-Cloud)
+method for obtaining optimal numerical solutions to the Vlasov-Poisson
+
+2
+
+equation.
+Instead of a Cartesian grid as used in the traditional PIC, the
+AC-Cloud uses adaptive computational nodes or particles with an octree data
+structure. The quantity characterizing particles (charge in electrostatic prob-
+lems or mass in gravitational problems) is assigned to computational nodes
+by a weighted least squares approximation. The partial diﬀerential equation
+is then discretized using a generalized ﬁnite diﬀerence (GFD) method and
+solved with fast linear solvers. The density of nodes is chosen adaptively, so
+that the error from GFD and that from Monte Carlo integration are balanced,
+and the total error is approximately minimized. The method is independent
+of geometric shape of computational domains and free of artiﬁcial self-forces.
+In Section 2, we
+analyze numerical errors of the traditional PIC method and formulate op-
+timal reﬁnement strategy. The AP-Cloud method, generalized ﬁnite diﬀer-
+ences, and the relevant error analysis are presented in Section 3. Section
+4 describes some implementation details of the method. Section 5 presents
+numerical veriﬁcation tests using 2D and 3D problems of particle beams with
+halo and additional tests demonstrating the absence of artiﬁcial self-forces.
+We conclude this paper with a summary of our results and perspectives for
+the future work.
+
+The remainder of the paper is organized as follows.
+
+2. Error analysis of particle-in-cell method
+
+In a particle-in-cell (PIC) method, the computational objects include a
+large number of particles and an associated Cartesian grid. These parti-
+cles are typically randomly sampled and represent an even greater num-
+ber of physical particles (e.g., protons), so they are also known as “macro-
+particles”, but conventionally simply referred to as particles. For simplicity
+of presentation, we will focus on electrostatic problems, for which the states
+are particle charges. Suppose there are N charged particles at positions
+P = {pi | i = 1, 2, . . . , N} in D dimensions, and let qi denote the charge at
+pi. For simplicity, we assume that all the particles carry the same amount
+Ω ρ(x)dx = 1, and the charges
+of the particles can be represented accurately by a continuous charge distri-
+bution function ρ. We assume that ρ is smooth and positive, and its value
+and all derivatives have comparable magnitude. Let M denote the Cartesian
+grid, and without loss of generality, suppose its edge length is h along all di-
+rections, and let yj denote the jth grid point in M . A PIC method estimates
+
+of charge, the total charge is 1, i.e., N qi =(cid:82)
+
+3
+
+the charge density ρ on M , then solves the Poisson equation
+
+∆φ = cρ
+
+(1)
+
+on M to obtain the potential φ, whose gradient is the electric ﬁeld E. In this
+setting, a PIC method consists of the following three steps:
+
+1. Approximate the right-hand side of (1) by interpolating the states from
+
+particles to the grid points yj, i.e.,
+
+˜ρ(yj,P, h) =
+
+1
+hD
+
+qiΦ
+
+h
+
+N(cid:88)
+
+i=1
+
+(cid:18)pi − yj
+
+(cid:19)
+
+(cid:90)
+
+(cid:19)
+
+(cid:18)x − yj
+(cid:123)(cid:122)
+
+h
+
+¯ρ(yj ,h)
+
+≈ 1
+hD
+
+(cid:124)
+
+ρ(x)Φ
+
+Ω
+
+≈ ρ(yj),
+
+dx
+
+(cid:125)
+
+(2)
+where Φ is the interpolation kernel, a.k.a. the charge assignment scheme.
+2. Discretize the left-hand side of (1) on M , typically using the ﬁnite
+3. Obtain the electric ﬁeld E by computing ∇φ using ﬁnite diﬀerence,
+and then interpolating E from the grid points to the particles using the
+same interpolation kernel Φ as in Step 1, i.e.,
+
+diﬀerence method, and then solve the resulting linear system.
+
+˜E(pi,P, h) =
+
+1
+hD
+
+˜E(yj,P, h)Φ
+
+≈ E(pi).
+
+(3)
+
+(cid:18)pi − yj
+
+(cid:19)
+
+h
+
+(cid:88)
+
+yj∈M
+
+D(cid:89)
+
+One of the most commonly used charge assignment schemes Φ is the cloud-
+in-cell (CIC) scheme
+
+Φ(x) =
+
+max (1 − |xd|, 0),
+
+(4)
+
+d=1
+
+for which the interpolation in Step 3 corresponds to bilinear and trilinear
+interpolation in 2-D and 3-D, respectively.
+
+In PIC, the error in potential φ comes from two sources. One is from the
+ﬁrst approximation in (2), for which the analysis is similar to Monte Carlo
+integration within a control volume associated with yj, under the assumption
+that (2) is a continuous function. The other source is the discretization error
+of both the second approximation in (2) in Step 1 and the left-hand side of
+(1) on M in Step 2. We denote the above two errors from these two sources
+
+4
+
+as EM and ED, respectively. As shown in Appendix A, under the assumption
+that the interpolation kernel Φ satisﬁes the positivity condition, the expected
+value of the former is
+
+(cid:32)(cid:114)
+
+(cid:33)
+
+,
+
+E[|EM|] = O
+
+ρ(y)
+N hD
+
+and the discretization error is
+
+ED = O(cid:0)ρ(y)h2(cid:1) .
+
+Let A denote the coeﬃcient matrix of the linear system in step 2, and suppose
+(cid:107)A−1(cid:107) is bounded by a constant. The expected total error in the computed
+potential φ is then
+
+(cid:32)(cid:114)
+
+(cid:33)
+
+E = O(E[|EM|]) + O(ED) = O
+
+ρ(y)
+N hD + ρ(y)h2
+
+.
+
+In general, ED dominates the total error for coarse grids and EM dominates
+for ﬁner grids. The total expected error is approximately minimized if EM
+and ED are balanced.
+If the particles are uniformly distributed, then the
+errors are balanced when
+
+h = O (N ρ(y))
+
+− 1
+
+4+D .
+
+(5)
+
+In this setting, the discretization error in φ is second order in h. The dis-
+cretization error in numerical diﬀerentiation E = ∇φ is also second order, a
+fact called supraconvergence [12]. Thus, although the optimal mesh size is
+deduced to minimize the error in φ, the error in E is also minimized.
+
+In many applications, the particle distribution is highly non-uniform, for
+which the PIC is neither eﬃcient nor accurate. In [5], an adaptive method,
+called AMR-PIC, was proposed, which ﬁxed the number of particles per cell,
+and hence
+
+h = O (N ρ(y))
+
+− 1
+
+D .
+
+The AMR-PIC over-reﬁnes the grid compared to the optimal grid resolution
+in (5). In addition, the original AMR-PIC technique also introduces artiﬁcial
+self forces. New adaptive strategies are needed to resolve both of these issues.
+
+5
+
+3. Adaptive Particle-in-Cloud method
+
+In this section, we describe a new adaptive method, called Adaptive
+Particle-in-Cloud or AP-Cloud, which approximately minimizes the error by
+balancing Monte Carlo noise and discretization error, and at the same time
+is free of the artiﬁcial self forces present in AMR-PIC.
+
+The AP-Cloud method can be viewed as an adaptive version of PIC that
+replaces the traditional Cartesian mesh of PIC by an octree data structure.
+We use a set of computational nodes, which are octree cell centres, instead
+of the Cartesian grid, of which the distribution is derived using an error
+balance criterion. Computational nodes will be referred to as nodes in the
+remainder of the paper. Instead of the ﬁnite diﬀerence discretization of the
+Laplace operator, we use the method of generalized ﬁnite-diﬀerence (GFD)
+[9], based on a weighted least squares formulation. The framework includes
+interpolation, least squares approximation, and numerical diﬀerentiation on a
+stencil in the form of cloud of nodes in a neighborhood of the point of interest.
+It is used for the charge assignment scheme, numerical diﬀerentiation, and
+interpolation of solutions. The advantage of GFD is that it can treat coarse
+regions, reﬁned regions, and reﬁnement boundaries in the same manner, and
+it is more ﬂexible for problems in complex domain or with irregular reﬁnement
+area. As a method of integration, GFD will be used in the quadrature rule in
+charge assignment scheme. The new charge assignment scheme, together with
+GFD diﬀerentiation and interpolation operators from computational nodes to
+particles is easily generalizable to higher order schemes. We described the key
+components of the AP-Cloud in this section, and discuss its implementation
+details in Section 4.
+
+3.1. Generalized ﬁnite-diﬀerence method
+
+ﬁnite-diﬀerence method.
+
+For simplicity of presentation, we consider a second order generalized
+Let yj, j ∈ {1, 2,··· , m} be the nodes in a neighborhood of reference
+
+node y0. Given a C 2 function f , by Taylor expansion we have
+f (yj) = f (y0) + (yj − y0)T∇f (y0) + (yj − y0)T H(y0)(yj − y0) + O(h3), (6)
+where h is the characteristic interparticle distance in the neighborhood, for
+d|, and H is the Hessian matrix. Putting equations
+example, h = max
+
+d − y0
+|yj
+
+d,j
+
+for all neighbors together and omitting higher order term, we obtain
+
+V (y0)∂f (y0) = δf (y0),
+
+(7)
+
+6
+
+where fyd(y0) denotes the derivative of f with respect to yd, and
+
+1
+
+1
+
+1
+
+1
+
+1
+
+1
+
+1
+
+1
+
+1
+
+1
+
+For example, in 2-D, let m = 5 and δyj
+
+d, then
+
+d = yj
+
+V (y0) =
+
+
+
+1)2
+1)2
+1)2
+1)2
+1)2
+
+δy1
+δy2
+δy3
+δy4
+δy5
+
+δy1
+1
+δy2
+1
+δy3
+1
+δy4
+1
+δy5
+1
+
+δy1
+2
+δy2
+2
+δy3
+2
+δy4
+2
+δy5
+2
+
+2(δy1
+2(δy2
+2(δy3
+2(δy4
+2(δy5
+
+2)2
+2)2
+2)2
+2)2
+2)2
+
+2(δy1
+2(δy2
+2(δy3
+2(δy4
+2(δy5
+
+d − y0
+1δy1
+2
+1δy2
+2
+1δy3
+2
+1δy4
+2
+1δy5
+2
+
+ ,
+∂f (y0) =(cid:2)fy1(y0), fy2(y0), fy1y1(y0), fy1y2(y0), fy2y2(y0)(cid:3)T ,
+δf (y0) =(cid:2)f (y1) − f (y0), f (y2) − f (y0), . . . , f (y5) − f (y0)(cid:3)T .
+ ,
+
+d = h−1δyj
+V0(y0)∂f0(y0) = δf (y0),
+
+d. Rewrite (7) as
+
+
+
+V0(y0) =
+
+To analyze the error in GFD, let ξj
+
+where
+
+∂f0(y0) =(cid:2)hfy1(y0), hfy2(y0), h2fy1y1(y0), h2fy1y2(y0), h2fy2y2(y0)(cid:3)T .
+
+(8)
+
+(9)
+
+(10)
+
+(11)
+
+(12)
+
+(13)
+
+where V (y0) is a generalized Vandermonde matrix, ∂f (y0) is the ﬁrst order
+and second order derivative of f at y0, and δf (y0) is the increment of f .
+
+ξ1
+1
+ξ2
+1
+ξ3
+1
+ξ4
+1
+ξ5
+1
+
+ξ1
+2
+ξ2
+2
+ξ3
+2
+ξ4
+2
+ξ5
+2
+
+1
+
+1
+
+1
+
+2(ξ1
+2(ξ2
+2(ξ3
+2(ξ4
+2(ξ5
+
+1)2
+1)2
+1)2
+1)2
+1)2
+
+1
+
+1
+
+1ξ1
+ξ1
+2
+ξ2
+1ξ2
+2
+ξ3
+1ξ1
+2
+1ξ4
+ξ4
+2
+1ξ5
+ξ5
+2
+
+1
+
+1
+
+1
+
+2(ξ1
+2(ξ2
+2(ξ3
+2(ξ4
+2(ξ5
+
+2)2
+2)2
+2)2
+2)2
+2)2
+
+1
+
+1
+
+Now V0(y0) depends on the shape but not the diameter of the GFD stencil.
+The error in solving linear system is
+
+(cid:107)Error(∂f0(y0))(cid:107) ≤ (cid:107)V −1
+
+0
+
+(y0)(cid:107)(cid:107)Error(δf (y0))(cid:107).
+
+(14)
+
+The error in right hand size comes from the omitted term in the Taylor ex-
+(y0)(cid:107) is a constant
+pansion O(fyiyj ykh3) = O(f h3) for i, j, k ∈ 1, 2, and (cid:107)V −1
+independent of h, so the error in ∂f0(y0) is also O(f h3). Because the coeﬃ-
+cient before the lth order derivative in ∂f0(y0) is hl, the error for lth order
+derivative is O(f h3−l)
+
+0
+
+In this example, the number of neighbors is equal to the number of un-
+knowns, and it is quite likely for V0(y0) to be nearly singular. In practice,
+
+7
+
+we use more neighbors in the stencil than the number of coeﬃcients in the
+Taylor series to improve the stability.
+In AP-Cloud method, 8 neighbors
+instead of 5 are used for the second order GFD in two dimensions, and 17
+neighbors instead of 9 are used in three dimensions. In this case, the linear
+system is a least square problem. It is often helpful to assign more weights
+to closer neighbors to improve the accuracy, which is called the weighted lest
+square method [8]. AP-Cloud method uses a normalized Gaussian weight
+function [7]:
+
+e−r2/r2
+
+max − e−c
+1 − e−c
+
+W (r) =
+
+,
+
+(15)
+
+where W is the weight, r is the distance of the neighbor from the reference
+particle, rmax is the maximum distance of all neighbors in the stencil from
+the reference particle, c = 4.
+
+By solving the linear system or least square problem (7), we can ex-
+press the gradient ∂f as linear combinations of δf . For example, once the
+potential φ is computed at nodes, we can ﬁnd its gradient by generalized
+ﬁnite-diﬀerence, and then interpolate it to particles by Taylor expansion.
+Generally, the error of the kth order GFD interpolation is O(f (y)hk+1), and
+its approximation of the lth order derivative is O(f (y)hk−l+1).
+
+Given a set of nodes, the selection for GFD neighbors, or the shape of the
+GFD stencil, is important for both accuracy and stability. Simply choosing
+the nearest nodes to be neighbors may lead to an imbalanced stencil. We
+follow the quadrant criterion in [10] and select two nearest nodes from each
+quadrant to be neighbors.
+
+3.2. Algorithm of AP-Cloud method
+
+AP-Cloud also has three steps to calculate the electric ﬁeld given by a
+particle distribution: a density estimator, a Poisson solver, and an interpola-
+tion step, but each step is diﬀerent from its counterpart in PIC. Let C be the
+set of all computational nodes, and f (C) = (f (y1), f (y2),··· , f (yn)), where
+n is the total number of nodes. Below is a detailed description of the three
+steps.
+
+1. Approximate density by interpolating states from particles P to com-
+
+8
+
+putational nodes C by
+
+d1,d2,··· ,dl=1
+
+a(yj)T ∂ ˜ρ(yj)
+
+D(cid:88)
+N(cid:88)
+
+qiΦ
+
+i=1
+
+k(cid:88)
+
+l=0
+
+1
+hD
+
+(cid:124)
+
+Ω
+
+1
+hD
+
+(cid:90)
+(cid:124)
+(cid:18)pi − yj
+(cid:123)(cid:122)
+
+h
+
+i=1
+
+l(cid:89)
+(cid:19)
+(cid:125)
+
+.
+
+ρM (yj ,h)
+
+: =
+
+=
+
+(cid:18)x − yj
+
+(cid:19)
+
+h
+
+)Φ
+
+(xdi − yj
+(cid:123)(cid:122)
+
+di
+
+ad1,d2,··· ,dl
+
+(yj )
+
+(16)
+
+˜ρyd1 yd2···ydl
+
+(yj)
+
+dx
+
+(cid:125)
+
+The right hand side of (16) is identical to the Monte Carlo integration
+in PIC, but the left hand side is a linear combination of derivatives,
+instead of the simple ˜ρ(yj,P, h) in the PIC method. Because the coeﬃ-
+cients in the linear combination, a(yj) = (ad1,d2,··· ,dl(yj)), depend only
+on h and the interpolation kernel, they can be easily pre-calculated
+(yj) are in
+and tabulated in a lookup table. The derivatives ˜ρyd1 yd2···ydl
+turn linear combinations of density values ρ(yj) given by least square
+solution of (7):
+
+∂ ˜ρ(yj) = V (yj)+δ ˜ρ(yj),
+
+(17)
+
+where V (yj)+ is the pseudo-inverse of the Vandermonde matrix.
+Let C(yj) be a matrix such that δ ˜ρ(yj) = C(yj)˜ρ(C). Substituting (17)
+into (16), we get a linear equation for density values at the reference
+node yj and its neighors
+
+a(yj)T V (yj)+C(yj)
+
+˜ρ(C) = ρM (yj, h).
+
+(18)
+
+(cid:124)
+
+(cid:123)(cid:122)
+
+b(yj )
+
+(cid:125)
+
+Putting equations for all nodes together, we obtain a global linear sys-
+tem for density values
+
+B(C)˜ρ(C) = ρM (C, h).
+
+(19)
+where B(C) = [b(y1); b(y2);··· ; b(yn)]. Solution of (19) is the esti-
+mated density in AP-Cloud method.
+2. Discretize the left-hand side of (1) on C using GFD method. Solve the
+resulting linear system for φ(C).
+3. Obtain the electric ﬁeld E by computing ∇φ using GFD method, and
+then interpolating φ and E from the C to P using a Taylor expansion.
+
+9
+
+3.3. Error analysis for AP-Cloud
+
+(cid:113) ρ(yj )
+
+Similar to PIC, the error in AP-Cloud also contains the Monte Carlo
+noise EM and the discretization error ED. The Monte Carlo noise in replacing
+¯ρ(yj, h) by ρM (yj, h) is identical to the Monte Carlo noise in PIC, that is,
+O(
+N hD ). The discretization error in the ﬁrst step has two sources: the
+Taylor expansion in (16) and the GFD approximation of the gradient in (17).
+The diﬀerence between the average of the kth order Taylor expansion of ρ and
+ρ itself is O(ρ(yj)h2(cid:98) k
+2 (cid:99)+2), where we obtain an additional order for even k
+due to the symmetry of the kernel Φ. Because the error of lth order derivative
+is O(ρ(yj)hk−l+1), and the coeﬃcient for lth order derivative ad1,d2,··· ,dl(yj) =
+O(hl), the discretization error given by the GFD derivative approximation is
+O(ρ(yj)hk+1) ≥ O(ρ(yj)h2(cid:98) k
+2 (cid:99)+2). Thus the total discretization error in step
+1 is O(ρ(yj)hk+1).
+Generalized ﬁnite-diﬀerence Poisson solver has the same accuracy with its
+estimation of ∆φ, i.e., O(ρ(y)hk−1). However, for the second order GFD we
+observe a supraconvergence when the GFD stencil is well-balanced due to the
+error cancellation similar to that in the standard ﬁve point ﬁnite diﬀerence
+stencil. In this case, the error for the solution and its gradient of the GFD
+Poisson solver are both O(f (y)h2), as observed in our numerical experiments.
+The interpolation from C to P, based on the kth order Taylor expansion of
+φ where the derivatives are given by GFD, is (k + 1)th order accurate for φ
+and kth order accurate for E.
+
+3.4. Reﬁnement strategy for AP-Cloud
+
+Generally, when kth order GFD is used in the charge assignment scheme,
+the Poisson solver, and the diﬀerentiation and interpolation routines, the
+total error for both φ and E are
+
+(cid:32)(cid:114)
+
+(cid:33)
+
+E = O(E[|EM|]) + O(ED) = O
+
+ρ(y)
+
+N hD + ρ(y)hk−1
+
+,
+
+(20)
+
+where the O(ρ(y)hk−1) leading term in discretization error is from GFD
+Poisson solver. To minimize the error, the optimal mesh size is
+
+,
+
+(21)
+
+(cid:18) 1
+
+(cid:19) 1
+
+2k+D−2
+
+h = O
+
+N ρ(y)
+
+10
+
+and the minimized error is
+
+Etotal = ρ(y)
+
+k+D−2
+2k+D−2 N
+
+− k−1
+
+2k+D−2 .
+
+(22)
+
+For the second order GFD in particular, we have better error bound due
+
+to the symmetry of interpolation kernel and stencil and supraconvergence
+
+(cid:32)(cid:114)
+
+(cid:33)
+
+E = E[|EM|] + ED = O
+
+ρ(y)
+N hD + ρ(y)h2
+
+and the optimal mesh size is the same as in (5)
+
+h = O (N ρ(y))
+
+− 1
+
+4+D .
+
+,
+
+(23)
+
+(24)
+
+4. Implementation
+
+We use a 2D-tree data structure to store particles, and select some of its
+cell centres as computational nodes. The 2D-tree data structure is a tree
+data structure in a D-dimensional space in which each cell has at most 2D
+children. Quadtree and octree are standard terms in 2D and 3D spaces,
+respectively.
+
+The algorithm in [13] is used in the 2D-tree construction. The ﬁrst step
+is to sort the particles by their Morton key, so particles in the same cell are
+contiguous in the sorted array. Then leaf cells are constructed by an array
+traversal, during which we record the number of particles and the index of the
+ﬁrst particle in each cell. At last the interior cells are constructed in a depth
+decreasing order by a traversal of cells of the deeper level. The overall time
+complexity, dominated by the Morton key sorting, is O(N log N ), where N is
+the total number of particles. This parallel 2D-tree construction algorithm,
+together with parallel linear solver, enables eﬃcient parallel implementation
+of AP-Cloud.
+
+Because all computational nodes are cell centres of a 2D-tree, their dis-
+tribution will be similar to an AMR-PIC mesh. This is a result of our im-
+plementation method and not an internal property of AP-Cloud.
+
+4.1. Error balance criterion
+
+The optimal interparticle distance h given in (21) depends on the charge
+density ρ. In most applications, we do not know ρ in advance; otherwise, we
+
+11
+
+do not need the charge assignment scheme to estimate it. We use a Monte
+Carlo method to obtain a rough estimation of ρ:
+
+(25)
+where V is the volume of a neighborhood of y, and N(cid:48) is the number of
+particles in the neighborhood.
+
+ρ(y) =
+
+N(cid:48)
+N V
+
+,
+
+If the neighborhood is the box with the edge length h centred at y,
+
+V = hD, we substitute (25) into (21) and obtain
+
+h = O(N(cid:48)− 1
+
+2k−2 ).
+
+(26)
+
+4.2. 2:1 mesh balance
+
+If the charge density undergoes rapid changes, as is typical for certain
+applications (such as particle accelerators and cosmology), the optimal h
+(26) also changes rapidly. This causes two potential problems. First, when
+the diﬀerence between levels of reﬁnement on two sides of a cell is too large,
+that cell cannot ﬁnd a balanced GFD stencil. If no particle in the coarse side
+is chosen to be its neighbor, the information on that side is missing. If we
+force the algorithm to choose a particle on the coarse side as a neighbor, the
+truncation error from this particle is much larger than that from the others.
+Second, in some cases, there are almost no particles in the region near the
+boundary. In order to enforce the boundary condition, interior nodes need
+to use far away nodes located on the boundary as their neighbors.
+
+To avoid these two problems, we enforce a 2:1 mesh balance. The 2:1
+mesh balance requires that the diﬀerence between the levels of reﬁnement of
+two neighbors is at most one. Because the mesh size changes smoothly, both
+imbalanced GFD stencils and empty regions are avoided.
+
+4.3. Algorithm to select computational nodes and search GFD neighbors
+
+For clarity, we will focus on the selection of nodes in 3D in this subsection.
+The selection of nodes in 2D is similar and easier. An octree cell and the
+centre of a cell will be used interchangeably in this subsection.
+
+We say an octree cell z is a neighbor of another octree cell y in a set of
+
+octree cells S, if
+• y, z ∈ S;
+• Cell(y) ∩ Cell(z) is a face.
+
+12
+
+• level(z) ≤ level(y);
+• No ancestor of z satisﬁes the previous three conditions.
+
+The neighbors deﬁned here are diﬀerent from the neighbors in [13] or the
+neighbors in GFD stencil. Generally, for any cell y in any set of octree cells
+S, it has at most 6 neighbors, each corresponding to one of its 6 faces. It is
+possible for a cell to have less than 6 neighbors. For example, root cell has
+no neighbor in any S in a non-periodic region.
+
+During the selection of nodes, we will keep a queue of octree cells, Q, and
+a list L(y) for each cell y in Q containing its neighbors in Q, which we call
+neighbor list. The basic operation is to open a cell y ∈ Q:
+
+1. Mark y as non-node candidate.
+2. Add all children cells of y at the end of Q, mark them as node candi-
+
+dates.
+
+3. Initialize the neighbor lists of the new added cells. Some of the neigh-
+bors are their siblings, while others are the neighbors of y or children
+of the neighbors of y.
+
+4. Update the neighbor lists of the descendent of the neighbors of y.
+
+The algorithm for the selection of nodes is as follows.
+
+1. Initialize a queue Q, which contains only the root cell.
+2. Traverse Q. For each cell y in Q, test if it satisﬁes
+
+h < cN(cid:48)− 1
+
+2k−2 ,
+
+(27)
+
+where c is a tuning parameter, h is the diameter of the subtree, n is
+the number of particles in the subtree. If the condition is not satisﬁed,
+open y. Let l be the deepest level in Q at the end of this traverse.
+
+3. Traverse Q. For each leaf cell y at level l, check if the neighbors of
+y satisfy the 2:1 mesh balance. Open each neighbor z that does not
+satisfy 2:1 mesh balance.
+4. If l > 0, let l ← l − 1, then repeat step 3. If l = 0, output all node
+candidates as computational nodes. If non-periodic boundary condition
+is used, add additional nodes on the boundary.
+
+Given the number of particles and the order of GFD is ﬁxed, the tun-
+ing parameter c in (27) determines the number of nodes. Ideally, c can be
+
+13
+
+computed from the constant in the proportional relationship in (21), which
+in turn depends on the order of GFD, the kernel function, and the relative
+magnitude of ρ and its gradients. However, in most applications, the relative
+magnitude of ρ and its gradients is unknown, so we try diﬀerent values of c
+and compare their results to estimate its optimal value in numerical tests.
+
+Checking error balance criterion and 2:1 mesh balance takes only constant
+number of operations per cell. Except the part to update the neighbor lists,
+each open operation takes constant number of elementary operations as well,
+which can be charged on the 8 new added cells, so the time complexity is
+O(|Q|), where |Q| is the number of cells in Q in the end of the selection. To
+analyze the complexity to update the neighbor lists, we note that each time
+we update the neighbor of a cell z in Q, the level of its neighbor increases.
+Since the level of its neighbor is bounded by the height of the octree lmax,
+the total running time to update neighbors of all particles is O(|Q|lmax).
+Because each interior cell of Q has 8 children, Q is a complete octree, we
+have |Q| < 8/7n, where n is the number of not opened cells, i.e., the number
+In conclusion, the complexity to select nodes is
+of computational nodes.
+O(|Q|lmax).
+
+After selecting the nodes, the neighbor list can be used to search GFD
+neighbors.
+If z is a neighbor of node y, and z is not a node itself, then
+the 4 children of z that share a face with y must be nodes because of 2:1
+mesh balance. The nodes among the neighbors of y and the children of these
+neighbors that share a face with y are called 1-ring. The union of the k-
+ring and the nodes among the neighbors of k-ring nodes and the children of
+these neighbors that share a face with k-ring nodes are called (k + 1)-ring.
+GFD neighbors are chosen from 2-ring by the quadrant criterion if there are
+enough number of nodes in 2-ring. If there are not enough number of nodes
+in k-ring, we will try to select GFD neighbors from (k + 1)-ring.
+In our
+simulations, 5-ring always contains enough neighbors. Because this neighbor
+searching algorithm only depends on the local nodes information and local
+data structures, we claim the complexity to search neighbors of a node is
+independent from the total number of nodes, and this algorithm takes O(n)
+time to ﬁnd neighbors of all computational nodes.
+
+One problem is related to the fact that we do not know in advance how
+deep the nodes are in the octree while we build the octree. In other words, it
+is possible that during the algorithm to select nodes, a leaf cell in the octree
+needs to be opened. However, this is very unlikely to happen in practice, if
+we always use the maximum depth supported in the implementation. For
+
+14
+
+example, in the 2D Gaussian beam with halo test in Section 5, the order of
+GFD is 2, the region is [−1, 1]× [−1, 1], and the minimum tuning parameter
+c used in simulations is 0.01. If we use a 64 bits Morton key, the maximum
+depth of the octree is 21, the cell size of the leaf cell is (1−(−1))×2−21 = 2−20.
+According to (27), 0.012 × 220×2 = 1.10 × 108 particles must be in the same
+leaf cell in order to open it, which is more than the total number of particles
+in the whole domain.
+
+5. Numerical results
+
+The AP-Cloud method approximately minimizes the error. However, it
+does incur additional cost for the construction and search of the octree data
+structure.
+In addition, the fast Fourier transform can no longer be used
+for solving the resulting linear system, so we must replace it with a sparse
+linear solver. Therefore, the practical advantage of AP-Cloud is by no means
+obvious. In this section, we present some numerical results for problems with
+non-uniform distribution, and demonstrate the advantages of AP-Cloud in
+terms of both accuracy and eﬃciency compared to PIC. We also discuss
+potential advantages over AMR-PIC.
+
+5.1. 2D Gaussian beam with halo
+
+We have performed veriﬁcation of the Adaptive Particle-in-Cloud method
+using examples of highly non-uniform distributions of particles typical for
+accelerator beams with halos. In such problems, a high-intensity, small-sigma
+particle beam is surrounded by a larger radius halo containing from 3 to 6
+orders of magnitude smaller number of particles compared to the main beam.
+As accurate modeling of realistic accelerator beam and halo distributions is
+unnecessary for the numerical veriﬁcation, we represent the system by axially
+symmetric Gaussian distributions. This also allows us to obtain a benchmark
+solution.
+
+Consider the following 2D electrostatic problem
+
+∆φ = ρ,
+
+(28)
+
+where charge density ρ is given by two overlapping Gaussian distribution:
+
+ρ(x) = a1
+
+exp
+
++ a2 exp
+
+,
+
+(29)
+
+(cid:20)
+
+(cid:18)
+
+−|x|2
+
+τ 2
+1
+
+(cid:19)
+
+15
+
+(cid:19)(cid:21)
+
+(cid:18)
+−|x|2
+
+τ 2
+2
+
+parameter to ensure(cid:82)
+
+in the domain Ω = [−1, 1]× [−1, 1]. We use the following values for the coef-
+ﬁcients: the radius of the main beam τ1 = 0.02, the halo intensity a2 = 10−5,
+and the width of the halo τ2 = 0.3. Coeﬃcient a1 = 396.1 is a normalization
+Ω ρ(x)dx = 1. The model is consistent (in terms of the
+order of magnitude for the beam versus halo ratio) with real particles beams
+in accelerators.
+
+While the AP-Cloud method is independent of the geometric shape of the
+computational domain, we solve the problem in a square domain to enable
+the comparison with the traditional PIC method. The benchmark solution is
+obtained in the following way. The problem is embedded in a larger domain,
+a radius 2 disk, using the same charge density function ρ and the homoge-
+neous Dirichlet boundary condition. A solution, obtained by a highly reﬁned
+1D solver in cylindrically symmetric coordinates, is considered as the bench-
+mark solution. The Dirichlet boundary condition for the two-dimensional
+problem is computed by interpolating the 1D solution at the location of the
+2D boundary. This boundary condition function is then used for both the
+second-order AP-Cloud and PIC methods.
+
+In our numerical simulations, CIC scheme (4) is used in charge assign-
+ment and interpolation in PIC method. Theoretically, there are more accu-
+rate schemes available, such as triangular shaped cloud with reshaping step.
+However, these higher order schemes are very computationally intensive, and
+are not able to give better result than CIC with the same CPU time in our
+numerical tests. The order of accuracy of AP-Cloud method does not de-
+pend on the particular kernel function Φ, so we choose the nearest grid point
+scheme for its simplicity, that is, Φ in (16) is set to be the characteristic
+function of the corresponding octree cell.
+
+16
+
+Figure 1: Distribution of 106 particles and the electric potential.
+
+Figure 2: Distribution of nodes. Green nodes are given by error balance criterion, blue
+nodes are given by 2:1 mesh balance, and red nodes are on the boundary.
+
+17
+
+Figure 3: Distribution of error of potential φ computed by AP-Cloud. ((cid:107)φ(cid:107)∞ = 0.7226.)
+
+Figure 4: Distribution of error of gradient of potential φx computed by AP-Cloud.
+((cid:107)φx(cid:107)∞ = 3.581.)
+
+18
+
+n
+121
+441
+1681
+6561
+25921
+
+Running time Error of φ Error of φx
+
+0.341
+0.327
+0.353
+0.490
+1.60
+
+0.118
+0.0648
+0.0347
+0.0139
+0.00371
+
+2.05
+1.87
+1.41
+0.674
+0.214
+
+Table 1: CPU time and accuracy of traditional PIC with 106 particles.
+
+Table 2: CPU time and accuracy of AP-Cloud with 2:1 mesh balance with 106 particles.
+
+n
+256
+428
+1156
+3652
+7559
+19077
+
+Running time Error of φ Error of φx
+
+0.929
+0.933
+0.970
+1.14
+1.45
+2.80
+
+0.00289
+0.0183
+0.00886
+0.00365
+0.000233
+0.000145
+
+0.0515
+0.0218
+0.00927
+0.00750
+0.00725
+0.00724
+
+Figure 5: Dependence of error on the number of nodes for PIC and AP-Cloud.
+
+19
+
+Figure 6: Dependence of error on CPU time for PIC and AP-Cloud.
+
+Figures 1 - 4 show the distribution of particles coloured according to
+solution values, nodes, and distributions of errors of the potential and its
+gradient. L2 errors are used in Tables 1 and 2 and Figures 5 and 6 show that
+the estimation of the potential and its gradient given by AP-Cloud is much
+more accurate compared to the PIC estimation. For example, the gradient
+error computed by AP-Cloud with 256 nodes is only about one fourth of the
+error of PIC with 19077 nodes. Although AP-Cloud is computationally more
+intensive for the same number of nodes due to the construction of a quadtree
+and solving an additional linear system for ρ, its accuracy under the same
+running time is still signiﬁcantly better.
+
+20
+
+2
+
+1.5
+
+1
+
+0.5
+
+e
+m
+
+i
+t
+
+g
+n
+
+i
+
+n
+n
+u
+R
+
+Build quadtree
+Search nodes
+
+Build linear systems
+
+Solve linear system for ρ
+Solve linear system for φ
+
+Find interpolation coeﬃcient
+
+Interpolate
+
+N = 104,n = 828
+
+N = 106,n = 4420
+N = 106,n = 11190
+
+N = 105,n = 1900
+
+N = 106,n = 1888
+
+Figure 7: Stacked plot of running times of AP-Cloud.
+
+Table 3: Breakdown of running times of AP-Cloud.
+
+N
+n
+
+Build quadtree
+Search nodes
+
+Build linear systems
+
+Solve linear system for ρ
+Solve linear system for φ
+
+Find interpolation coeﬃcient
+
+Interpolate
+
+Total running time
+
+104
+828
+
+7.67e-03
+3.11e-04
+1.11e-02
+1.64e-01
+1.81e-01
+1.41e-02
+8.18e-04
+3.82e-01
+
+105
+1900
+
+5.48e-02
+6.58e-04
+2.44e-02
+1.68e-01
+1.95e-01
+3.20e-02
+9.11e-03
+4.89e-01
+
+106
+1888
+
+4.85e-01
+6.46e-04
+2.39e-02
+1.68e-01
+1.95e-01
+3.15e-02
+1.40e-01
+1.05e+00
+
+106
+4420
+
+4.85e-01
+1.45e-03
+5.62e-02
+1.95e-01
+2.99e-01
+7.46e-02
+1.40e-01
+1.26e+00
+
+106
+11190
+
+4.89e-01
+3.70e-03
+1.41e-01
+2.76e-01
+7.93e-01
+1.88e-01
+1.45e-01
+2.05e+00
+
+From theoretical complexity analysis in Section 4 and experimental results
+in Table 5.1 and Figure 7, the steps of AP-Cloud can be divided into 3 main
+groups:
+
+21
+
+• Quadtree construction and interpolation, which time complexity is
+O(N log N ). The running time for this group is O(N log N ), which
+dominates when N (cid:29) n.
+
+• Searching for nodes, building linear systems and ﬁnding interpolation
+coeﬃcients. The running time for this group is O(nlmax), which is small
+compared to the running time of other two groups.
+
+• Solving the linear system for ρ and φ. CPU time depends on both the
+
+linear solver and n, and dominates for small ratios of N/n.
+
+In this test, we did not obtain the second order convergence due to the
+Monte Carlo noise. Table 4 shows the result of another test, where ¯ρ(yj, h)
+in (2) is given by the integral of the exact density function instead of Monte
+Carlo integration. The convergence is second order for both the potential
+and gradient, as expected.
+
+Error of φ Error of φx Order of φ Order of φx
+
+Table 4: Convergence of AP-Cloud without Monte Carlo noise.
+n
+240
+863
+3336
+13043
+
+0.00123
+0.000315
+7.62e-05
+2.006e-05
+
+0.00181
+0.000564
+0.000150
+3.80e-05
+
+-
+
+1.82
+1.95
+2.01
+
+-
+
+2.13
+2.09
+1.96
+
+5.2. 3D Gaussian beam with halo
+
+In this Section, we investigate the accuracy of the AP-Cloud method in
+3D. To enable comparison with a simple benchmark solution, we study a
+spherically symmetric extension of the beam-with-halo problem. Despite the
+loss of physics relevance, it is a useful problem that tests adaptive capabilities
+of the method. Consider the Poisson equation with the charge density ρ given
+by two overlapping Gaussian distributions (29) in the domain Ω = [−1, 1]3.
+The radius of center beam is τ1 = 0.02, the strength of the halo is a2 = 10−5,
+and the width of the halo is τ1 = 0.3. The coeﬃcient a1 = 7677 provides the
+Ω ρ(x)dx = 1. The benchmark solution and the boundary
+condition function were obtained similarly to the 2D case. The distribution
+of 106 particles is shown in Figure 8. The AP-Cloud computation, performed
+using 4067 nodes (Figure 9), gives a solution with the normalized norm of
+
+normalization (cid:82)
+
+22
+
+φ on particles is 0.0352 ((cid:107)φ(cid:107)∞ = 3.038), and the normalized norm of φx on
+particles is 0.578 ((cid:107)φx(cid:107)∞ = 41.18).
+
+Figure 8: Distribution of 106 particles.
+
+Figure 9: Distribution of 4067 nodes. Green nodes are given by error balance criterion,
+blue nodes are given by 2:1 mesh balance, and red nodes are on the boundary.
+
+23
+
+Figure 10: Distribution of error of potential φ by AP-Cloud ((cid:107)φ(cid:107)∞ = 3.038).
+
+Figure 11: Distribution of error of gradient of potential φx by AP-Cloud ((cid:107)φx(cid:107)∞ = 41.18).
+
+24
+
+n
+
+Running time Error of φ Error of φx
+
+8000
+64000
+512000
+4096000
+
+0.443
+1.48
+24.1
+361
+
+1.40
+0.726
+0.219
+0.0606
+
+19.6
+16.1
+8.60
+2.92
+
+Table 5: CPU time and accuracy of traditional PIC with 106 particles in 3D.
+
+n
+
+Running time Error of φ Error of φx
+
+1546
+4067
+13687
+59349
+
+0.921
+1.14
+2.10
+7.22
+
+0.0402
+0.0352
+0.0183
+0.00443
+
+1.17
+0.578
+0.329
+0.244
+
+Table 6: CPU time and accuracy of AP-Cloud with 2:1 mesh balance with 106 particles
+in 3D.
+
+Figure 12: Dependence of error on the number of nodes for PIC and AP-Cloud in 3D.
+
+25
+
+Figure 13: Dependence of error on CPU time for PIC and AP-Cloud in 3D.
+
+Results presented in Tables 5 and 6 and Figures 12 and 13 show that
+the advantage of AP-Cloud is more evident in 3D problem. With only 1546
+nodes and less than 1 second running time, AP-Cloud has more accurate
+result than PIC with 4096000 cells and more than 361 seconds running time.
+
+5.3. Test for self-force eﬀect with single particle
+
+As mentioned in the introduction, Vlasov-Poisson problems with highly
+non-uniform distributions of matter can be solved using the adaptive mesh
+reﬁnement technique for PIC [4, 5]. However, it is well known that AMR-PIC
+introduces signiﬁcant artifacts in the form of artiﬁcial image particles across
+boundaries between coarse and ﬁne meshes. These images introduce spurious
+forces that may potentially alter the particle motion to an unacceptable level
+[4, 5]. Methods for the mitigation of the spurious forces have been designed
+in [6]. The traditional PIC on a uniform mesh is free of such artifacts.
+
+The convergence of Adaptive Particle-in-Cloud solutions to benchmark
+solutions, discussed in the previous Section, already indicates the absence of
+artifacts. To further verify that AP-Cloud is free of artiﬁcial forces present
+in the original AMR-PIC, we have performed an additional test similar to
+the one in [4], which involved the motion of a single particle across the
+coarse and ﬁne mesh interface. For AP-Cloud, we studied the motion of
+a single test particle represented by a moving cloud of nodes with reﬁned
+distances towards the test particle. The test particle contained a smooth,
+
+26
+
+sharp, Gaussian-type charge distribution to satisfy the requirements of the
+GFD method.
+
+The forces and motion of a single test particle obtained with PIC and
+AP-Cloud methods are shown in Figure 14. We observe that the electric
+forces computed by the AP-Cloud method are more accurate and smoother
+compared to even the traditional PIC. But the oscillatory deviation of forces
+in PIC from the correct direction does not cause accumulation of the total
+error due to conservative properties of PIC. The trajectories of the parti-
+cle obtained by both methods are close. The test provides an additional
+assurance that artiﬁcial images are not present in the AP-Cloud method.
+
+Figure 14: Forces (left) and motion (right) of a single test particle obtained with PIC and
+AP-Cloud methods demonstrating the absence of artifacts in the AP-Cloud method.
+
+6. Summary and Conclusions
+
+We have developed an Adaptive Particle-in-Cloud (AP-Cloud) method
+that replaces the Cartesian grid in the traditional PIC with adaptive com-
+putational nodes. Adaptive particle placement balances the errors of the
+diﬀerential operator discretization and the source computation (analogous
+to the error of the Monte Carlo integration) to minimize the total error.
+
+AP-Cloud uses GFD based on weighted least squares (WLS) approxi-
+mations on a stencil of irregularly placed nodes. The framework includes
+interpolation, least squares approximation, and numerical diﬀerentiation ca-
+pable of high order convergence.
+
+The adaptive nature of AP-Cloud gives it signiﬁcant advantages over
+the traditional PIC for non-uniform distributions of particles and complex
+
+27
+
+boundaries. It achieves signiﬁcantly better accuracy in the gradient of the
+potential compared to the traditional PIC for the problem of particle beam
+with halo. The method is independent of the geometric shape of the compu-
+tational domain, and can achieve highly accurate solutions in geometrically
+complex domains. The optimal mesh size based on error-balance criterion
+gives AP-Cloud a potential advantage over AMR-PIC in terms of accuracy,
+and specially designed tests showed that the AP-Cloud method is free of ar-
+tiﬁcial images and spurious forces typical for the original AMR-PIC without
+special mitigation techniques. Another advantage of AP-Cloud over AMR-
+PIC is the ease of implementation, as AP-Cloud does not require special
+remapping routines between diﬀerent meshes. Our future work will focus on
+higher convergence rates of the method, performance optimization, parallel
+implementation using hybrid technologies, as well as applications to practical
+problems with non-uniform distribution of matter. A direct comparison of
+AP-Cloud with AMR-PIC in terms of accuracy and eﬃciency will also be
+addressed in the future work.
+
+Acknowledgement
+
+This work was supported in part by the U.S. Department of Energy,
+
+Contract No. DE-AC02-98CH10886.
+
+References
+
+[1] R.W. Hockney, J.W. Eastwood, Computer simulation using particles,
+
+(CRC Press, 1988), 21.
+
+[2] H. Johansen, P. Colella, A cartesian grid embedding boundary method
+for poisson’s equation on irregular domains, J Comput Phys, 1998
+(147), 60?85.
+
+[3] S. Wang, R. Samulyak, T. Guo, An embedded boundary method for
+parabolic problems with interfaces and application to multi-material
+systems with phase transitions, Acta Mathematica Scientia, 30B
+(2010), No. 2, 499 - 521.
+
+[4] Vay, J-L., et al. “Mesh reﬁnement for particle-in-cell plasma simula-
+tions: applications to and beneﬁts for heavy ion fusion.” Laser and
+Particle Beams 20.04 (2002): 569-575.
+
+28
+
+[5] Vay, J-L., et al. “Application of adaptive mesh reﬁnement to particle-
+in-cell simulations of plasmas and beams.” Physics of Plasmas (1994-
+present) 11.5 (2004): 2928-2934.
+
+[6] Colella, Phillip, and Peter C. Norgaard. “Controlling self-force errors
+at reﬁnement boundaries for AMR-PIC.” Journal of Computational
+Physics 229.4 (2010): 947-957.
+
+[7] Onate, E., et al. “A ﬁnite point method in computational mechan-
+ics. Applications to convective transport and ﬂuid ﬂow.” International
+journal for numerical methods in engineering 39.22 (1996): 3839-3866.
+
+[8] Benito, J. J., F. Urena, and L. Gavete. “Inﬂuence of several factors in
+the generalized ﬁnite diﬀerence method.” Applied Mathematical Mod-
+elling 25.12 (2001): 1039-1053.
+
+[9] Benito, J. J., et al. “An h-adaptive method in the generalized ﬁnite
+diﬀerences.” Computer methods in applied mechanics and engineering
+192.5 (2003): 735-759.
+
+[10] Liszka, Tadeusz, and Janusz Orkisz. “The ﬁnite diﬀerence method at
+arbitrary irregular grids and its application in applied mechanics.”
+Computers & Structures 11.1 (1980): 83-95.
+
+[11] Golub, Gene H., and Charles F. Van Loan, Matrix Computations, 4th
+
+edition, Johns Hopkins University Press, 2012.
+
+[12] Barbeiro, S., J. A. Ferreira, and R. D. Grigorieﬀ. “Supraconvergence
+of a ﬁnite diﬀerence scheme for solutions in Hs (0, L).” IMA journal of
+numerical analysis 25.4 (2005): 797-811.
+
+[13] Zhou, Kun, et al. “Data-parallel octrees for surface reconstruction.” Vi-
+sualization and Computer Graphics, IEEE Transactions on 17.5 (2011):
+669-681.
+
+[14] Cottet, G-H., and P-A. Raviart. ”Particle methods for the one-
+dimensional Vlasov-Poisson equations.” SIAM journal on numerical
+analysis 21.1 (1984): 52-76.
+
+[15] Wang, Bei, Gregory H. Miller, and Phillip Colella. ”A particle-in-cell
+method with adaptive phase-space remapping for kinetic plasmas.”
+SIAM Journal on Scientiﬁc Computing 33.6 (2011): 3509-3537.
+
+29
+
+Appendix A. Error analysis for PIC
+
+(cid:82)
+
+Assume the interpolation kernel Φ is symmetric, non-negative, bounded
+by 1, integrable and normalized over a compact support. That is, 0 ≤ Φ(x) =
+Φ(−x) ≤ (cid:107)Φ(cid:107)∞ ≤ 1 for all x ∈ RD, Φ(x) = 0 for (cid:107)x(cid:107) > r for some r, and
+RD Φ(x)dx = 1. These properties hold for all commonly used charge assign-
+ment schemes, including the nearest grid point, cloud-in-cell, and triangular
+shaped cloud schemes without reshaping step. In the following subsections,
+we will analyze the errors in the three steps of PIC, respectively.
+
+Appendix A.1. Error in Step 1
+
+To analyze the error in (2), let us ﬁrst deﬁne an average quantity at a
+
+(cid:90)
+
+(cid:18)x − yj
+
+(cid:19)
+
+¯ρ(yj, h) :=
+
+1
+hD
+
+ρ(x)Φ
+
+Ω
+
+h
+
+dx.
+
+grid point yj as
+
+Then,
+
+|˜ρ(yj,P, h) − ρ(yj)| ≤ |˜ρ(yj,P, h) − ¯ρ(yj, h)|
+
++|¯ρ(yj, h) − ρ(yj)|
+,
+
+(cid:124)
+
+(cid:123)(cid:122)
+
+EM
+
+(cid:125)
+
+(cid:124)
+
+(cid:123)(cid:122)
+
+ED1
+
+(cid:125)
+
+where EM is analogous to the error in Monte Carlo integration of a continuous
+function, and ED1 is known as moment error or discretization error in step 1,
+which depends on the interpolation kernel Φ.
+
+Appendix A.1.1. Monte Carlo noise
+
+To bound the error EM , note that the expected value of ˜ρ is
+
+Therefore,
+
+E[˜ρ(yj,P, h)] = ¯ρ(yj, h).
+
+Var(˜ρ(yj,P, h)) = E[|EM|2].
+
+By the deﬁnition of variance,
+
+Var(˜ρ(yj,P, h)) =
+
+1
+N
+
+where
+
+˜ρ(yj, pi, h) =
+
+1
+hD Φ
+
+30
+
+Var(˜ρ(yj, pi, h)),
+
+(cid:18)pi − yj
+
+(cid:19)
+
+h
+
+(A.1)
+
+(A.2)
+
+is the estimation of ρ from a single particle pi, and
+
+E[˜ρ(yj, pi, h)] = ¯ρ(yj, h).
+
+Let τ (yj, pi, h) = ˜ρ(yj, pi, h) − ¯ρ(yj, h). Then,
+
+Var(˜ρ(yj, pi, h)) = E[τ 2(yj, pi, h)]
+
+=
+
+τ 2(yj, x, h)ρ(x)dx.
+
+Consider the small neighborhood about yj of radius rh, i.e., Aj = {x :
+(cid:107)x − yj(cid:107) < rh}, so that ˜ρ(yj, x, h) = 0 in Ω\Aj. Then,
+
+(cid:90)
+(cid:124)
+
+Aj
+
+(cid:0)τ (yj, x, h)(cid:1)2 ρ(x)dx
+(cid:125)
+
+(cid:123)(cid:122)
+
+I1
+
+(cid:90)
+(cid:124)
+
++
+
+Ω\Aj
+
+(cid:0)τ (yj, x, h)(cid:1)2 ρ(x)dx
+(cid:125)
+
+(cid:123)(cid:122)
+
+.
+
+I2
+
+Var(˜ρ(yj, pi, h)) =
+
+(A.3)
+
+(A.4)
+
+(A.5)
+
+(A.6)
+
+(A.7)
+
+(cid:90)
+
+Ω
+
+(cid:90)
+
+RD
+
+(cid:82)
+
+¯ρ(yj, h) = ρ(yj)
+
+Φ(x)dx = ρ(yj)
+
+ρ(x)dx = rDVDρ(yj),
+
+Note that
+
+and
+
+lim
+h→0
+
+(cid:90)
+
+lim
+h→0
+
+1
+hD
+
+Aj
+
+(cid:90)
+
+(cid:18) 1
+
+(cid:19)2
+
+Aj
+
+hD
+
+I1 ≤
+
+(cid:90)
+
+and
+
+I2 =
+
+Ω\Aj
+
+where VD is the volume of the unit ball in D dimensions. Assume h is small
+enough, so that ¯ρ(yj, h) < 2ρ(yj) and 1
+Aj ρ(x)dx < 2rDVDρ(yj). Then,
+hD
+
+ρ(x)dx < 2
+
+rDVD
+
+hD ρ(yj) = O(h−D)ρ(yj),
+
+(A.8)
+
+¯ρ(yj, h)2ρ(x)dx < ¯ρ(yj, h)2 < 4ρ(yj)2 = O(1)ρ(yj).
+
+(A.9)
+
+Therefore,
+
+Var(˜ρ(yj,P, h)) =
+
+=
+
+=
+
+(I1 + I2)
+
+1
+N
+1
+N
+ρ(yj)
+
+(cid:0)ρ(yj)O(cid:0)h−D(cid:1) + ρ(yj)2O(1)(cid:1)
+O(cid:0)h−D(cid:1) ,
+
+N
+
+31
+
+(A.10)
+
+(cid:32)(cid:114)
+
+(cid:33)
+
+and
+
+E[|EM|] =(cid:112)E[|EM|2] − Var(|EM|) ≤(cid:112)E[|EM|2] = O
+Note that above bound for(cid:112)E[|EM|2] is asymptotically tight. To see this,
+
+assume 4hD ¯ρ(yj, h) < (cid:107)Φ(cid:107)∞, and let A1 = {x : Φ((x − yj)/h) > (cid:107)Φ(cid:107)∞/2}.
+Then,
+
+ρ(yj)
+N hD
+
+(A.11)
+
+.
+
+(cid:90)
+
+(cid:18)(cid:107)Φ(cid:107)∞
+(cid:17)
+(cid:112)E[|EM|2] is no smaller than O(cid:16)(cid:112)ρ(yj)h−DN−1
+
+τ 2(yj, x, h)ρ(x)dx >
+
+I1 ≥
+
+(cid:90)
+
+4hD
+
+(cid:19)2
+
+The volume of A1 is O(hD), so I1 is no smaller than O(h−D)ρ(yj), and
+
+A1
+
+A1
+
+ρ(x)dx.
+
+.
+
+Appendix A.1.2. Moment error
+
+The moment error in charge assignment scheme, ED1, can be viewed as
+the error in a numerical quadrature rule. Here we follow the approach taken
+in [14] and [15]. Let B(yj, a) = {x : (cid:107)x − yj(cid:107) < a}, H(yj) be the Hessian
+
+32
+
+(cid:90)
+(cid:90)
+
+(cid:90)
+(cid:90)
+
+matrix for ρ at yj. The moment error is
+ED1 = |¯ρ(yj, h) − ρ(yj)|
+
+(cid:19)
+
+(cid:0)ρ(x) − ρ(yj)(cid:1) Φ
+(cid:18)x − yj
+
+(cid:18)x − yj
+(cid:19)
+
+Ω
+
+=
+
++ O((cid:107)x − yj(cid:107)3)(cid:1) Φ
+
+B(yj ,rh)
+
+=
+
+1
+hD
+1
+hD
+
+(cid:0)(x − yj)T∇ρ(yj) + (x − yj)T H(yj)(x − yj)
+
+dx
+
+h
+
+h
+
+dx
+
+(cid:18)x − yj
+
+(x − yj)T∇ρ(yj)Φ
+
+h
+(x − yj)T H(yj)(x − yj)Φ
+
+dx
+
+(cid:19)
+(cid:19)
+(cid:18)x − yj
+(cid:18)x − yj
+
+D(cid:88)
+
+h
+
+(xd − yj
+
+(cid:19)
+d)2Φ(cid:0)z − yj(cid:1) dzρydyd(yj) + O(h3)
+
+d)2ρydyd(yj)Φ
+
+h
+
+dx + O(h3)
+
+dx + O(h3)
+
+B(yj ,rh)
+
+d=1
+
+(zd − yj
+
+B(yj ,r)
+
+B(yj ,rh)
+
+B(yj ,rh)
+
+(cid:90)
+(cid:90)
+
+=
+
++
+
+1
+hD
+
+1
+hD
+
+= 0 +
+
+= h2
+
+1
+hD
+
+D(cid:88)
+D(cid:88)
+
+d=1
+
+=
+
+ρydyd(yj)O(h2),
+
+D(cid:88)
+
+d=1
+
+ED2 =
+D(cid:88)
+
+d=1
+
+where the ﬁfth equal sign is due to the symmetry of interpolation kernel.
+
+Appendix A.2. Error in Step 2
+
+It is well known that the error in ﬁnite diﬀerence method for elliptic
+
+equation in step 2 is second order
+
+(A.12)
+
+ρydyd(yj)O(h2).
+
+(A.13)
+
+So the total discretization error in φ is
+
+ED = ED1 + ED2 =
+
+ρydyd(yj)O(h2) = ρ(yj)O(h2),
+
+(A.14)
+
+d=1
+
+where the last equal sign is due to the assumption that ρ and its derivatives
+have comparable magnitude.
+
+33
+
+Appendix A.3. Error in Step 3
+
+Step 3 contains a numerical diﬀerentiation and a linear interpolation,
+both of which has second order accuracy. One problem is that numerical
+diﬀerentiation is unstable. Generally, if φ is already polluted with a kth
+order error, then its gradient given by numerical diﬀerentiation has at most
+(k − 1)th order accuracy, because of the h factor in denominator. For ﬁnite
+diﬀerence scheme for elliptic equation, it has been proved that, nevertheless,
+if the solution is smooth enough, then both the solution and its gradient are
+second order convergent, even if the mesh is non-uniform, which is called
+supraconvergence [12]. More precisely, let Ph be the interpolation operator
+from grid function to piecewise linear function, Rh be the restriction operator
+from continuous function to grid function, u ∈ H 3(Ω) be the exact solution
+of Poisson equation, uh be the numerical solution, then we have
+
+||Ph(Rhu − uh)||H 1 ≤ Ch2
+
+max||u||H 3,
+
+(A.15)
+
+where hmax is the maximal mesh size. Thus we claim the discretization error
+for E is also second order.
+
+34
+
+

@@ -1,0 +1,2235 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+7
+1
+
+ 
+ 
+]
+
+.
+
+C
+O
+h
+t
+a
+m
+
+[
+ 
+ 
+
+1
+v
+9
+1
+7
+5
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+EFFICIENT EVALUATION OF SCALED PROXIMAL OPERATORS
+
+∗
+
+MICHAEL P. FRIEDLANDER
+
+†
+
+AND GABRIEL GOH
+
+‡
+
+Abstract. Quadratic-support functions [Aravkin, Burke, and Pillonetto; J. Mach. Learn. Res.
+14(1), 2013] constitute a parametric family of convex functions that includes a range of useful
+regularization terms found in applications of convex optimization. We show how an interior method
+can be used to eﬃciently compute the proximal operator of a quadratic-support function under
+diﬀerent metrics. When the metric and the function have the right structure, the proximal map
+can be computed with cost nearly linear in the input size. We describe how to use this approach to
+implement quasi-Newton methods for a rich class of nonsmooth problems that arise, for example, in
+sparse optimization, image denoising, and sparse logistic regression.
+
+Key words. quadratic support, proximal-gradient, quasi-Newton, interior-point
+
+AMS subject classiﬁcations. 90C15, 90C25
+
+1. Introduction. Proximal-gradient methods have become ﬁrmly rooted as
+workhorse algorithms for convex optimization. They are prized for their applica-
+bility to a broad range of convex problems that arise in machine learning and signal
+processing, and for their good theoretical convergence properties. Under reasonable
+hypotheses they are guaranteed to achieve within k iterations a function value that
+is within O(1/k) of the optimal value using a constant step size, and to within
+O(1/k2) using an accelerated variant. Tseng (2010) outlines a uniﬁed view of the
+many proximal-gradient variations.
+
+In its canonical form, the proximal-gradient algorithm applies to convex optimiza-
+
+tion problems of the form
+
+(1.1)
+
+minimize
+
+x∈Rn
+
+f (x) + g(x),
+
+where the functions f : Rn → R and g : Rn → R ∪ {+∞} are convex. We assume that
+
+f has a Lipschitz-continuous gradient, and that g is lower semicontinuous (Rockafellar
+and Wets, 1998, Deﬁnition 1.5). Typically, f is a loss function that penalizes incorrect
+predictions between a model and observations, and g is a regularizer that encourages
+desirable structure in the solution. Important examples for nonsmooth regularizers are
+the 1-norm and total variation, which encourage sparsity in either x or its gradient.
+
+Suppose that H is a positive-deﬁnite matrix. The iteration
+
+(1.2)
+
+x+ = proxH
+
+g (x − H
+
+−1∇f (x))
+
+underlies the prototypical proximal-gradient method, where x is most recent estimate
+of the solution, and
+
+(cid:110) 1
+2(cid:107)z − x(cid:107)2
+
+H + g(x)
+
+(cid:111)
+
+(1.3)
+
+proxH
+
+g (z) := arg min
+
+x∈Rn
+
+is the (scaled) proximal operator of g. The scaled diagonal H = αI is typically
+used to deﬁne the proximal operator because it leads to an inexpensive proximal
+iteration, particularly in the case where g is separable. (In that case, α has a natural
+
+∗
+†
+‡
+
+March 21, 2016. Research supported by ONR award N00014-16-1-2242.
+Department of Computer Science, University of British Columbia (mpf@cs.ubc.ca).
+Department of Mathematics, University of California, Davis (gabgohjk@gmail.com).
+
+1
+
+2
+
+MICHAEL P. FRIEDLANDER AND GABRIEL GOH
+
+Table 1.1
+
+Preconditioned proximal-gradient methods.
+
+Method
+
+Reference
+
+H
+
+iter. soft thresholding Beck and Teboulle (2009)
+symmetric rank 1
+Becker and Fadili (2012)
+identity-minus-rank-1 Karimi and Vavasis (2014)
+proximal L-BFGS
+proximal Newton
+
+αI
+αI + ssT
+αI − ssT
+Schmidt et al. (2009); Zhong et al. (2014) Λ + SDST
+∇2f
+Lee et al. (2014)
+
+interpretation of a steplength.) More general matrices H, however, may lead to
+proximal operators that dominate the computation, and the choice of H remains very
+much an art. In fact, there is an entire continuum of algorithms that vary based on
+the choice of H, as illustrated by Table 1.1. The table lists the algorithms roughly in
+order by the accuracy with which their H approximates the curvature of the smooth
+function f . At one extreme is iterative soft thresholding (IST), which approximates the
+curvature using a constant diagonal. At the other extreme is proximal Newton, which
+uses the true Hessian. The quality of the approximation induces a tradeoﬀ between
+the number of expected proximal iterations and the computational cost of evaluating
+the proximal operator at each iteration. Thus H can be considered a preconditioner
+for the proximal iteration.
+
+The main contribution of this paper is to show how the proximal operator (1.3) for
+an important family of functions g and structured preconditioners H can be eﬃciently
+computed via an interior method. This approach builds on the work of Aravkin et al.
+(2013), who deﬁne the class of quadratic-support functions and outline a particular
+interior algorithm for their optimization. In contrast, our approach is specialized to the
+case where the quadratic-support function appears inside of a proximal computation.
+Together with the correct dualization approach (§4), this yields a particularly eﬃcient
+interior implementation when the data that deﬁne g and H have special structure (§6).
+The proximal quasi-Newton method serves as a showcase for how this technique can
+be used within a larger algorithmic context (§7).
+
+2. Quadratic-support functions. The notion of a quadratic-support (QS)
+function, which is a generalization of sublinear support functions (Rockafellar and
+Wets, 1998, Ch. 8E), was introduced by Aravkin et al. (2013).
+
+Let Bp = { z | (cid:107)z(cid:107)p ≤ 1} and K = K1 × ··· × Kk, where each cone Ki is either a
++ or a second-order cone Qm = { (τ, z) ∈ R × Rm−1 | z ∈ τB2 }.
+nonnegative orthant Rm
+(The size of the cones may of course be diﬀerent for each index i.) The notation
+Ay (cid:23)K b means that Ay− b ∈ K, and τBp ≡ { τ z | z ∈ Bp }. The indicator on a convex
+
+set U is denoted as
+
+(cid:40)
+
+δ(x | U ) =
+
+if x ∈ U ,
+0
++∞ otherwise.
+
+Unless otherwise speciﬁed, we assume that x is an n-vector, and to help disambiguate
+dimensions, we denote the p-by-p identity matrix as Ip.
+
+We consider the class of functions g : Rn → R ∪ {+∞} that have the conjugate
+
+representation
+
+(2.1)
+
+g(x) = sup
+y∈Y
+
+yT(Bx + d), where Y = {y ∈ R(cid:96) | Ay (cid:23)K b}.
+
+SCALED PROXIMAL OPERATORS
+
+3
+
+We assume throughout that the feasible set Y = { y | Ay (cid:23)K b} is nonempty. If Y
+contains the origin, the QS function g is nonnegative for all x, and we can then consider
+it to be a penalty function. This is automatically true, for example, if b ≤ 0.
+The formulation (2.1) is close to the standard deﬁnition of a sublinear support
+function (Rockafellar, 1970, §13), which is recovered by setting d = 0 and B = I, and
+letting Y be any convex set. Unlike a standard support function, g is not positively
+homogeneous if d (cid:54)= 0. This is a feature that allows us to capture important classes of
+penalty functions that are not positively homogeneous, such as piecewise quadratic
+functions, the “deadzone” penalty, or indicators on certain constraint sets. These are
+examples that are not representable by the standard deﬁnition of a support function.
+This deﬁnition springs from the “quadratic-support function” deﬁnition introduced
+by Aravkin et al. (2013), who additionally allow for an explicit quadratic term in the
+objective and for Y to be any nonempty convex set. However, because we allow K
+to contain a second-order cone, any quadratic objective terms in the Aravkin et al.
+deﬁnition can be “lifted” and turned into a linear term with a second-order-cone
+constraint (see Example 2.2).
+
+This expressive class of functions includes a large array of penalty functions
+commonly used in machine learning; Aravkin et al. give many other examples. In the
+remainder of this section we provide some examples that illustrate various regularizing
+functions and constraints that can be expressed as QS functions.
+
+Example 2.1 (1-norm regularizer). The 1-norm has the QS representation
+
+where
+
+(2.2)
+
+(cid:107)x(cid:107)1 = sup
+
+y { yTx | y ∈ B∞ } ,
+(cid:18)1
+(cid:19)
+
+(cid:18) In
+
+(cid:19)
+
+,
+
+1
+
+,
+
+A =
+
+−In
+
+b = −
+
+d = 0, B = In, K = R2n
+Example 2.2 (2-norm). The 2-norm has the QS representation
+y { yTx | (1, y) (cid:23)K 0} ,
+
+(cid:107)x(cid:107)2 = sup
+
++ ,
+
+where
+
+(2.3)
+
+A =
+
+y { yTx | y ∈ B2 } = sup
+(cid:19)
+
+(cid:19)
+
+(cid:18)1
+
+,
+
+b =
+
+,
+
+0
+
+(cid:18) 0
+
+In
+
+d = 0, B = In, K = Qn+1.
+
+(cid:3)
+
+(cid:3)
+
+Example 2.3 (Polyhedral norms). Any polyhedral seminorm is a support func-
+tion, e.g., (cid:107)Bx(cid:107)1 for some matrix B. In particular, if the set { y | Ay ≥ b} contains
+the origin and is centro-symmetric, then
+
+(cid:107)x(cid:107) := sup
+Ay≥b
+
+yTBx
+
+deﬁnes a norm if B is nonsingular, and a seminorm otherwise. This is a QS function
+with d := 0 (as will be the case for any positively homogeneous QS function) and
+(cid:3)
+Y := { y | Ay ≥ b}.
+
+The next simple example justiﬁes the term “quadratic” in our modiﬁed deﬁnition,
+even though there are no explicit quadratic terms. It also illustrates the roles of the
+terms B and d.
+
+4
+
+MICHAEL P. FRIEDLANDER AND GABRIEL GOH
+
+Example 2.4 (Quadratic function). The quadratic function can be written as
+
+Use the derivation in Appendix A to obtain the QS representation with parameters
+
+1
+
+2(cid:107)x(cid:107)2
+
+2 = sup
+y, t
+
+yTx − 1
+2 t
+
+= sup
+y, t
+
+(cid:110)
+
+ 0
+
+0
+In
+
+ ,
+
+1/2
+1/2
+0
+
+A =
+
+2 ≤ t
+
+(cid:12)(cid:12)(cid:12) (cid:107)y(cid:107)2
+(cid:111)
+ 1/2
+ ,
+
+−1/2
+0
+
+b =
+
+(cid:19)
+
+(cid:40)(cid:18)y
+(cid:18) 0
+
+t
+
+(cid:19)T(cid:20)(cid:18)In
+(cid:19)
+
+0
+
+(cid:18) 0
+(cid:19)
+
+1/2
+
+x −
+
+(cid:18)In
+
+0
+
+d =
+
+, B =
+
+1/2
+
+(cid:19)(cid:21)(cid:12)(cid:12)(cid:12)(cid:12)(cid:12) (cid:107)y(cid:107)2
+
+(cid:41)
+
+2 ≤ t
+
+.
+
+, K = Qn+2.
+
+(cid:3)
+
+The next example is closely related to the 1-norm regularizer in Example 2.1,
+except that the QS function is used to express the constraint (cid:107)x(cid:107)1 ≤ 1 via an indicator
+function.
+
+Example 2.5 (1-norm constraint). A constraint on the 1-norm ball can be mod-
+eled using the indicator function, i.e., g = δ(· | B1). Writing the indicator to the
+
+1-norm ball as the conjugate of the inﬁnity norm gives
+
+δ(x | B1) = sup
+
+(2.4)
+
+= sup
+
+y { yTx − (cid:107)y(cid:107)∞ }
+y, τ { yTx − τ | y ∈ τB∞ } = sup
+(cid:19)
+
+(cid:18) 0
+(cid:19)
+
+,
+
+b = 0,
+
+d =
+
+(cid:18)
+
+A =
+
+−In 1
+In 1
+
+which is a QS function with parameters
+
+(cid:18)In
+
+(cid:19)
+
+0
+
+y, τ { yTx − τ | −τ 1 ≤ y ≤ τ 1} ,
+
+, B =
+
+−1
+
+, K = R2n.
+
+(cid:3)
+
+Example 2.6 (Indicators on polyhedral cones). Consider the following cone and
+
+its polar:
+
+U = { x | Bx ≤ 0}
+
+◦
+
+and U
+
+= { BTy | y ≤ 0} .
+
+Use the support-function representation of a cone in terms of its polar to obtain
+
+(2.5)
+
+δ(x | U ) = δ
+
+◦
+
+∗
+
+(· | U
+
+)(x) = sup
+
+y { yTBx | y ≤ 0} ,
+
+which is an example of an elementary QS function. (See Rockafellar and Wets (1998)
+for deﬁnitions of the polar of a convex set, and the convex conjugate.) Concrete
+examples include halfspaces, where B is an n × 1 matrix, and the positive orthant,
+where B = In. The monotonic cone
+
+U := { x | xi ≥ xj, ∀(i, j) ∈ E } ,
+
+used in isotonic regression, is an important example. Here, E is the set of edges in a
+graph G = (V,E) that describes the relationships between variables in V. If we set B
+to be the incidence matrix for the graph, (2.5) then corresponds to the indicator on
+(cid:3)
+the monotonic cone U .
+Example 2.7 (Distances to a cone). The distance to a cone U that is a combi-
+
+nation of polyhedral and second-order cones can be represented as a QS function:
+
+x∈U (cid:107)x − y(cid:107)2 = inf
+inf
+
+x {(cid:107)x − y(cid:107)2 + δ(x | U )}
+
+=(cid:2)δ(· | B2) + δ(· | U
+
+)(cid:3)∗
+
+◦
+
+(y) = sup
+
+(cid:110)
+yTx | y ∈ B2 ∩ U
+
+◦(cid:111)
+
+.
+
+SCALED PROXIMAL OPERATORS
+
+5
+
+The second equality follows from the relationship between inﬁmal convolution and
+conjugates (Rockafellar, 1970, §16.4). When U is the positive orthant, for example,
+(cid:3)
+g(x) = (cid:107) max{0, x}(cid:107)2, where the max operator is taken elementwise.
+
+3. Building quadratic-support functions. Quadratic-support functions are
+closed under addition, composition with an aﬃne map, and inﬁmal convolution with a
+quadratic function. In the following, let gi be QS functions with parameters Ai, bi, di,
+Bi, and Ki (with i = 0, 1, 2). The rules for addition and composition are described in
+Aravkin et al. (2013).
+
+Addition rule. The function h(x) := g1(x) + g2(x) is QS with parameters
+
+(cid:18)A1
+
+(cid:19)
+
+(cid:19)
+
+(cid:18)b1
+
+b2
+
+(cid:18)d1
+
+(cid:19)
+
+d2
+
+(cid:18)B1
+
+(cid:19)
+
+B2
+
+A =
+
+,
+
+b =
+
+A2
+
+,
+
+d =
+
+, B =
+
+, K = K1 × K2.
+
+Concatenation rule. The function h(x) := g0(x1) + ··· + g0(xk), with xi ∈ Rn, is
+K = K0 × ··· × K0.
+
+QS with parameters
+(3.1)
+Here, Ik is the k × k identity matrix, 1k is the k-vector of all ones, and ⊗ is the
+Kronecker product. The rule for concatenation follows from the rule for addition of
+QS functions.
+
+(A, B) = Ik ⊗ (A0, B0),
+
+(b, d) = 1k ⊗ (b0, d0),
+
+Aﬃne composition rule. The function h(x) := g0(P x − p) is QS with parameters
+
+A = A0,
+
+b = b0,
+
+d = d0 − B0p, B = B0P.
+
+Moreau-Yosida regularization. The Moreau-Yosida envelope of g0 is the value of
+
+the proximal operator, i.e.,
+
+envH
+
+g0(z) := inf
+
+x { 1
+
+2(cid:107)z − x(cid:107)2
+
+H + g0(x)} .
+
+It follows from Burke and Hoheisel (2013, Proposition 4.10) that
+
+envH
+
+g0(z) = sup
+
+y { yT(B0x + d0) − 1
+
+2 yTB0H
+
+−1BT
+
+0 y | A0y (cid:23)K0 b0 } ,
+
+which is a QS function with parameters
+
+ 0
+
+0
+R
+A0
+
+ ,
+
+1/2
+1/2
+0
+0
+
+ 1/2
+ ,
+
+−1/2
+0
+b0
+
+A =
+
+b =
+
+d =
+
+(cid:18) d0
+
+(cid:19)
+
+−1/2
+
+(cid:18)B0
+
+(cid:19)
+
+0
+
+, B =
+
+, K = Qn+2 × K0,
+
+where RTR = B0H
+Q = B0H
+
+−1BT
+0 .
+
+−1BT
+
+0 . The derivation is given in Appendix A, where we take
+
+Example 3.1 (Sums of norms). In applications of group sparsity (Yuan and Lin,
+2006; Jenatton et al., 2010), various norms are applied to all partitions of x =
+(x1, . . . , xp), which possibly overlap. This produces the QS function
+
+(3.2)
+
+g(x) = (cid:107)x1(cid:107) + ··· + (cid:107)xp(cid:107),
+
+where the norms may be diﬀerent. In particular, consider the case of adding two
+
+norms g(x) = (cid:107)x1(cid:107)(cid:79) + (cid:107)x2(cid:107)(cid:77). (The extension to adding three or more norms follows
+trivially.) First, we introduce matrices where Pi such that xi = Pix, for i = 1, 2. Then
+
+g(x) = (cid:107)P1x(cid:107)(cid:79) + (cid:107)P2x(cid:107)(cid:77).
+
+6
+
+MICHAEL P. FRIEDLANDER AND GABRIEL GOH
+
+(cid:18)B(cid:79)P1
+
+(cid:19)
+
+B(cid:77)P2
+
+(cid:18)A(cid:79)
+
+(cid:19)
+
+(cid:18)b(cid:79)
+
+(cid:19)
+
+b(cid:77)
+
+Then we apply the aﬃne-composition and addition rules to determine the corresponding
+quantities that deﬁne the QS representation of g:
+
+A =
+
+,
+
+b =
+
+A(cid:77)
+
+,
+
+d = 0, B =
+
+, K = K(cid:79) × K(cid:77),
+
+where Ai, bi, Bi, and Ki (with i = (cid:79), (cid:77)) are the quantities that deﬁne the QS
+representation of the individual norms. (Necessarily, d = 0 because the result is a
+norm.) In the special case where (cid:107) · (cid:107)(cid:79) and (cid:107) · (cid:107)(cid:77) are both the 2-norm, then Ai, bi, Bi,
+(cid:3)
+and Ki are given by (2.3) in Example 2.2.
+Example 3.2 (Graph-based 1-norm and total variation). A variation of Exam-
+ple 3.1 can be used to deﬁne a variety of interesting norms, including the graph-based
+1-norm regularizer used in machine learning (Chin et al., 2013), and the isotropic and
+anisotropic versions of total variation (TV), important in image processing (Lou et al.,
+2014). Let
+
+g(x) = (cid:107)N x(cid:107)G,
+
+with
+
+(cid:107)z(cid:107)G =
+
+(cid:107)zi(cid:107)2,
+
+p(cid:88)
+
+i=1
+
+where zi is a partition of z and N is an m-by-n matrix. For anisotropic TV and
+the graph-based 1-norm regularizer, N is the adjacency matrix of a graph, and each
+partition zi has a single unique element, so g(x) = (cid:107)N x(cid:107)1. For isotropic TV, each
+partition captures neighboring pairs of variables, and N is a ﬁnite-diﬀerence matrix.
+The QS addition and aﬃne-composition rules can be combined to derive the parameters
+of g. When p = n (i.e., each zi is a scalar), we are summing n absolute-value functions,
+and using (2.2) yields
+
+(3.3)
+
+A = Im ⊗
+
+,
+
+b = 1m ⊗
+
+,
+
+d = 0, B = N, K = R2m
+
++ .
+
+When p = m/2, (i.e., each partition has size 2) we are summing m/2 two-dimensional
+2-norms, and using (2.3) gives
+
+(cid:18) 1
+(cid:19)
+
+−1
+
+A = Im/2 ⊗
+
+,
+
+b = 1m/2 ⊗
+
+,
+
+d = 0, B = N, K = Q2 ×
+
+(m/2)
+
+··· × Q2.
+
+(cid:3)
+
+(cid:18)
+
+(cid:19)
+
+−1
+−1
+
+(cid:18)1
+(cid:19)
+
+0
+
+(cid:18) 0
+
+(cid:19)
+
+I2
+
+4. The proximal operator as a conic QP. We describe in this section how
+the proximal map (1.2) can be obtained as the solution of a quadratic optimization
+problem (QP) over conic constraints,
+
+(4.1)
+
+minimize
+
+y
+
+1
+
+2 yTQy − cTy
+
+subject to Ay (cid:23)K b,
+
+for some positive semideﬁnite (cid:96)-by-(cid:96) matrix Q and a convex cone K = K1 × ··· × Kk.
+The transformation to a conic QP is not immediate because the deﬁnition of the QS
+function implies that the proximal map involves nested optimization. Duality, however,
+furnishes a means for simplifying this problem.
+
+Proposition 4.1. Let g be a QS function. If the relative interior of the domain
+
+of g is nonempty, the following problems are dual pairs:
+
+(4.2a)
+
+(4.2b)
+
+minimize
+
+x
+
+minimize
+
+Ay(cid:23)Kb
+
+1
+
+2(cid:107)z − x(cid:107)2
+2 yTBH
+
+1
+
+H + g(x),
+
+−1BT y − (d + Bz)Ty.
+
+SCALED PROXIMAL OPERATORS
+
+7
+
+Furthermore, the primal-dual solutions are related by
+
+(4.3)
+
+Proof. Let
+
+Hx + BTy = Hz.
+
+h1(x) := 1
+
+2(cid:107)x − z(cid:107)2
+
+H and h2(x) := sup
+
+y∈Y { yT (x + d)} .
+
+From the assumption on g it follows that
+
+ri dom(g) (cid:54)= ∅ ⇐⇒ imB ∩ ri dom(h2) (cid:54)= ∅ ⇐⇒ B · ri dom(h1) ∩ ri dom(h2) (cid:54)= ∅.
+Hence we can apply Fenchel duality (Bertsekas, 2009, Prop. 5.3.8) to deduce that
+
+(4.4)
+
+where
+
+h
+
+inf
+x
+
+h1(x) + h2(Bx) = − inf
+
+y
+
+∗
+∗
+1(−BT y) + h
+h
+2(y),
+
+∗
+1(y) = 1
+
+2(cid:107)y(cid:107)2
+
+H
+
+−1 + zT y
+
+∗
+2(y) = δ(z | Y) − dT y
+and h
+
+are the Fenchel conjugates of h1 and h2, and the inﬁma on both sides are attained. (See
+Rockafellar (1970, §12) for the convex calculus of Fenchel conjugates.) The right-hand
+side of (4.4) is precisely the dual problem (4.2b).
+
+It also follows from Fenchel duality that the pair (x, y) is optimal only if
+
+x ∈ arg min
+
+x
+
+{ h1(x) + yTBx} .
+
+Diﬀerentiate this objective to obtain (4.3).
+
+The 1-norm regularizer g = (cid:107) · (cid:107)1 is an easy example that illustrates the dual
+correspondence described by (4.2), which simpliﬁes to the familiar primal-dual pair
+
+minimize
+
+x
+
+1
+
+2(cid:107)x − d(cid:107)2
+
+H + (cid:107)x(cid:107)1
+
+and
+
+minimize
+−1≤y≤1
+
+1
+
+2(cid:107)y − Hd(cid:107)2
+
+H
+
+−1 .
+
+5. Primal-dual methods for conic QP. Proposition 4.1 gives us a means of
+evaluating the proximal map of QS functions via conic quadratic optimization. There
+are many algorithms for solving convex conic QPs, but primal-dual methods oﬀer a
+particularly eﬃcient approach that can leverage the special structure that deﬁnes QS
+functions. A detailed discussion of the implementation of primal-dual methods for
+conic optimization is given by Vandenberghe (2010); here we summarize the main
+aspects that pertain to implementing these methods eﬃciently in our context.
+
+The standard development of primal-dual methods for (4.1) is based on perturbing
+the optimality conditions, which can be stated as follows. The solution y, together
+with slack and dual vectors s and v, must satisfy
+
+Qy − AT v = c,
+
+v (cid:23)K 0,
+
+where the matrix S is block diagonal, and each mi-by-mi block Si is either a diagonal
+or arrow matrix depending on the type of cone, i.e.,
+
+(cid:18)
+
+(cid:19)
+
+(cid:40)
+
+Si =
+
+diag(si)
+arrow(si)
+
++ ,
+
+if Ki = Rmi
+if Ki = Qmi,
+
+arrow(u) :=
+
+u0
+¯u
+
+¯uT
+u0I
+
+for u = (u0, ¯u).
+
+8
+
+MICHAEL P. FRIEDLANDER AND GABRIEL GOH
+
+See Vandenberghe (2010) for further details.
+
+Now, replace the complementarity condition Sv = 0 with its perturbation Sv = µe,
+
+where µ is a positive parameter, and e = (e1, . . . , ek), with each block deﬁned by
+
+(cid:40)
+
+ei =
+
+(1, 1, . . . , 1)
+(1, 0, . . . , 0)
+
+if Ki = Rmi
++ ,
+if Ki = Qmi.
+
+A Newton-like method is applied to the perturbed optimality conditions, which we
+phrase as the root of the function
+
+Qy − ATv − c
+
+Ay − s − b
+Sv − µe
+
+ =:
+
+ .
+
+rd
+
+rp
+rµ
+
+Rµ :
+
+v
+s
+
+y
+
+ (cid:55)→
+ = −
+∆y
+
+∆v
+∆s
+
+Each iteration of the method proceeds by systematically choosing the perturbation
+parameter µ (ensuring that it decreases), and obtaining each search direction as the
+solution of the Newton system
+
+Q −AT
+
+A
+0
+
+0
+S
+
+0
+−I
+V
+
+(5.1)
+
+,
+
+rd
+
+rp
+rµ
+
+y+
+
+v+
+s+
+
+ =
+
+y
+
+ + α
+
+v
+s
+
+ .
+
+∆y
+
+∆v
+∆s
+
+(cid:40)
+
+The steplength α is chosen to ensure that (v+, s+) remain in the strict interior of the
+cone.
+
+One approach to solving for the Newton direction is to apply block Gaussian
+
+elimination to (5.1), and obtain the search direction via the following systems:
+
+(Q + ATS
+
+(5.2a)
+
+(5.2b)
+
+(5.2c)
+
+−1V A)∆x = rd + ATS
+
+−1(V rp + rµ),
+−1(cid:0)rµ − S∆v(cid:1) .
+−1(V rp + rµ − V A∆x),
+
+∆v = S
+
+∆s = V
+
+In practice, the matrices S and V are rescaled at each iteration in order to yield
+search directions with favorable properties. In particular, the Nesterov-Todd rescaling
+redeﬁnes S and V so that SV
+
+−1 = block(u) for some vector u, where
+
+(5.3) block(u)i =
+
+diag(ui)
+(2uiuT
+
+i − [uT
+
+i Jui]J)2
+
+if Ki = (cid:60)mi
++ ,
+if Ki = Qmi,
+
+J =
+
+0
+
+0 −I(mi−1)
+
+The cost of the overall approach is therefore determined by the cost of solving, at each
+iteration, systems with the matrix
+
+(5.4)
+
+L(u) := Q + AT block(u)
+
+−1A,
+
+which now deﬁnes the system (5.2a).
+
+6. Evaluating the proximal operator. Proposition 4.1 provides a recipe for
+transforming the proximal operator (1.3) into a conic QP that can be solved by an
+interior algorithm described in §5. In particular, to evaluate proxH
+g (x) we solve the
+conic QP (4.1) with the deﬁnitions
+
+(6.1)
+
+Q := BH
+
+−1BT ,
+
+c := d + Bx;
+
+(cid:18)1
+
+(cid:19)
+
+.
+
+SCALED PROXIMAL OPERATORS
+
+9
+
+Algorithm 1: Evaluating proxH
+
+g (x)
+
+: x, H, and QS function g as deﬁned by parameters A, b, d, B, K
+
+Input
+Output : proxH
+Step 1: Apply interior method to QP (4.2b) to obtain y(cid:63).
+Step 2: Return H
+
+g (x)
+
+−1(c − BTy(cid:63)).
+
+the other quantities A, b, and the cone K, appear verbatim. Algorithm 1 summarizes
+the procedure. As we noted in §5, the main cost of this procedure is incurred in Step 1,
+which requires repeatedly solving linear systems that involve the linear operator (5.4).
+Together with (6.1), these matrices have the form
+
+(6.2)
+
+L(u) = BH
+
+−1BT + AT block(u)
+
+−1A.
+
+Below we oﬀer a tour of several examples, ordered by level of simplicity, to illustrate
+the details involved in the application of our technique. The Sherman-Woodbury (SW)
+identity
+
+−1U (M
+
+−1 − D
+
+(D + U M U T )
+−1 + U TD
+
+−1 = D
+−1U is nonsingular, proves useful for taking advantage of
+valid when M
+certain structured matrices that arise when solving (6.2). Some caution is needed,
+however, because it is known that the SW identity can be numerically unstable (Yip,
+1986).
+
+−1 + U TD
+
+−1U )
+
+−1U TD
+
+−1,
+
+For our purposes, it is useful to think of the SW formula as a routine that takes the
+elements (D, U, M ) that deﬁne a linear operator D + U M U T , and returns the elements
+−1. We
+(D1, U1, M1) that deﬁne the inverse operator D1 + U1M1U T
+assume that D and M are nonsingular. The following pseudocode summarizes the
+operations needed to compute the elements of the inverse operator.
+
+1 = (D + U M U T )
+
+function SWinv(D, U, M ):
+
+−1
+D1 ← D
+U1 ← D1U
+−1 + U TU1)
+M1 ← (M
+return D1, U1, M1
+
+−1
+
+1
+
+2
+
+3
+
+4
+
+Typically, D is a structured operator that admits a fast algorithm for solving linear
+systems with any right-hand side, and U and M are stored explicitly as dense matrices.
+Step 1 above computes a new operator D1 that simply interchanges the operations of
+multiplication and inversion with D. Step 2 applies the operator D1 to every column
+of U (typically a tall matrix with few columns), and Step 3 requires inverting a small
+matrix.
+
+Example 6.1 (1-norm regularizer; cf. Example 2.1). Example 2.1 gives the QS
+representation for g(x) = (cid:107)x(cid:107)1, and the required expressions for A, B, and K. Because
+K is the nonnegative orthant, block(u) = diag(u); cf. (5.3). With the deﬁnitions of
+A and B, the linear operator L in (6.2) simpliﬁes to
+
+−1 + AT diag(u)A = H
+
+−1 + Σ,
+
+L(u) = H
+
+10
+
+MICHAEL P. FRIEDLANDER AND GABRIEL GOH
+
+where Σ is a positive-deﬁnite diagonal matrix that depends on u. If it happens that
+−1 is easily invertible,
+the preconditioner H has a special structure such that H + Σ
+it may be convenient to apply the SW identity to obtain equivalent formulas for the
+inverse
+
+−1 = (H
+
+−1 + Σ)
+
+−1 = H − H(H + Σ
+
+−1)
+
+−1H.
+
+L(u)
+
+Banded, chordal, and diagonal-plus-low-rank matrices are examples of specially struc-
+−1 eﬃcient. They yield the
+tured matrices that make one of these formulas for L
+eﬃciency because subtracting the diagonal matrix Σ preserves the structure of either
+(cid:3)
+H or H
+
+−1.
+
+In the important special case where H is the (scaled) identity, the proximal
+
+operator for the 1-norm can be obtained directly via the formula
+
+proxg(x) = diag(sign(x)) · max{|x| − 1, 0},
+
+where the “sign” and “max” operators are evaluated componentwise. There is no
+simple formula, however, when H is more general.
+
+Example 6.2 (Graph-based 1-norm). Consider the graph-based 1-norm function
+from Example 3.2 induced by a graph G, which has adjacency matrix N . Substitute
+the deﬁnitions of A and B from (3.3) into the formula for L and simplify to obtain
+
+L(u) = N H
+
+−1N T + AT diag(u)A = N H
+
+−1N T + Σ,
+
+where Σ := AT diag(u)A is a positive-deﬁnite diagonal matrix. (As with Example 6.1,
+K is the positive orthant, and thus block(u) = diag(u).) Linear systems of the form
+L(u)p = q then can be solved with the following sequence of operations, in which we
+assume that H = Λ + U M U T , where Λ is diagonal.
+
+1 (Λ1, U1, M1) ← SWinv(Λ, U, M )
+2 Σ1 ← N Λ1N T + Σ
+3 (Σ2, U2, M2) ← SWinv(Σ1, N U1, M1)
+4 p ← Σ2q + U2M2U T
+2 q
+5 return p
+
+[ H
+
+[L(u)
+
+1 ]
+
+−1 ≡ Λ1 + U1M1U T
+−1 ≡ Σ2 + U2M2U T
+2 ]
+[ solve L(u)p = q ]
+
+Observe from the deﬁnition of H and the deﬁnition of Σ1 in Step 2 above that
+
+L(u) = Σ1 + N U1M1U T
+
+1 N T ,
+
+and then Step 3 computes the quantities that deﬁne the inverse of L. The bulk of the
+work in the above algorithm happens in Steps 3, where Σ2 ≡ Σ
+is applied to each
+column of N U1 (see Step 2 of the SWinv function), and in Step 4, where Σ2 is applied
+to q. Below we give two special cases where it is possible to take advantage of the
+structure of N and H in order to apply Σ2 eﬃciently to a vector.
+1-dimensional total variation. Suppose that the graph G is a path. Then
+
+−1
+1
+
+−1
+
+N =
+
+
+
+1
+
+1
+. . .
+
+. . .
+−1
+
+SCALED PROXIMAL OPERATORS
+
+11
+−1N T + Σ (see Step 2 of the
+is an (n − 1) × n matrix. The matrix Σ1 := N Λ
+above algorithm) is tridiagonal, and hence equations of the form Σ1q = p can
+be solved eﬃciently using standard techniques, e.g., Golub and Loan (1989,
+Algorithm 4.3.6).
+
+Chordal graphs. If the graph G is chordal, than the matrix N TDN , for any diagonal
+
+matrix D, is also chordal, which implies that it can be factored in time linear
+with the number of edges of the graph (Andersen et al., 2010). We can
+use this fact to apply Σ2 ≡ Σ
+let (Σ3, U3, M3) =
+SWinv(Σ, N, Λ1), which implies
+
+eﬃciently, as follows:
+
+−1
+1
+
+Σ2 := Σ3 + U3M3U T
+
+−1.
+−1N is chordal, so is M3, and any methods eﬃcient for solving
+(cid:3)
+
+Because N TΣ
+with chordal matrices can be used when applying Σ2.
+
+−1, M3 := (N TΣ
+
+3 , where Σ3 := Σ
+
+−1N + Λ1)
+
+Example 6.3 (1-norm constraint; cf. Example 2.5). Example 2.5 gives the QS
+representation for the indicator function on the 1-norm ball. Because the constraints
+on y in (2.4) involve only bound constraints, block(u) = diag(u). With the deﬁnitions
+of A and B from Example 2.5, the linear operator L has the form
+
+(cid:19)(cid:18)diag(u1)
+
+(cid:18) 1T
+
+−In
+
+1T
+In
+
+(cid:19)(cid:18)1 −In
+
+(cid:19)
+
+,
+
+In
+
+diag(u2)
+
+1
+
+(cid:18) 0
+(cid:19)
+(cid:18)1Tu
+
+In
+
+−
+u
+
+L(u) =
+
+L(u) =
+
+In
+
+(cid:1) +
+(cid:19)
+
+−1(cid:0)0
+
+H
+
+−
+)T
+(u
+−1 + Σ
+
+H
+
+where u = (u1, u2). Thus, L simpliﬁes to
+
+where
+
+Σ := diag(u+),
+
+u+ := u1 + u2,
+−
+:= −u1 + u2.
+u
+
+−1 + Σ). The
+Systems that involve L can be solved by pivoting on the block (H
+cases where this approach is eﬃcient are exactly those that are eﬃcient in the case of
+(cid:3)
+Example 6.1.
+Example 6.4 (2-norm; cf. Example 2.2). Example 2.2 gives the QS representa-
+tion for the 2-norm function. Because K = Qn, block(u) = (2uuT − [uTJu]J)2,
+where u = (u0, ¯u) and J is speciﬁed in (5.3). With the expressions for A and B from
+Example 2.2, the linear operator L reduces to
+(6.3)
+
+−1 + αIn + vvT , with α = (uTJu)2, v =
+
+(cid:112)
+
+−1 by a multiple of the identity, followed by a
+This amounts to a perturbation of H
+rank-1 update. Therefore, systems that involve L can be solved at the cost of solving
+systems with H + αIn (for some scalar α).
+Of course, the proximal map of the 2-norm is easily computed by other means;
+our purpose here is to use this as a building block for more useful penalties, such as
+Example 3.1, which involves the sum-of-norms function shown in (3.2). Suppose that
+the p partitions do not overlap, and have size ni for i = 1, . . . , p. The operator L
+in (6.3) generalizes to
+
+L(u) = H
+
+8u0 · ¯u.
+
+−1 +
+
+L(u) = H
+
+α1In1 + v1(v1)T
+(cid:124)
+
+
+(cid:125)
+
+,
+
+0, ¯ui)
+
+(cid:113)
+
+ui = (ui
+αi = (uiT Jui)2
+0 · ¯ui,
+
+vi =
+
+8ui
+
+. . .
+
+(cid:123)(cid:122)
+
+W
+
+αpInp + vp(vp)T
+
+α1In1
+
+W =
+
+ +
+
+v1
+
+
+
+v1
+
+T
+
+12
+
+MICHAEL P. FRIEDLANDER AND GABRIEL GOH
+
+where each vector ui has size ni + 1.
+
+If H
+
+When p is large, we can treat each diagonal block of W as an individual (small)
+−1 is diagonal-plus-low-rank, for example, the
+diagonal-plus-rank-1 matrix.
+−1 can be subsumed into W . In that case, each diagonal block in W
+diagonal part of H
+remains diagonal-plus-rank-1, which can be inverted in parallel by handling each block
+individually. Subsequently, the inverse of L can be obtained by a second correction.
+Another approach, when p is small, is to consider W as a diagonal-plus-rank-p
+matrix:
+
+. . .
+
+αpInp
+
+. . .
+
+vp
+
+. . .
+
+vp
+
+.
+
+(cid:3)
+
+This representation is convenient because systems involving L can be solved eﬃciently
+in a manner identical to that of Example 6.1, as W is a diagonal-plus-low-rank matrix.
+
+Example 6.5 (separable QS functions). Suppose that g is separable, i.e.,
+
+g(x) = γ(x1) + ··· + γ(xn),
+
+where γ : R → R is a QS function with parameters (Aγ, bγ, Bγ, dγ, Rnp
++ ), and p is an
+integer parameter that depends on γ. The parameters A and B for g follow from the
+concatenation rule (3.1), and A = (In ⊗ Aγ) and B = (In ⊗ Bγ). Thus, the linear
+operator L is given by
+
+L(u) = (In ⊗ Bγ)H
+
+−1(In ⊗ Bγ)T + (In ⊗ Aγ)T diag(u)(In ⊗ Aγ).
+
+Apply the SW identity to obtain
+
+−1 = Λ
+
+−1 − Λ
+
+−1(In ⊗ Bγ)(H + Σ)
+
+−1(In ⊗ Bγ)T Λ
+
+−1,
+
+L(u)
+
+where Λ = diag(Λ1, . . . , Λn),
+
+Λi = AT
+
+γ diag(ui)Aγ,
+
+and
+
+Σ = diag(BT
+
+γ Λ
+
+−1
+1 Bγ, . . . , BT
+
+γ Λ
+
+−1
+n Bγ).
+
+Because γ is takes a scalar input, Bγ is a vector. Hence Σ is a diagonal matrix. Note
+too that Λ is a block diagonal matrix with n blocks each of size p. We can then solve
+the system L(u)p = q with the following steps:
+−1q
+1 q1 ← (In ⊗ Bγ)T Λ
+−1q1
+2 q2 ← (H + Σ)
+−1q2 − Λ
+−1(In ⊗ Bγ)q2
+3 q3 ← Λ
+
+The cost of solving systems with the operator L is dominated by solves with the
+block diagonal matrix Λ (Steps 1 and 3) and H + Σ (Step 2). The cost of the latter
+(cid:3)
+linear solve is explored in Example 6.1.
+
+7. A proximal quasi-Newton method. We now turn back to the proximal-
+gradient method discussed in §1. Our aim here is twofold. Firstly, we wish to
+demonstrate the feasibility of the interior approach for solving proximal operators
+of QS functions, and secondly, we wish to illustrate how this technique leads to an
+eﬃcient extension of the quasi-Newton method for nonsmooth problems of practical
+interest. We focus on the limited-memory BFGS method, which generates a sequence of
+
+SCALED PROXIMAL OPERATORS
+
+13
+
+matrices { Hk } that approximate the Hessian ∇2f (xk) at an iterate xk. The resulting
+
+proximal quasi-Newton method is most closely related to the approaches advocated
+by Schmidt et al. (2009) and by Zhong et al. (2014). The former consider general
+regularizers g but are limited to using a ﬁrst-order method for the proximal evaluation,
+which ignores the structure in the Hessian approximation. On the other hand, Zhong
+et al. are limited to 1-norm regularization, and use a coordinate-descent method to
+evaluate a scaled proximal operator.
+
+7.1. Limited-memory BFGS updates. He we give a brief outline the limited-
+memory BFGS method for obtaining Hessian approximations of a smooth function f .
+We follow the notation of Nocedal and Wright (1999, §6.1), who use Hk to denote the
+current approximation to the inverse of the Hessian of f .
+
+Let xk and xk+1 be two consecutive iterates, and deﬁne the vectors
+yk = ∇f (xk+1) − ∇f (xk).
+
+sk = xk+1 − xk,
+
+and
+
+A “full memory” BFGS method updates either the approximation updates the approx-
+imation Hk via the recursion
+
+H0 = σI,
+
+Hk+1 = Hk −
+
+k Hk
+
+HksksT
+sT
+k Hksk
+
++
+
+ykyT
+k
+yT
+k sk
+
+,
+
+for some positive parameter σ that deﬁnes the initial approximation. The limited-
+memory variant of the BFGS update (L-BFGS) maintains the most recent m pairs
+(sk, yk), discarding older vectors. In all cases, m (cid:28) n, e.g., m = 10. Each interior
+iteration for evaluating the proximal operator depends on solving linear systems with
+L in (6.2). In all of the experiments presented below, each interior iteration has a cost
+that is linear in the number of variables n.
+
+8. Numerical experiments. We have implemented the proximal quasi-Newton
+method as a Julia package (Bezanson et al., 2014), called QSip, designed for problems
+of the form (1.1), where f is smooth and g is a QS function. The code is available at
+the URL
+
+https://github.com/MPF-Optimization-Laboratory/QSip.jl
+
+A primal-dual interior method, based on ideas from the CVXOPT software package
+(Andersen et al., 2010), is used for Algorithm 1. We consider below several examples.
+The ﬁrst three examples apply the QSip solver to minimize benchmark least-squares
+problems with diﬀerent regularizers; the last example applies the solver to a sparse
+logistic-regression problem on a standard data set.
+
+8.1. Synthetic least square problems. This ﬁrst set of examples involves the
+
+least-squares objective
+
+f (x) = 1
+
+2(cid:107)Ax − b(cid:107)2
+2,
+
+where A is a 2000-by-2000 Heaviside matrix, which has 1’s in the lower triangle and
+0 everywhere else. Chen et al. (2001) and Lorenz (2013) consider this matrix in the
+context of least-squares problems with 1-norm regularization. Below we apply QSip to
+problems with g equal to the 1-norm, the group LASSO (i.e., sum of 2-norm functions),
+and total variation.
+
+We follow the testing approach described by Lorenz (2011) for constructing a test
+−T v, where
+
+problem with a known solution: ﬁx a vector x(cid:63) and choose b = Ax(cid:63) − A
+v ∈ ∂g(x(cid:63)). Note that
+−T v]) + ∂g(x(cid:63)) = ∂g(x(cid:63)) − v.
+
+∂(f + g)(x(cid:63)) = AT (Ax(cid:63) − [Ax(cid:63) − A
+
+14
+
+MICHAEL P. FRIEDLANDER AND GABRIEL GOH
+
+Fig. 1. Performance of solvers applied to a 1-norm regularized least-squares problem. The
+
+horizontal axis measures elapsed time; the vertical axis measures distance to the solution.
+
+Because v ∈ ∂g(x(cid:63)), the above implies that 0 ∈ ∂(f + g)(x(cid:63)), and hence x(cid:63) minimizes
+
+the objective f + g.
+
+8.1.1. One-norm regularization. In this experiment we choose g = (cid:107) · (cid:107)1,
+which gives the 1-norm regularized least-squares problem, often used in applications
+of sparse recovery.
+
+Following the details in Example 2.1, the system L(u) is a diagonal-plus-low-rank
+matrix, which we invert using the SW identity. Figure 1 shows the results of applying
+the QSip solver with a memories 1 and 10 (labeled “L-BFGS mem = k”), where
+k = 1, 10. We also consider comparisons against two competitive proximal-based
+methods. The ﬁrst is a proximal-gradient algorithm that uses the Barzilai-Borwein
+steplength (Barzilai and Borwein, 1988; Figueiredo et al., 2007); this is our own
+implementation of the method, and is labeled “Barzilai-Borwein” in the ﬁgures. The
+second is the proximal quasi-Newton method implemented by Becker and Fadili (2012),
+which is based on a symmetric-rank-1 Hessian approximation; this code is labeled “PG-
+SR1”. The QSip solver with memory of 10 outperforms the other solvers. Interestingly,
+the SR1 solver eventually accelerates, but stalls because of numerical error.
+
+8.1.2. Group LASSO. Our second experiment is based on the sum-of-norms
+regularizer described in Examples 3.1 and 6.4. In this experiment, the n-vector (with
+n = 2000) is partitioned into p = 5 non-overlapping equal block. Figure 2 shows that
+the QSip solver clearly outperforms the proximal-gradient with the Barzilai-Borwein
+step size. Although we required QSip to exit with a solution estimate accurate within
+−6), the interior solver in failed to achieve the requested
+6 digits (i.e., log((cid:107)x− x
+accuracy because of numerical instability with the SW formula used for solving the
+Newton system. This raises the question of how to use eﬃcient alternatives to the SW
+update that are numerically stable and can still leverage the structure of the problem.
+
+(cid:107) ≈ 10
+
+∗
+
+02004006008001000120014001600Timeinseconds-6-4-202logkx−x?kPG-SR1Barzilai-BorweinQSip,mem=1QSip,mem=10SCALED PROXIMAL OPERATORS
+
+15
+
+Fig. 2. Performance of solvers applied to a group-Lasso problem. The horizontal axis measures
+
+elapsed time; the vertical axis measures distance to the solution.
+
+Fig. 3. Performance of the QSip solver applied to a 1-dimensional total-variation problem.
+
+8.1.3. 1D total variation. Our third experiment sets
+
+n−1(cid:88)
+
+i=1
+
+g(x) =
+
+|xi+1 − xi|,
+
+which is a special case of the function described in Examples 3.2 and 6.2. The
+comparison in Figure 3 omits the PG-SR1 solver because it does not apply to this
+problem, and omits the Barzilai-Borwein solver because it is not competitive.
+
+02004006008001000120014001600Timeinseconds−4−3−2−101logkx−x?kBarzilai-BorweinQSip,Mem=1QSip,Mem=1002004006008001000120014001600Timeinseconds−4−3−2−10123logkx−x?kQSip,Mem=1QSip,Mem=1016
+
+MICHAEL P. FRIEDLANDER AND GABRIEL GOH
+
+Fig. 4. Performance of solvers on a sparse logistic-regression problem. The horizontal axis
+
+measures elapsed time; the vertical axis measures the ﬁrst-order optimality of the current iterate.
+
+8.1.4. Sparse logistic regression. This next experiment tests QSip on the
+
+sparse logistic regression problem problem
+
+minimize
+
+x
+
+1
+N
+
+log(1 + exp[aT
+
+i ¯x + x0]) + (cid:107)¯x(cid:107)1,
+
+x = [x0, ¯x],
+
+N(cid:88)
+
+i=1
+
+where the feature vectors ai are taken from the Gisette Dataset (Guyon et al., 2004).
+Each vector ai represents a handwritten digit (either “4” or “9”) and the logistic-
+regression problem builds a classiﬁer that attempts to distinguish between the two
+digits. The co-variate vectors ai in this data set are dense, and therefore the gradient
+is costly to compute. The dataset has 5000 parameters and 13500 instances. Figure 4
+compares QSip against “L1-logreg” (Kim et al., 2007), which is a specialized C solver
+for logistic regression. Because we do not know a priori the solution for this problem,
+the vertical axis measures the log of the optimality residual (cid:107)xk−proxg(xk−∇f (xk))(cid:107)
+of the current iterate. (The norm of this residual necessarily vanishes at the solution.)
+
+9. Conclusion. Much of our discussion revolves around techniques for solving
+the Newton systems (5.1) that arise in the implementation of an interior method for
+solving QPs. The Sherman-Woodbury formula features prominently because it is a
+convenient vehicle for taking advantage of the structure of the Hessian approximations
+and the structured matrices that typically deﬁne QS functions. Other alternatives,
+however, may be preferable, depending on the application.
+
+For example, we might choose to reduce the 3-by-3 matrix in (5.1) to an equivalent
+
+symmetrized system (cid:18)
+
+(cid:19)(cid:18)∆y
+
+(cid:19)
+
+(cid:18)
+
+−Q AT
+
+D
+
+A
+
+∆s
+
+= −
+
+−rd
+rp + V
+
+−1rµ
+
+(cid:19)
+
+−1S. As described by Benzi and Wathen (2008), Krylov-based method,
+with D := V
+such as MINRES (Paige and Saunders, 1975), may be applied to a preconditioned
+
+0100200300400500600700800Timeinseconds−8−7−6−5−4−3−2−10log(xk−proxg(xk−∇f(xk)))L1logregBarzilai-BorweinQSip,Memory1QSip,Memory10SCALED PROXIMAL OPERATORS
+
+17
+
+system, using the preconditioner
+
+P =
+
+(cid:18)
+
+−L(u)
+
+(cid:19)
+
+,
+
+D
+
+where L(u) is deﬁned in (5.4). This “ideal” preconditioner clusters the spectrum into
+three distinct values, so that in exact arithmetic, MINRES would converge in three
+iterations. The application of the preconditioner requires solving systems with L and
+D, and so all of the techniques discussed in §6 apply. One beneﬁt, however, which we
+have not explored here, is that the preconditioning approach allows us to approximate
+−1(u), rather than to compute it exactly, which may yield computational eﬃciencies
+L
+for some problems.
+
+References.
+
+M. Andersen, J. Dahl, and L. Vandenberghe. Implementation of nonsymmetric interior-
+point methods for linear optimization over sparse matrix cones. Mathematical
+Programming Computation, 2(3-4):167–201, 2010.
+
+A. Y. Aravkin, J. V. Burke, and G. Pillonetto. Sparse/robust estimation and kalman
+smoothing with nonsmooth log-concave densities: Modeling, computation, and
+theory. J. Mach. Learn. Res., 14(1):2689–2728, 2013.
+
+J. Barzilai and J. M. Borwein. Two-point step size gradient methods. IMA J. Numer.
+
+Anal., 8:141–148, 1988.
+
+A. Beck and M. Teboulle. A fast iterative shrinkage-thresholding algorithm for linear
+
+inverse problems. SIAM Journal on Imaging Sciences, 2(1):183–202, 2009.
+
+S. Becker and J. Fadili. A quasi-Newton proximal splitting method. In F. Pereira,
+C. Burges, L. Bottou, and K. Weinberger, editors, Advances in Neural Information
+Processing Systems 25, pages 2618–2626. Curran Associates, Inc., 2012.
+
+M. Benzi and A. J. Wathen. Some preconditioning techniques for saddle point problems.
+In Model order reduction: theory, research aspects and applications, pages 195–211.
+Springer, 2008.
+
+D. P. Bertsekas. Convex optimization theory. Athena Scientiﬁc Belmont, MA, 2009.
+J. Bezanson, A. Edelman, S. Karpinski, and V. B. Shah. Julia: A fresh approach to
+
+numerical computing, November 2014.
+
+J. V. Burke and T. Hoheisel. Epi-convergent smoothing with applications to convex
+
+composite functions. SIAM J. Optim., 23(3):1457–1479, 2013.
+
+S. S. Chen, D. L. Donoho, and M. A. Saunders. Atomic decomposition by basis pursuit.
+
+SIAM Rev., 43(1):129–159, 2001.
+
+H. H. Chin, A. Madry, G. L. Miller, and R. Peng. Runtime guarantees for regression
+In Proceedings of the 4th conference on Innovations in Theoretical
+
+problems.
+Computer Science, pages 269–282. ACM, 2013.
+
+M. Figueiredo, R. Nowak, and S. J. Wright. Gradient Projection for Sparse Recon-
+struction: Application to Compressed Sensing and Other Inverse Problems. Sel.
+Top. in Signal Process., IEEE J., 1(4):586–597, 2007.
+
+G. H. Golub and C. F. V. Loan. Matrix Computations. Johns Hopkins University
+
+Press, Baltimore, second edition, 1989.
+
+I. Guyon, S. Gunn, A. Ben-Hur, and G. Dror. Result analysis of the nips 2003 feature
+selection challenge. Advances in Neural Information Processing Systems, 17:545–552,
+2004.
+
+R. Jenatton, J. Mairal, F. R. Bach, and G. R. Obozinski. Proximal methods for sparse
+hierarchical dictionary learning. In Proceedings of the 27th International Conference
+on Machine Learning (ICML-10), pages 487–494, 2010.
+
+18
+
+MICHAEL P. FRIEDLANDER AND GABRIEL GOH
+
+S. Karimi and S. Vavasis. IMRO: a proximal quasi-Newton method for solving l1-
+
+regularized least square problem, 2014.
+
+S.-J. Kim, K. Koh, M. Lustig, S. Boyd, and D. Gorinevsky. An interior-point method
+for large-scale L1-regularized least squares. IEEE J. Sel. Top. Signal Process., 1(4):
+606–617, 2007.
+
+J. D. Lee, Y. Sun, and M. A. Saunders. Proximal newton-type methods for minimizing
+
+composite functions. SIAM J. Optim., 24(3):1420–1443, 2014.
+
+D. A. Lorenz. Constructing test instances for basis pursuit denoising. arXiv preprint
+
+arXiv:1103.2897, 2011.
+
+D. A. Lorenz. Constructing test instances for basis pursuit denoising. IEEE Trans.
+
+Sig. Proc., 61(5):1210–1214, March 2013.
+
+Y. Lou, T. Zeng, S. Osher, and J. Xin. A weighted diﬀerence of anisotropic and
+isotropic total variation model for image processing. Technical report, Department
+of Mathematics, UCLA, 2014.
+
+J. Nocedal and S. J. Wright. Numerical Optimization. Springer, New York, 1999.
+C. C. Paige and M. A. Saunders. Solution of sparse indeﬁnite systems of linear
+
+equations. SIAM J. Numer. Anal., 12(4):617–629, 1975.
+
+R. T. Rockafellar. Convex Analysis. Princeton University Press, Princeton, 1970.
+R. T. Rockafellar and R. J. B. Wets. Variational Analysis, volume 317. Springer, 1998.
+
+3rd printing.
+
+M. Schmidt, E. van den Berg, M. P. Friedlander, and K. Murphy. Optimizing
+costly functions with simple constraints: a limited-memory projected quasi-Newton
+algorithm. In Proc. 12th Inter. Conf. Artiﬁcial Intelligence and Stat., pages 448–455,
+April 2009.
+
+P. Tseng. Approximation accuracy, gradient methods, and error bound for structured
+
+convex optimization. Math. Program., 125:263–295, 2010.
+
+L. Vandenberghe. The CVXOPT linear and quadratic cone program solvers, 2010.
+E. Yip. A note on the stability of solving a rank-p modiﬁcation of a linear system
+by the Sherman-Morrison-Woodbury formula. SIAM J. Sci. Stat. Comput., 7(2):
+507–513, 1986.
+
+M. Yuan and Y. Lin. Model selection and estimation in regression with grouped
+
+variables. J. Royal Stat. Soc. B., 68, 2006.
+
+K. Zhong, E.-H. Yen, I. S. Dhillon, and P. K. Ravikumar. Proximal quasi-Newton for
+computationally intensive l1-regularized m-estimators. In Z. Ghahramani, M. Welling,
+C. Cortes, N. Lawrence, and K. Weinberger, editors, Advances in Neural Information
+Processing Systems 27, pages 2375–2383. Curran Associates, Inc., 2014.
+
+Appendix A. QS Representation for a quadratic. Here we derive the QS
+
+representation of a support function that includes an explicit quadratic term:
+
+g(x) = sup
+
+y { yT(B0x + d0) − 1
+
+2 yTQy | A0y (cid:23)K0 b0 } .
+
+Let R be such that RTR = Q. We can then write the quadratic function in the
+objective as a constraint its epigraph, i.e.,
+
+g(x) = sup
+
+y, t { yT(B0x + d0) − 1
+
+2 t | A0y (cid:23)K b0, (cid:107)Ry(cid:107)2 ≤ t} .
+
+SCALED PROXIMAL OPERATORS
+
+19
+
+Next we write the constraint (cid:107)Ry(cid:107)2 ≤ t as a second-order cone constraint:
+
+(cid:107)Ry(cid:107)2 ≤ t ⇐⇒ (cid:107)Ry(cid:107)2 ≤
+⇐⇒ (cid:107)Ry(cid:107)2 +
+
+2
+
+2
+
++
+
+4
+
+2
+
+2
+
+≤
+
+t + 1
+
+≤
+−1/2
+0
+
+(t + 1)2 − (t − 1)2
+
+(cid:18) t − 1
+(cid:18) t + 1
+(cid:19)2
+(cid:19)2
+(cid:18) t − 1
+(cid:19)2
+(cid:19)(cid:13)(cid:13)(cid:13)(cid:13) ≤
+(cid:18)
+(cid:19)(cid:18)y
+(cid:19)
+(cid:18)y
+ 1/2
+ .
+(cid:19)
+(cid:18) d0
+(cid:18)B0
+(cid:19)
+
+−1/2
+0
+
+(cid:19)
+
+(cid:22)Q
+
+t
+
+t
+
+−1/2
+
+(cid:107)Ry(cid:107)2 +
+1/2
+R 0
+
+1/2
+1/2
+0
+R 0
+
+⇐⇒
+
+⇐⇒
+
+(cid:115)
+(cid:13)(cid:13)(cid:13)(cid:13)(cid:18) 0
+ 0
+ 1/2
+ ,
+
+⇐⇒
+
+−1/2
+0
+b0
+
+t + 1
+
+2
+
+Concatenating this with the original constraints gives a QS function with parameters
+
+A =
+
+b =
+
+d =
+
+, B =
+
+, K = Qn+2 × K0.
+
+0
+
+ 0
+
+0
+R
+A0
+
+ ,
+
+1/2
+1/2
+0
+0
+
+

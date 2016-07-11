@@ -1,0 +1,2271 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+3
+1
+
+ 
+ 
+]
+
+G
+L
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+2
+0
+0
+4
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Fast Learning from Distributed Datasets without Entity
+
+Matching
+
+Giorgio Patrini
+
+The Australian National University & Nicta
+giorgio.patrini@anu.edu.au
+
+Richard Nock
+
+Nicta & The Australian National University
+richard.nock@nicta.com.au
+
+Stephen Hardy
+
+Nicta
+
+stephen.hardy@nicta.com.au
+
+Tiberio Caetano
+
+Ambiata, The Australian National University & The University of New South Wales
+
+tiberio.caetano@gmail.com
+
+Abstract
+
+Consider the following data fusion scenario:
+
+two datasets/peers contain the same real-
+world entities described using partially shared features, e.g. banking and insurance company
+records of the same customer base. Our goal is to learn a classiﬁer in the cross product space of
+the two domains, in the hard case in which no shared ID is available –e.g. due to anonymiza-
+tion. Traditionally, the problem is approached by ﬁrst addressing entity matching and subse-
+quently learning the classiﬁer in a standard manner. We present an end-to-end solution which
+bypasses matching entities, based on the recently introduced concept of Rademacher obser-
+vations (rados). Informally, we replace the minimisation of a loss over examples, which re-
+quires to solve entity resolution, by the equivalent minimisation of a (different) loss over rados.
+Among others, key properties we show are (i) a potentially huge subset of these rados does not
+require to perform entity matching, and (ii) the algorithm that provably minimizes the rado
+loss over these rados has time and space complexities smaller than the algorithm minimizing
+the equivalent example loss. Last, we relax a key assumption of the model, that the data is
+vertically partitioned among peers — in this case, we would not even know the existence of a
+solution to entity resolution. In this more general setting, experiments validate the possibility
+of signiﬁcantly beating even the optimal peer in hindsight.
+Keywords: entity resolution, distributed learning, Rademacher observations, square loss, Ridge
+regularization.
+
+1
+
+example(s) shared between peers 1 and 2
+
+⊥
+
+?
+
+s
+e
+l
+p
+m
+a
+x
+e
+
+⊥
+
+(unknown)
+
+peer 1
+
+peer 2
+
+peer 3
+
+s
+e
+l
+p
+m
+a
+x
+e
+
+?
+
+?
+
+features
+not shared
+
+(VP)
+
+shared
+
+features
+not shared
+
+(G)
+
+shared
+
+Figure 1: Schematic views of our settings, with p = 3 peers. In both cases, some features (cyan)
+are described in each peer (best viewed in color) and one these shared features is a class. Non-
+shared features are split among peers. A so-called total sample S is ﬁgured by the red rectangle.
+Left: in the vertical partition (VP) case, all peers see different views of the same examples, but do
+not know who is who among their datasets (”?”). Hence, each bit of the total sample is seen by one
+peer. Right: in the more general setting (G), it is not even known whether one example, viewed by
+a peer, also exist in other peers’ datasets. In this case, there may be a lot of missing data (⊥), but
+it is not known which example has missing data.
+
+1 Introduction
+
+Learning from massively distributed data collections and multiple information sources has become
+a pivotal problem, yet it faces critical challenges, among which is the fact that it relies on re-
+constructing consistent examples from diverse features distributed between different data handling
+peers. Exhaustive search to solve this problem is simply not scalable, nor communication efﬁcient,
+and sometimes not even accurate [11, 34].
+— A key technical message of our paper is:
+
+Entity resolution can be bypassed to carry out supervised learning almost as accurate as if its
+
+solution were known.
+
+A main motivation of this work comes from the reported experience that combining features
+from different sources leads to better predictive power. For instance, insurance and banking data
+together can improve fraud detection; shopping records well complement medical history for es-
+timating risk of disease [29]; joining heterogeneous data helps prediction in genomics [16, 33];
+
+2
+
+Peer 1
+
+shared
+c
+1
+1
+
+x1 x3
+1
+1
+1
+-1
+
+e1
+e2
+
+Peer 2
+
+shared
+c
+1
+1
+
+x2 x3
+-1
+1
+1
+1
+
+e′
+1
+e′
+2
+
+Table 1: A simple case of the (VP) setting, with p = 2 peers, with two shared variables x3 and c
+(the class to predict). This toy example has binary description features and a binary shared feature,
+but this restriction does not need to hold in the general case. For example, each shared feature can
+be any categorical/ordinal feature, like “postcode”, “age-bracket”, etc.
+
+(1) Entity
+Matching
+
+peer 1
+
+peer 2
+
+peer 1
+
+peer 2
+
+(2) Data Fusion
+
+(2) Rado Fusion
+
+(1) Rados
+
+(1) Rados
+
+(3) Learning
+
+(3) Learning
+
+Figure 2: Learning on top of ER (left) or with rados (right).
+
+security agencies integrate various sources for terrorism intelligence [28, 9, 27].
+
+Typical data fusion methods however rely on a known map between entities [6], i.e., peers
+have partially different views of the same examples. Instead, we assume the datasets do not share
+a common ID, as shown in Figure 1 ((VP), left); that is, for example, the case when data collec-
+tion of was performed independently by each peer, or when sources were deliberately anonimized.
+Entity resolution (ER), or entity matching [10], would be the traditional approach for reconciling
+entities with no shared ID1. It approximates a JOIN operation, assuming that some of the attributes
+are shared, e.g., age-band, gender, postcode (etc.), and hence can be used as “weak IDs”. Most
+techniques for ER are based on similarity functions and thresholding: candidate entities are se-
+lected as matches when their similarity is above a threshold. Both components can be tuned on
+some ground truth matches and effectively enhanced with learning techniques [5, 10]. The various
+metrics of ER encompass lots of different parameters, including generality, accuracy, soundness,
+scalability, parallelizability [25]. The standard pipeline for learning with ER is depicted in Figure 2
+(left): (1) entities are matched based on similarity and heuristics, (2) they are merged in one unique
+database and (3) a model is learnt on the joint data. Common issues in fusion, such as conﬂicts and
+heterogeneity [6], are not considered in this work.
+
+From a high level view, ER integrates data as a pre-process for other tasks. When it comes
+
+1This is clearly non trivial: if just two rows in each dataset have the same exact values for the shared features across
+
+the p peers, this yields 2p possible matchings for the reconstruction of the two examples involved.
+
+3
+
+.= ((1, −1, 1), 1) and e22
+
+.= ((1, 1, 1), 1) and e21
+
+2. We denote the examples obtained by e11
+
+to learning from ER’ed data, small changes in ER can have large impact on evaluating classiﬁers,
+even for simple classiﬁers as linear models. To see this, suppose we are in the toy example of Table
+1. Here, all shared variables have the same values, so entity matching has two potential solutions
+(notice that one of the shared variable is class c). One, say ER1, is matching e1 with e′
+1 and e2
+.= ((−1, 1, 1), 1) (an
+with e′
+example is a pair (observation, class)). The other solution, say ER2, is matching e1 with e′
+2 and
+.= ((−1, −1, 1), 1).
+e2 with e′
+Now, consider linear classiﬁer θ = (1, 1, 1) ∈ R3; the class it gives is the sign of its inner product
+with an observation, θ(z) .= sign(θ⊤z). While θ classiﬁes perfectly on {e11, e22} (zero error), it
+classiﬁes no better than random on {e12, e21} (error 50%).
+
+1. We denote the examples obtained by e12
+
+This is a potential consequence of non-accurate ER in a setting in which we know that there is
+a solution to ER, i.e. a one-one matching between data peers that recovers the examples as they are
+in the total sample. What happens if remove this assumption, i.e. if we remove the assumption that
+each example is seen by all peers ? This is a much more realistic model. Since there is no shared
+ID — and the data may have been anonymized — we are not even in a situation where we can
+guarantee that a speciﬁc client of the bank is, or is not, a client of the insurance company. Thus,
+there may be signiﬁcant unknown data to reconstruct the total sample S (Figure 1), but we do not
+know which speciﬁc examples have missing features. This is our most general setting, (G), shown
+in Figure 1 (right).
+
+To cope with (VP) or (G), we use a recently introduced trick to learn from private data [21]:
+examples are not necessary to learn an accurate linear classiﬁer. We insist on the fact that “accu-
+rate” refers to the quality of the class prediction for observations and examples. The input of the
+algorithm consists of Rademacher observations, rados. One rado is just a sum, over a subset of
+examples, of the observations times their class. Surprisingly, we can not only learn with data on
+this form but the output classiﬁer does not require any post-processing since it is the same as if we
+were learning with example.
+
+Contributions — Our contribution starts from noticing that many rados are invariant to the
+selection of different solutions for entity resolution. For example, consider again Table 1. Since
+all classes are positive, computing a rado is just summing observations. Let πij,kl be the rado that
+sums those of examples eij and ekl. Then, surprisingly, regardless of the solution to ER, this rado
+is the same:
+
+(E1) π11,22 = (1, −1, 1) + (−1, 1, 1)
+
+= (0, 0, 2)
+= (1, 1, 1) + (−1, −1, 1) = π12,21 (E2) .
+
+This, as we show, always holds in the (VP) setting: there exists a huge, i.e., of potential exponential
+size, set of rados that match the set of rados that could be built knowing the true entity resolution.
+In the most general setting, (G), we show that a very simple transformation of the rados, involving
+only the shared features, has in expectation the same properties. We give the algorithm that builds
+these rados. It is easily parallelizable and requires sublinear communication, i.e. the amount of
+information that transits is no larger — and may be much smaller — than the size of all peers’
+data.
+
+These ”ideal” rados are not just interesting per se: learning from them (Figure 2, right) is both
+efﬁcient and accurate. We show that using them leads approximating the classiﬁer that would be
+
+4
+
+optimal on the set of all (ideally ER’ed) examples. This involves three technical contributions. The
+ﬁrst is an elementary proof that the minimisation of the Ridge regularized square loss [14] (on
+examples) is equivalent to the minimisation of a regularized rado loss, which we call the M-loss.
+We then give the closed-form solution for the classiﬁer minimizing the M-loss. Surprisingly, it
+shows that the minimisation of the regularized M-loss, over the complete (eventually exponential-
+size) set of ”ideal” rados can be done not just in polynomial time: it is in general faster than
+the minimization of the Ridge regularized square loss over examples. Finally, the optimal M-loss
+classiﬁer, learnt using only the set of ”ideal” rados, converges (as the number of shared features
+increases) to the minimizer of the Ridge regularized square loss over all ideally ER’ed examples.
+In other words, as the number of shared features increases or as the number of modalities of shared
+features increases, we are guaranteed that the classiﬁer learned over rados will converge to the best
+classiﬁer learned over examples.
+
+Last, but not least, while we focus on the two-classes setting, description features need not
+be boolean. There is in fact no restriction apart from the fact that shared features are treated as
+ordinal instead of plain real: if one feature had as many modalities as there are examples, then
+there would be no need to address ER. The rest of this paper is as follows. Section §2 provides
+preliminaries. § 3 follows that shows how to learn from distributed data to minimise, indirectly,
+the Ridge regularized square loss over the ER’ed complete data. § 4 presents experimental results.
+Finally, § 5 discusses our approach and § 6 concludes with open problems.
+
+2 Preliminaries
+
+.= {1, 2, . . . , n} for n ∈ N∗; boldfaces like x indicate vectors, whose
+Learning setting We let [n]
+coordinates are denoted as xi. We brieﬂy recall the task of standard (binary) classiﬁcation with
+linear models θ as learning a predictor for label (or class) y ∈ {−1, +1}, from a total (learning,
+.= {(xi, yi), i ∈ [m]}. Each example is an observation-label pair (xi, yi) ∈
+training) sample S
+X × {−1, +1}, with X ⊆ Rd the feature space, and it is drawn i.i.d. from an unknown distribution.
+It is convenient to let X
+k=1Xk. We reserve the word entity for a generic record in a dataset,
+the object of matching, and attributes or features to its ﬁelds.
+Our learning setting departs from the standard setting in what follows. Instead of one total training
+sample, we have p (sub)samples, Sj of size mj, j ∈ [p] for some p > 1. Each one is deﬁned in
+k=1Xjk, where jk ∈ [d], ∀k. To get a simple case of this framework,
+its own feature space Xj
+shown in Figure 1, one may see each Sj
+i ), i ∈ [mj]} handled by a peer Pj. We rely on
+the following assumption:
+
+.= {(xj
+
+i , yj
+
+.= ×d
+
+.= ×dj
+
+(G) The class, and a subset of features J from X, are shared by all peers. Each other feature is
+
+exclusive to one peer.
+
+Hence, each of the dimensions of J is in all Xjs. There exists dim(J) + 1 columns that represent
+the same set of variables among peers, and one of them is the class. This is a very weak and
+realistic assumption for the features in J, as well as for labels, in at least two situations. The ﬁrst is
+our setting (VP), which is a gold standard of database frameworks, when the domain is vertically
+partitioned for the non-shared features, implying mj = mj ′ = m, ∀j, j′ ∈ [p]. In this case, there
+exists a one-to-one mapping between the peers’ rows, but it may be extremely hard to compute
+[25]. The other scenario is when at least one peer has classes, as that turns out to be what is
+
+5
+
+sufﬁcient for all other peers to get labels as well, by the use of algorithms that learn with label
+proportions [23, 24], as argued in Section 5. The assumption that each non-shared feature is seen
+by exactly one peer simpliﬁes the technicalities: we discuss relaxing this assumption in Section 3
+(after Theorem 5).
+
+Rademacher observations
+In the standard classiﬁcation model, a rademacher observation (rado)
+.= {−1, 1}m. Then rado πσ is
+is a simple transformation of the examples in sample S. Let σ ∈ Σm
+yi · xi [20, 21], where yi · xi is an edge vector. In our distributed setting, we extend
+πσ
+the deﬁnition in the following way. We let s ∈ J denote a signature, and ∀y ∈ {−1, +1} and peer
+Pj,
+
+.=Pyi=σi
+
+j
+π
+(s,y)
+
+.= projXj\J  mj
+Xi=1
+
+1projJ(xj
+
+i )=s∧yj
+
+i =yyj
+
+i · xj
+
+i! .
+
+(1)
+
+j
+Notation 1. is the indicator function, and projI(z) denotes the restriction of z to I. In short, π
+(s,y)
+sums edge vectors local to Pj whose examples match signature s and class y. Let F(z) be the set
+of features of z, assumed to be in X. We also deﬁne, for any F′ ⊇ F(z), liftF′(z) to be the vector
+z′ described using F′ such that projF(z)(z′) = z and projF′\F(z)(z′) = 0. While projF(z) removes
+coordinates of z, liftF′(z) ”completes” the coordinates of z with zeroes.
+
+By analogy with entity resolution [32], we deﬁne block rados as rados, lifted to X, that are the
+
+(weighted) sums of examples matching a particular signature and class in all peers.
+
+Deﬁnition 1 For any s ∈ J, y ∈ {−1, 1}, u ∈ R the u-basic block (BB) rado for pair (s, y) is
+
+p
+
+π
+
+u
+(s,y)
+
+.= u · liftX(y · s) +
+
+j
+liftX(π
+
+(s,y)) .
+
+(2)
+
+Xj=1
+
+.= J × {−1, 1}, and J∗
+
+.= {(s, y) ∈ J+ : ∃j ∈ [p], π
+
+Let J+
+(s,y) 6= 0}. This latter set, which can
+.= |J∗| ≤ m, and even m∗ ≪ m when few
+easily be computed from all peers, has cardinal m∗
+features are shared. For any u ∈ Rm∗, we let Ru
+vi, ∀i ∈ [m∗]} denote the set of each ui-BB
+rado, each coordinate of u being in one-one correspondence with an element of J∗ (represented by
+vi). A superset of Ru
+
+B:
+B is interesting, that considers all sums of vectors from Ru
+
+.= {π
+ui
+
+j
+
+B
+
+Ru
+∗
+
+.= (Xi∈U
+
+π
+
+ui
+
+vi, ∀U ⊆ [m∗]) .
+
+(3)
+
+∗ the set of u-block rados. Notice that we may have |Ru
+
+∗ | = Ω(2Pj |Sj|). It is therefore
+
+We call Ru
+intractable in general to explicitly compute Ru
+we just need the set of π
+
+j
+
+(s,y), hence a communication complexity that can be much smaller than
+
+B| = O(Pj |Sj|) and to compute it,
+
+∗ . However, |Ru
+
+Pj |Sj|.
+3 Building and learning from BB rados
+
+We address two questions: why/how we can use (basic block) rados to learn accurate classiﬁers,
+and how we should ﬁx u.
+
+6
+
+Example vs rado losses Learning θ on S is done by minimizing a loss function. Here, we
+consider the Ridge regularized square loss [14] (Γ is sym. positive deﬁnite, SPD),
+
+ℓsql(S, θ; Γ)
+
+.=
+
+1
+m
+
+·Xi
+
+(1 − yiθ⊤xi)2 + θ⊤Γθ .
+
+(4)
+
+It is crucial to remark that this loss is described over the total sample S of examples (see the red
+rectangle in Figure 1). This is the loss we want to minimize, exactly or approximately. One reason
+we choose this loss is that in the standard classiﬁcation framework, it admits a simple closed form
+solution:
+
+θ⋆
+ex
+
+.= arg min
+
+θ
+
+ℓsql(S, θ; Γ) = (cid:0)XX⊤ + m · Γ(cid:1)−1
+
+πy ,
+
+(5)
+
+where X
+any P ⊆ {−1, 1}m, we let RS,P
+P using S.
+
+.= [x1|x2| · · · |xm], and so, XX⊤ =Pi xix⊤
+
+ex involves one rado, πy. For
+.= {πσ : πσ ∈ P} denote the set of rados that can be crafted from
+
+i . Remark that θ⋆
+
+Deﬁnition 2 The M-loss over RS,P of classiﬁer θ is:
+
+ℓM(RS,P, θ)
+
+.= −(cid:18)EP[θ⊤
+
+πσ] −
+
+1
+2
+
+· VP[θ⊤
+
+πσ](cid:19) ,
+
+(6)
+
+where expectation and variance are computed with respect to the uniform sampling of σ in P.
+
+What is inside the parenthesis looks like a (vanilla) Markowitz mean-variance criterion [19] —
+“vanilla” because there is no variable coefﬁcient for the risk aversion. What this means is that a
+good classiﬁer trained on rados should have large “return” and small “risk”, where the risk is the
+variance of its predictions and the return is its inner product with the expected rado.
+
+The Theorem to follow shows that what was known for the logistic loss in [21] also holds for
+the square loss: there exists a loss described over rados, ℓM, such that ℓsql(θ) (dependences on
+other parameters omitted) is equal to a strictly increasing function of ℓM(θ), for any θ. Hence,
+minimizing ℓsql(θ) over examples is equivalent to minimizing ℓM(θ) for the same classiﬁer. The
+proof of the Theorem, elementary, is interesting in itself as it simpliﬁes the long derivation for the
+equivalence between rado and example losses in [20].
+
+Theorem 3 Let Σm
+ℓM(RS,Σm, θ; Γ) with
+
+.= {−1, 1}m. Then, for any S, any Γ and any θ, ℓsql(S, θ; Γ) = 1 + (4/m) ·
+
+ℓM(RS,Σm, θ; Γ) = ℓM(RS,Σm, θ) +
+
+m
+4
+
+θ⊤Γθ .
+
+(7)
+
+7
+
+Proof First, we remark that EΣm[θ⊤
+participates to half of the 2m rados. Letting ˜v .= 2m+2 · VΣm[θ⊤
+
+πσ] = θ⊤EΣm[πσ] = (1/2) · θ⊤
+
+πσ], we also have
+
+πy, since each example
+
+πσ −
+
+1
+2
+
+· θ⊤
+
+πy(cid:19)2
+
+˜v = 4 · Xσ∈Σm(cid:18)θ⊤
+= Xσ∈Σm Xi
+= Xσ∈Σm" m
+Xi=1
+Xi=1
+
+= 2m ·
+
+m
+
+σiθ⊤xi!2
+
+(θ⊤xi)2 +
+
+σiσi′θ⊤xiθ⊤xi′#
+
+m
+
+m
+
+Xi=1 Xi′6=i
+Xi=1 Xi′6=i
+
+(θ⊤xi)2 +
+
+vii′ · θ⊤xiθ⊤xi′ ,
+
+(8)
+
+with vii′
+value +1 and value −1, and so vii′ = 0, ∀i 6= i′. We get from eq. (8) VΣm[θ⊤
+
+σiσi′. Now, for any i 6= i′, σiσi′ takes exactly the same number of times
+πσ] = (1/4) ·
+
+.= Pσ∈Σm
+
+i=1(θ⊤xi)2 = (1/4) ·Pm
+Pm
+
+i=1(yiθ⊤xi)2. Finally,
+
+1 +
+
+4
+m
+
+· ℓM(S, Σm, θ)
+
+m
+
+Xi=1
+
+= 1 −
+
+2
+m
+
+·
+
+=
+
+1
+m
+
+·Xi
+
+yiθ⊤xi +
+
+1
+m
+
+·
+
+m
+
+Xi=1
+
+(yiθ⊤xi)2
+
+(1 − yiθ⊤xi)2
+
+2 ,
+
+(9)
+
+and we get Theorem 3 by integrating Ridge regularization.
+
+Hence, minimizing the Ridge regularized square loss over examples is equivalent to minimizing a
+regularized version of the M-loss, over the complete set of all rados. This set has exponential size.
+The usual trick would be to randomly subsample this huge set, along with proving good uniform
+convergence bounds for the M-loss — this can be done in the same way as for the logistic loss
+∗ may
+[21]. However, in the case of the square loss, greed pays twice: learning from all rados in Ru
+be both cheap (computationally) and accurate.
+
+∗ , systematically or in expectation, belongs to RS,Σm. This set, Ru
+
+Computation and optimality of Ru
+In our distributed context, we do not have access to all rados
+∗
+because we do not assume that we have access to an entity matching function. Yet, we are going to
+show a ﬁrst result which is, in a sense, stronger: in very general settings, there exists u ∈ Rm∗ such
+∗ of potentially exponential
+that Ru
+size, therefore gives us a set of rados that would have been built from S, had we known the perfect
+solution to entity matching. So, even without carrying out entity matching, we have access to a po-
+tentially huge set of ”ideal” rados which we can use to learn θ via the minimization of ℓM(., θ; Γ).
+Furthermore, there exists a simple algorithm to build Ru
+B. The communication protocol, in Figure
+3 for p = 3 peers, summarizes what happens when peers have received message ”PART(s, y)”
+
+8
+
+peer 1
+
+peer 2
+
+peer 3
+
+π1
+
+(s,y)
+
+c ∈ Nd−dim(J)
+
+(s, y)
+
+π2
+
+(s,y)
+
+π3
+
+(s,y)
+
+rado crafting
+
+Figure 3: Communication for one BB rado, with (s, y) ∈ J∗. Counter c is deﬁned in Algorithm
+RADOCRAFT (see text).
+
+from a ”rado crafting” peer implementing Algorithm 1 below (” ” symbolizes message sending).
+Speciﬁcally, Pj does the following:
+
+j
+• it computes and return π
+
+(s,y); let Cj be the number of examples that are counted in the sum
+
+in eq. (1);
+
+• it updates counter vector c: for each feature k 6∈ J it possesses in its database, it does
+
+ck ← ck + Cj;
+
+Remark that the updates of c can easily be done in parallel, as well as the computation of each
+j
+(s,y) for each peer. Letting vi
+π
+
+.= (s, y) ∈ J∗, the corresponding value of ui is given by:
+
+ui = ˜ui
+
+.= (1⊤c)(|d| − dim(J))−1 ,
+
+(10)
+
+which is guaranteed to be non-zero since vi ∈ J∗. We now show one of the main results of this
+paper.
+
+Theorem 4 In setting (VP), for any p ≥ 2, any S, any J, the following holds on the output of
+Algorithm 1: R ˜u
+
+∗ ⊆ RS,Σm.
+
+Proof (sketch) Let w ∈ Rm∗ be such that wi is the number of examples in S that match vi. The
+∗ ⊆ RS,Σm. Then, (i) is immediate; for (ii),
+proof follows two steps, (i) R ˜u
+
+B and (ii) Rw
+
+B = Rw
+
+9
+
+Algorithm 1 RADOCRAFT(P1 , P2, ..., Pp)
+
+Input Peers P1, P2, ..., Pp;
+Step 1: Let R ˜u
+Step 2: for s ∈ J, y ∈ {−1, +1}
+
+B ← ∅;
+
+2.1: Let π ← 0 ∈ Rd, c ← 0 ∈ Nd−dim(J);
+2.2: for j ∈ [p]
+
+2.2.1: π ← π + liftX(PART(s, y)   Pj);
+
+2.3: Let ˜u ← (1⊤c) (d − dim(J))−1;
+2.4: R ˜u
+B ← R ˜u
+Return R ˜u
+B;
+
+B ∪ (˜u · liftX(y · s) + π);
+
+the proof follows once three simple facts are established in the (VP) setting: (a) the true entity
+.= (s, y) would be obtained as a rado summing
+matching exists, (b) any wi-BB rado for pair vi
+the contribution of all examples in S matching the corresponding signature s and class y, (c) we
+B ⊆ RS,Σm, from which follows the Theorem’s statement with eq. (3) and the fact that any
+obtain R ˜u
+B would also be in RS,Σm since an example cannot match two distinct
+sum of a subset of rados in R ˜u
+couples (signature, class).
+Hence, in the (VP) setting, Algorithm 1 always provides the basis for a (possibly exponential-
+∗ of these ”ideal” rados. Let us now generalize Theorem 4 to (G), which is obviously
+sized) set R ˜u
+more difﬁcult to tackle since (i) there may be a huge amount of missing data (⊥ in Figure 1) and
+(ii) there would be no one-one correspondence between the peers’ examples in general. Yet, there
+is a interesting property which can be shown in the following (R)andomized model: each peer’s
+features remain ﬁxed (and all peer’s features comply with (G)), but there exists a ﬁxed η ∈ [0, 1]m
+such that example i has probability ηi to be seen by a peer. Let S denote the ”expected” sample,
+where each example is weighted by its probability. For any signature s and class y, E[π(s,y)]
+denotes the expected rado put in R ˜u
+
+B in step 2.4 of Algorithm 1.
+
+.
+
+Theorem 5 Under (R), ∀(s, y) ∈ J+, E[π(s,y)] ∈ RS,Σm
+(Proof omitted) Hence, under setting (G), if examples are ”seen” independently at random by
+peers, the expected output of Algorithm 1 still meets the guarantees of Theorem 4 with respect
+B ⊆ RS,Σm from Theorem 4 is also a consequence of
+to the expected sample. The fact that R ˜u
+Theorem 5 for η = 1. Finally, there is one way to relax further assumption (G), which is to let
+each feature not shared by all peers to be shared by any subset of peers. In this case, it is possible to
+modify RADOCRAFT so that it still builds rados that would meet Theorem 5. This mainly requires
+a careful adjustment of each counter c.
+
+Learning from all rados of R ˜u
+∗ The questions that remain are how we minimize the regularized
+M-loss and, more importantly, what subset of rados from R ˜u
+∗ we shall use. As already discussed,
+we choose ”greediness” against randomization [21]: instead of picking a (small) random subset of
+∗ , we want to use them all because we know that all of them are ”ideal” or close to being so via
+R ˜u
+Theorems 4, 5. Recall that |R ˜u
+∗ | may be of exponential size (in m, d, |J∗|, etc.). We now show
+that if we consider all of R ˜u
+∗ , θ; Γ) has an analytic expression which
+
+∗ , the optimal θ⋆
+
+rad of ℓM(R ˜u
+
+10
+
+Algorithm 2 DRL(P1, P2, ..., Pp; Γ)
+
+Input Peers P1, P2, ..., Pp, SPD matrix Γ, γ > 0;
+Step 1: B ← Column(RADOCRAFT(P1, P2, ..., Pp));
+
+Step 2: θ ←(cid:0)BB⊤ + γ · Γ(cid:1)−1
+
+Return θ;
+
+B1;
+
+depends only on the rados of R ˜u
+and can be directly computed from the output of Algorithm 1.
+
+B. In short, it is even faster to compute than θ⋆
+
+ex from S in eq. (5),
+
+Theorem 6 Let θ⋆
+
+rad
+
+.= arg minθ ℓM(R ˜u
+
+∗ , θ; Γ) (eq. (7)). Then
+
+θ⋆
+
+rad = (cid:0)BB⊤ + dimc(B) · Γ(cid:1)−1
+
+B1 ,
+
+(11)
+
+where B stacks in columns the rados of R ˜u
+
+B, and dimc(B) is the number of columns of B.
+
+Proof The proof uses the following trick: consider any sample S′ such that its edge vectors match
+
+the basic block rados. Remark that XX⊤ = Pi(yixi)(yixi)⊤ in eq. (5) depends only on edge
+
+vectors, and so, since πy = B1, the optimal square loss classiﬁer on S′ is θ⋆
+through Theorem 3, is also the optimal classiﬁer on ℓM(R ˜u
+When m∗ = m, each element of R ˜u
+B is in fact an example, and we retrieve eq. (5). One consequence
+of Theorem 6 is the following convergence property which we sketch: in the (VP) setting, for any
+ε ≥ 0, there exists a minimal size for J∗ such that θ⋆
+ex, where the closeness
+ex)|. The statement of DRL (Distributed Rado-
+can be measured by kθ⋆
+Learn) is given in Algorithm 2. In Step 1, ”column(.)” takes a set of vectors and put them in
+column in a matrix.
+
+rad will be ε-close to θ⋆
+
+rad in eq. (11), which,
+
+exk2 or |cos(θ⋆
+
+∗ , θ; Γ).
+
+rad − θ⋆
+
+rad, θ⋆
+
+4 Experiments
+
+Algorithms We have evaluated the leverage that DRL provides compared to the peers, that
+would learn using only their local dataset. Each peer Pj estimates learns through a ten-folds strati-
+ﬁed cross-validation (CV) minimization of ℓsql(Sj, θ; γ · Iddj ) (see eq. (5)), where γ is also locally
+optimized through a ten-folds CV in set G
+∗ , θ; Γ)
+(solution in eq. (11)) where R ˜u
+
+.= {.01, 1.0, 100.0}. DRL minimizes ℓM(R ˜u
+B is built using RADOCRAFT, with the set of all peers as input.
+
+We have carried out a very simple optimisation of the regularisation matrix of DRL as a di-
+agonal matrix which weights differently the shared features, Γ .= Diag(liftX(projJ(1))) + γ ·
+Diag(liftX(projX\J(1))), for γ ∈ G. γ is optimized by a 10-folds CV on I∗. CV is performed
+on rados as follows: ﬁrst, R ˜u
+B,ℓ, for ℓ = 1, 2, ..., 10. Then, we repeat for
+ℓ = 1, 2, ..., 10 (and then average) the following CV routine:
+
+B is split in 10 folds, R ˜u
+
+1. DRL is trained using R ˜u
+
+B \R ˜u
+
+B,ℓ;
+
+2. DRL’s solution, θ⋆
+
+rad, is evaluated on “test rados” by computing ℓM(R ˜u
+
+B,ℓ, θ⋆
+
+rad; Γ).
+
+The expression of Γ for rados exploits the idea that the estimations related to a shared feature can
+be much more accurate than for another, non shared feature.
+
+11
+
+Domain
+Wine
+Sonar
+Ionosphere
+Mice
+Winered
+Steelplates
+Statlog
+Winewhite
+Page
+Firmteacher
+Phishing
+
+m d minj ˆperr(Pj)
+
+178 12
+208 60
+351 33
+1 080 77
+1 599 11
+1 941 33
+4 435 36
+4 898 11
+5 473 10
+10 800 16
+11 055 30
+
+0.07
+0.29
+0.20
+0.30
+0.26
+0.16
+0.05
+0.32
+0.21
+0.26
+0.11
+
+p
+
+{1, 2, ..., 9}
+
+dim(J)
+{1, 2, 3, 4}
+
+Results
+Table 12
+{2, 3, ..., 8}
+{2, 3, ..., 16} {1, 2, ..., 20} Table 6
+Table 8
+{2, 3, ..., 9}
+{2, 3, ..., 20} {1, 2, ..., 20} Table 4
+Table 9
+{2, 3, ..., 7}
+{1, 2, 3, 4}
+Table 14
+{2, 3, ..., 14} {1, 2, ..., 5}
+Table 13
+{2, 3, ..., 30} {1, 2, ..., 5}
+Table 10
+{1, 2, 3, 4}
+{2, 3, ..., 7}
+Table 3
+{1, 2, 3, 4}
+{2, 3, ..., 6}
+Table 7
+{2, 3, ..., 7}
+{1, 2, ..., 7}
+Table 11
+{1, 2, 3, 4}
+{2, 3, 4, 5}
+
+Table 2: UCI domains used in our experiments [1], with for each the indication of the total number
+of features (d), examples (m) and the error of the optimal peer in hindsight obtained in our exper-
+iments, minj ˆperr(Pj). Two of the right columns present, for each domain, the range of values for
+the number of peers (p) and the number of shared features (dim(J)) considered. Experiments were
+performed considering all possible combinations of values of p and dim(J) within the allocated
+sets. The rightmost column points to the Table collecting speciﬁc results for each domain.
+
+Domain generation we have used a dozen UCI domains [1], presented in Table 2. For each
+domain, we have varied (i) the number of peers p, (ii) the number of shared features dim(J), and
+(iii) the number b of numeric modalities (”bins”) each shared feature was reduced to (controls the
+size of I∗). The training sample is split among peers, each keeping record of I and its own features
+(non shared features are evenly partitioned among peers). Finally, for some ps ∈ [0, 1], each peer
+Pj selects a proportion ps of its examples index and for each of them, another peer Pj ′, chosen at
+random, gets the example as well (on its own set of features Xj ′). When ps = 0, this is setting
+(VP). We then run all algorithms for each value p, dim(J), b, ps. As we shall see, b appears to have
+a relatively small inﬂuence compared to the other factors, so we mainly report results combining
+various values for p, dim(J) and ps, for the range of values of p, dim(J) speciﬁed in Table 2, and
+for ps ∈ {0.0, 0.2}. We have chosen b = 4 for all domains, except when it is not possible (if
+for example all features are boolean), in which case we pick b = 2. Table 2 also provides the
+smallest test error obtained for a peer among all runs for each domain: this is an indication of the
+room of improvement for DRL, and it also shows that in general, at least some (and in fact most)
+peers were always very signiﬁcantly better than random guessing, a safe-check that DRL is not
+just beating unbiased coins.
+
+Metric We used two metrics. The ﬁrst,
+
+∆ .= ˆperr(DRL) − min
+
+j
+
+ˆperr(Pj) (∈ [−1, 1]) ,
+
+(12)
+
+is the test error for DRL minus that of the optimal peer in hindsight (since we consider the peer’s
+test error). when ∆ < 0, DRL beats all peers. For example, Table 3 (left) provides the results
+
+12
+
+obtained on UCI domain page. We see that for almost all combinations of p and dim(J), DRL beats
+all peers.
+
+To evaluate the statistical signiﬁcance, we compute
+
+q
+
+.= proportion of peers statistically beaten by DRL (∈ [0, 1]) .
+
+(13)
+
+To compute the test, we use the powerful Benjamini-Hochberg procedure on top of paired t-tests
+with q∗ = p-val = 0.05, [3]; q = 0.8 surface helps see when DRL statistically beats all peers.
+For example, Table 3 (right) displays that DRL does not always statistically beat all peers when
+∆ < 0, yet it manages to stastically beat all of them in approximately one third to one half of the
+total tests, which implies that, on this domain, there is a signiﬁcant chance that DRL improves on
+the peers, regardless of their number and the number of shared features.
+
+Results Due to the large number of domains considered, results are split among different tables,
+one for each domain in general, in Tables 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14 (also referenced
+in Table 2). All domains display that there exists regimes (p, dim(J)) for which DRL improves
+on all peers, in some cases signiﬁcantly. Sometimes, the improvement is sparse (phishing), but
+sometimes it is quite spectacular and in fact (almost) systematic (page, ionosphere, steelplates).
+domain steelplate’s case is interesting, since the so-called Oracle, i.e. the learner that leans from the
+complete training fold before it is split among peers — and therefore knows the solution to entity
+matching —, has for this domain almost optimal error, but local peers are in fact very far from
+this optimum. This indicates that many features, properly combined, are necessary to attain the
+best performances. DRL’s performances are close to the Oracle, which accounts for the huge gap
+in classiﬁcation compared to peers — sometimes, DRL’s test error is smaller than that of the best
+peer by more than 20% —, and so it seems that DRL indeed successfully bypasses entity matching
+to learn a classiﬁer that almost matches the Oracle’s performances, and therefore represents a very
+signiﬁcant leverage of each peer’s data.
+
+To drill down into more speciﬁc results, Table 15 (left) displays that binning indeed does not
+affect signiﬁcantly DRL on average, which is also good news, since it means that there is no
+restriction on the shared features for DRL to perform well: shared features can be binary, or
+categorical with any number of modalities. Table 16 displays that while the CV tuning of Γ offers
+leverage to DRL (vs Γ = Idd) in general (ﬁrmteacher), there are some (rare) domains (mice)
+on which relying on the simplest Γ = Idd improves upon the results of CV. This, we believe,
+comes from the fact that CV as we have carried out is certainly not optimal because one rado
+can aggregate any number of examples. Last, Table 15 (right) drills down a bit more into the
+performances of DRL with respect to those of the Oracle on a domain for which DRL obtains
+somehow “median” performances among all domains, sonar. The Oracle (10-folds CV from the
+total ER’ed S) is idealistic since in general we do not know the solution to ER, yet it gives clues on
+how close DRL may be from the ”graal”. Interestingly, DRL comes frequently under the statistical
+signiﬁcance radar (α = 0.05). In notable cases (more frequent as ps increases), DRL beats Oracle
+— but not signiﬁcantly. Aside from theory, these are good news as DRL does not assume ER’ed
+data, and uses an amount of data which can be ∼ p2 times smaller than Oracle.
+
+13
+
+∆
+
+ 0.1
+ 0.05
+ 0
+-0.05
+-0.1
+
+0
+.
+0
+=
+
+s
+p
+
+ 2
+
+ 3
+
+ 4
+#peers
+
+ 5
+
+ 1
+
+ 6
+
+∆
+
+ 0.1
+ 0.05
+ 0
+-0.05
+-0.1
+
+2
+.
+0
+=
+
+s
+p
+
+ 2
+
+ 3
+
+ 4
+#peers
+
+ 5
+
+ 1
+
+ 6
+
+ 4
+
+ 3
+
+ 2
+#shared
+
+ 4
+
+ 3
+
+ 2
+#shared
+
+Table 3: Results on domain page: plots of ∆ .= ˆperr(DRL) − minj ˆperr(Pj) (left) and q = prop.
+peers simultaneously beaten by DRL (right) as a function of the number of peers p and the number
+of shared features dim(J). Top: proportion of shared examples ps = 0.0 (setting (VP)); bottom:
+proportion of shared examples ps = 0.2. The isoline on the left plots is ∆ = 0.
+
+5 Discussion and related work
+
+We remark that our framework is not formally comparable with ER, since the two address different
+problems. On one hand, ER has a much broader applicability than the problem object of this paper;
+learning on distributed datasets is less general than ER: in fact, we show a solution that bypasses
+ER. On the other hand, learning-based ER [5] as well as manifold alignment techniques [15] are
+viable only knowing some ground truth matches — which are not required for working with rados.
+From another perspective, in concert with the open issues in [13], we study ER as component of a
+pipeline for classiﬁcation, and highlight how matching is not necessary for the purpose of learning.
+In spite of those considerations, we can still draw comparisons with methods that learn on
+top of data merged through ER (Table 5). In both settings, no ID is shared between datasets but
+some attributes must be so, in order to allow entities comparison for matching or for building
+rados. Obviously, entity matching does not require the labels to be one of those shared attributes,
+while this is a fundamental hypothesis of our approach. Although, it is not as restrictive as may be
+expected at ﬁrst: if just one peer has labels, then all can obtain labels on their own data, via learning
+from label proportions [23, 24]: the label handling peer computes the label proportions per each
+block; the “bags” are deﬁned by examples matching a particular signature. Proportions are then
+shared among all other peers, which can train a classiﬁer with them so as to obtain approximate
+labels for each observation.
+
+To discuss time complexity, let us consider a simpliﬁed problem with only 2 peers with m
+
+14
+
+∆
+
+ 0.1
+ 0.05
+ 0
+-0.05
+
+0
+.
+0
+=
+
+s
+p
+
+2  5
+
+ 10
+#peers
+
+ 15
+
+1
+ 20
+
+∆
+
+ 0.1
+ 0.05
+ 0
+-0.05
+
+2
+.
+0
+=
+
+s
+p
+
+2  5
+
+ 10
+#peers
+
+ 15
+
+1
+ 20
+
+ 20
+
+ 15
+
+ 10
+
+ 5
+
+#shared
+
+ 20
+
+ 15
+
+ 10
+
+ 5
+
+#shared
+
+Table 4: Results on domain mice, using the same convention as Table 3.
+
+examples each in the (VP) scenario. In terms of complexity of fusion, if we assume that examples
+are uniformly distributed in the blocks, each block has size m/m⋆. DRL builds each block rado
+in time O(m/H), with total cost linear in m. ER takes O(m2/H 2 · Tsim) to match entities in each
+of the H blocks, where Tsim is the cost of evaluation a similarity function; learning-based methods
+spend additional time for training; advanced blocking strategies can reduce the average complexity
+[4, 32, 31].
+
+Most literature on distributed learning is concerned with limiting communication and designing
+optimal strategies for merging models [2, 17]; beside that, previous works focus on horizontal split
+by observations, with few exceptions [18]. In contrast, we exploit what is sufﬁcient to merge about
+the data. The communication protocol is extremely simple. Once rados are crafted locally, they
+are sent to a central learner in one shot. By Theorem 6, only d-dimensional m⋆ blocks rados are
+needed. Data is not accessed anymore and learning takes place centrally. Moreover, rados help
+with data compression, being m⋆ × d, m⋆ ≪ m the problem size. ER needs to transfer and learn
+from all entities, for a total size of m × d.
+
+Learning on data described by different feature sets is the topic of multiple view learning and
+co-training [7, 26]. To the best of our knowledge, co-training with unknown matches has not been
+addressed before. [8] presents a multi-view distributed algorithm with co-regularization; although
+it requires matches for all unlabelled examples.
+
+In settings with multiple data providers, privacy can be crucial [2]. The agents have to trade off
+model enhancements and information leaks. A learner receives rados to train the model; this can
+be done by one of the agents, or by a third party — paralleling multi-party ER scenarios [9]. The
+only information sent through the channel consists of rados, while examples, with their individual
+
+15
+
+Metric
+Assumption: shared IDs
+Assumption: some shared variables
+Assumption: shared labels
+Fusion / Rados crafting
+Communication
+Learning problem
+Privacy
+
+ER + Learning
+
+RADOCRAFT + DRL
+
+no
+
+necessary
+
+no
+
+O(m2/m⋆ · Tsim)
+
+m × d
+m × d
+complex
+
+no
+
+necessary
+
+may be relaxed
+
+O(m)
+
+m⋆ × d, m⋆ ≪ m
+m⋆ × d, m⋆ ≪ m
+many guarantees
+
+Table 5: Multiple metrics of comparison between learning on top of ER and our approach. Time
+complexity are estimated for 2 peers in the (VP) scenario, assuming all blocks of equal size. See
+Section 5 for details.
+
+sensible features, are never shared. Hardness results on reconstruct-ability of examples have been
+proven, along with NP-HARD characterizations, and protection in the sense of differential privacy
+[21]. Furthermore, due to their compressive power, rados represent an alternative to bulk data
+collection [27]: storing examples becomes superﬂuous. Regarding ER, since matching has the
+potential of de-anonimizing the entities, privacy is usually a very relevant issue to address [9].
+However, solutions are not straightforward, as proven by the vast amount of research on the topic
+[30]; techniques based on partial share of attributes, anonymization or hashing can severely impair
+the process.
+
+Even assuming labelled examples, no (observation, label) pair is actually available for training,
+and thus the task can be seen as weakly supervised [12, 22]. Although, a set of aggregate quantities,
+i.e. sums of examples over subsets of the total sample (the rados), turns out to be enough for
+learning. Theorem 3 expresses a form of sufﬁciency of the whole set of rados with regard to the
+square loss; a similar property is proposed for logistic loss in [21]. One of the 2m rados the mean
+.= (1/m) · πy, is formally proven a sufﬁcient statistics for the class for a wide set of
+operator, µS
+losses [23, 22]. This work, along with the cited predecessors, shows how the interplay between
+aggregate statistics and losses can lead to effective solutions to difﬁcult learning problems.
+
+6 Conclusion
+
+The key message of our paper is that Entity Matching addresses a very general but difﬁcult prob-
+lem, and in the comparatively restricted context of supervised learning from distributed datasets,
+accurate learning evading the pitfalls of Entity Matching is possible with Rademacher observations.
+Rados have another advantage: they offer a cheap, easily parallelizable material which somehow
+“compresses” examples while allowing accurate learning. They also offer readily available solu-
+tion for guarantees private exchange of data in a distributed setting. Finally, some domains display
+that there is signiﬁcant room space for improvement of how cross-validation of optimized param-
+eters are handled. This interesting problem comes in part from the fact that statistical properties of
+cross-validation on rados are not the same as when carried out on examples; this particular aspect
+will deserve further analysis in the future.
+
+16
+
+∆
+
+ 0.04
+ 0.02
+ 0
+-0.02
+
+0
+.
+0
+=
+
+s
+p
+
+2  4  6  8  10 12 14 16
+
+#peers
+
+1 3
+
+ 21
+
+ 18
+
+ 15
+
+ 12
+
+ 6
+
+ 9
+#shared
+
+∆
+
+ 0.02
+
+ 0
+
+-0.02
+
+2
+.
+0
+=
+
+s
+p
+
+2  4  6  8  10 12 14 16
+
+#peers
+
+1 3
+
+ 21
+
+ 18
+
+ 15
+
+ 12
+
+ 6
+
+ 9
+#shared
+
+Table 6: Results on domain sonar, using the same convention as Table 3.
+
+7 Acknowledgments
+
+NICTA is funded by the Australian Government through the Department of Communications and
+the Australian Research Council through the ICT Center of Excellence Program.
+
+References
+
+[1] K. Bache and M. Lichman. UCI machine learning repository, 2013.
+
+[2] M. F. Balcan, A. Blum, S. Fine, and Y. Mansour. Distributed learning, communication com-
+
+plexity and privacy. arXiv preprint arXiv:1204.3514, 2012.
+
+[3] Y. Benjamini and Y. Hochberg. Controlling the false discovery rate: A practical and powerful
+
+approach to multiple testing. J. of the Royal Stat. Society. Series B, 57(1):289–300, 1995.
+
+[4] M. Bilenko, B. Kamath, and R. J. Mooney. Adaptive blocking: Learning to scale up record
+
+linkage. In 6 th ICDM, pages 87–96. IEEE, 2006.
+
+[5] M. Bilenko and R. J. Mooney. Adaptive duplicate detection using learnable string similarity
+
+measures. In Proc. of the 9th ACM KDD, pages 39–48. ACM, 2003.
+
+[6] J. Bleiholder and F. Naumann. Data fusion. ACM Computing Surveys (CSUR), 41(1):1, 2008.
+
+17
+
+∆
+
+ 0.1
+ 0.05
+ 0
+-0.05
+
+0
+.
+0
+=
+
+s
+p
+
+ 2  3  4  5  6  7
+
+#peers
+
+ 1
+
+ 7
+
+ 6
+
+ 5
+
+ 4
+
+ 3
+#shared
+
+ 2
+
+∆
+
+ 0.1
+ 0.05
+ 0
+-0.05
+-0.1
+
+2
+.
+0
+=
+
+s
+p
+
+ 2  3  4  5  6  7
+
+#peers
+
+ 1
+
+ 7
+
+ 6
+
+ 5
+
+ 4
+
+ 3
+#shared
+
+ 2
+
+Table 7: Results on domain ﬁrmteacher, using the same convention as Table 3.
+
+[7] A. Blum and T. Mitchell. Combining labeled and unlabeled data with co-training. In 9 th
+
+COLT, pages 92–100, 1998.
+
+[8] U. Brefeld, T. G¨artner, T. Scheffer, and S. Wrobel. Efﬁcient co-regularised least squares
+
+regression. In 23 th ICML, pages 137–144, 2006.
+
+[9] P Christen. Privacy-preserving data linkage and geocoding: Current approaches and research
+
+directions. In ICDMW06, pages 497–501. IEEE, 2006.
+
+[10] P. Christen. Data Matching Concepts and Techniques for Record Linkage, Entity Resolution,
+
+and Duplicate Detection. Springer Data-Centric Systems and Applications, 2012.
+
+[11] T. Estrada, R. Armen, and M. Taufer. Automatic selection of near-native protein-ligand con-
+In ACM BCB, pages
+
+formations using a hierarchical clustering and volunteer computing.
+204–213, 2010.
+
+[12] D. Garcıa-Garcıa and R. C. Williamson. Degrees of supervision. In Proceedings of the 25th
+
+Annual Conference on Neural Information Processing Systems Workshops (NIPS), 2011.
+
+[13] L. Getoor and A. Machanavajjhala. Entity resolution: theory, practice & open challenges.
+
+Proceedings of the VLDB Endowment, 5(12):2018–2019, 2012.
+
+[14] A.-E. Hoerl and R.-W. Kennard. Ridge regression: Biased estimation for nonorthogonal
+
+problems. Technometrics, 12(1):55–67, 1970.
+
+18
+
+∆
+
+ 0.06
+ 0.04
+ 0.02
+ 0
+-0.02
+-0.04
+-0.06
+
+0
+.
+0
+=
+
+s
+p
+
+ 2  3  4  5  6  7  8  9
+
+#peers
+
+ 1
+
+ 9
+
+ 8
+
+ 7
+
+ 6
+
+ 5
+
+ 3
+
+ 4
+#shared
+
+ 2
+
+∆
+
+ 0.02
+ 0
+-0.02
+-0.04
+-0.06
+-0.08
+-0.1
+
+2
+.
+0
+=
+
+s
+p
+
+ 2  3  4  5  6  7  8  9
+
+#peers
+
+ 1
+
+ 9
+
+ 8
+
+ 7
+
+ 6
+
+ 5
+
+ 3
+
+ 4
+#shared
+
+ 2
+
+Table 8: Results on domain ionosphere, using the same convention as Table 3.
+
+[15] S. Lafon, Y. Keller, and R. R. Coifman. Data fusion and multicue data matching by diffusion
+maps. Pattern Analysis and Machine Intelligence, IEEE Transactions on, 28(11):1784–1797,
+2006.
+
+[16] G. R. G. Lanckriet, T. De Bie, N. Cristianini, M. I. Jordan, and W. S. Noble. A statistical
+
+framework for genomic data fusion. Bioinformatics, 20(16):2626–2635, 2004.
+
+[17] Q. Liu and A. T. Ihler. Distributed estimation, information loss and exponential families. In
+
+NIPS*27, pages 1098–1106, 2014.
+
+[18] Q. Liu and A.T. Ihler. Distributed parameter estimation via pseudo-likelihood. In 29 th ICML,
+
+pages 1487–1494, 2012.
+
+[19] H. Markowitz. Portfolio selection. J. of Finance, 6:77–91, 1952.
+
+[20] R. Nock. Learning games and Rademacher observations losses. CoRR, abs/1512.05244,
+
+2015.
+
+[21] R. Nock, G. Patrini, and A. Friedman. Rademacher observations, private data, and boosting.
+
+32 th ICML, 2015.
+
+[22] G. Patrini, F. Nielsen, R. Nock, and M. Carioni. Loss factorization, weakly supervised learn-
+
+ing and label noise robustness. CoRR, abs/1602.02450, 2016.
+
+[23] G. Patrini, R. Nock, P. Rivera, and T. Caetano. (Almost) no label no cry. In NIPS*27, 2014.
+
+19
+
+∆
+
+ 0.05
+
+ 0
+
+0
+.
+0
+=
+
+s
+p
+
+ 2  3  4  5  6  7
+
+#peers
+
+ 1
+
+∆
+
+ 0.07
+ 0.04
+ 0.01
+-0.02
+-0.05
+-0.08
+
+2
+.
+0
+=
+
+s
+p
+
+ 2  3  4  5  6  7
+
+#peers
+
+ 1
+
+ 4
+
+ 3
+
+ 2
+#shared
+
+ 4
+
+ 3
+
+ 2
+#shared
+
+Table 9: Results on domain winered, using the same convention as Table 3.
+
+[24] N. Quadrianto, A. Smola, T. Caetano, and Q. Le. Estimating labels from label proportions.
+
+JMLR, 10:2349–2374, 2009.
+
+[25] V. Rastogi, N.-N. Dalvi, and M.-N. Garofalakis. Large-scale collective entity matching. Proc.
+
+VLDB Endowment, 4(4):208–218, 2011.
+
+[26] V. Sindhwani, P. Niyogi, and M. Belkin. A co-regularized approach to semi-supervised learn-
+ing with multiple views. In Proceedings of the ICML Workshop on Learning with Multiple
+Views, 2005.
+
+[27] R. F. Sproull, W. H. DuMouchel, M. Kearns, B. W. Lampson, S. Landau, M. E. Leiter, E. R
+Parker, and P. J. Weinberger. Bulk collection of signal intelligence: technical options. In
+Committee on Responding to Section 5(d) of Presidential Policy Directive 28: The Feasi-
+bility of Software to Provide Alternatives to Bulk Signals Intelligence Collection. National
+Academy Press, 2015.
+
+[28] L. Sweeney. Privacy-enhanced linking. ACM SIGKDD Explorations Newsletter, 7(2):72–75,
+
+2005.
+
+[29] F.C. Tsui, J. U. Espino, V. M. Dato, P. H. Gesteland, J. Hutman, and M. M. Wagner. Technical
+description of rods: a real-time public health surveillance system. Journal of the American
+Medical Informatics Association, 10(5):399–408, 2003.
+
+[30] D. Vatsalan, P. Christen, and V. S. Verykios. A taxonomy of privacy-preserving record linkage
+
+techniques. Information Systems, 38(6):946–969, 2013.
+
+20
+
+∆
+
+ 0.05
+
+ 0
+
+0
+.
+0
+=
+
+s
+p
+
+ 2  3  4  5  6  7
+
+#peers
+
+ 1
+
+∆
+
+ 0.07
+ 0.04
+ 0.01
+-0.02
+-0.05
+
+2
+.
+0
+=
+
+s
+p
+
+ 2  3  4  5  6  7
+
+#peers
+
+ 1
+
+ 4
+
+ 3
+
+ 2
+#shared
+
+ 4
+
+ 3
+
+ 2
+#shared
+
+Table 10: Results on domain winewhite, using the same convention as Table 3.
+
+[31] S. E. Whang and H. Garcia-Molina.
+
+Joint entity resolution.
+
+In ICDE, 2012 IEEE 28th
+
+International Conference on Data Engineering, pages 294–305. IEEE, 2012.
+
+[32] S.-E. Whang, D. Menestrina, G. Koutrika, M. Theobald, and H. Garcia-Molina. Entity reso-
+
+lution with iterative blocking. In Proc. ACM SIGMOD, pages 219–232, 2009.
+
+[33] Y. Yamanishi, J.-P. Vert, and K. Kanehisa. Protein network inference from multiple genomic
+
+data: a supervised approach. Bioinformatics, 20(suppl 1):i363–i370, 2004.
+
+[34] B. Zhang, T. Estrada, P. Cicotti, P. Balaji, and M. Taufer. Accurate scoring of drug confor-
+
+mations at the extreme scale. In 15th IEEE/ACM CCGrid, pages 817–822, 2015.
+
+21
+
+ 3
+
+#peers
+
+ 4
+
+ 1
+
+ 5
+
+ 4
+
+ 3
+
+ 2
+#shared
+
+∆
+
+∆
+
+ 0.1
+ 0.05
+ 0
+-0.05
+-0.1
+
+0
+.
+0
+=
+
+s
+p
+
+ 2
+
+ 0.08
+ 0.04
+ 0
+-0.04
+
+2
+.
+0
+=
+
+s
+p
+
+ 2
+
+ 3
+
+#peers
+
+ 4
+
+ 4
+
+ 3
+
+ 2
+#shared
+
+ 1
+
+ 5
+
+Table 11: Results on domain phishing, using the same convention as Table 3.
+
+∆
+
+ 0.1
+ 0.05
+ 0
+-0.05
+
+0
+.
+0
+=
+
+s
+p
+
+ 2  3  4  5  6  7  8
+
+#peers
+
+ 1
+
+∆
+
+ 0.07
+ 0.04
+ 0.01
+-0.02
+-0.05
+-0.08
+
+2
+.
+0
+=
+
+s
+p
+
+ 2  3  4  5  6  7  8
+
+#peers
+
+ 1
+
+ 4
+
+ 3
+
+ 2
+#shared
+
+ 4
+
+ 3
+
+ 2
+#shared
+
+Table 12: Results on domain wine, using the same convention as Table 3.
+
+22
+
+0
+.
+0
+=
+
+s
+p
+
+2
+.
+0
+=
+
+s
+p
+
+0
+.
+0
+=
+
+s
+p
+
+2
+.
+0
+=
+
+s
+p
+
+Table 13: Results on domain statlog, using the same convention as Table 3.
+
+∆
+
+ 0
+
+-0.1
+
+-0.2
+
+ 2  4  6  8  10 12  14
+
+#peers
+
+ 1
+
+∆
+
+ 0
+
+-0.1
+
+-0.2
+
+ 2  4  6  8  10 12  14
+
+#peers
+
+ 1
+
+ 5
+
+ 4
+
+ 3
+
+ 2
+
+#shared
+
+ 5
+
+ 4
+
+ 3
+
+ 2
+
+#shared
+
+Table 14: Results on domain steelplates, using the same convention as Table 3.
+
+23
+
+)
+L
+R
+D
+(
+r
+r
+e
+p
+
+ 0.4
+
+ 0.35
+
+ 0.3
+
+ 0.25
+
+ 0.2
+
+ 0.15
+
+ 0.1
+
+ 0.35
+
+ 0.3
+
+L
+R
+D
+
+ 0.25
+
+ 2
+
+ 3
+
+ 4
+
+ 5
+
+ 0.25
+
+ 0.3
+
+ 0.35
+
+Table 15: Left: test error of DRL on domain ionosphere, as a function of the number of bins,
+aggregating all values of the number of peers p and number of shared features dim(J) used in
+Table 8; the green line denotes the average values. Right: scatterplot of the test error of DRL (y)
+vs that of the Oracle (learning using the complete entity-resolved domain). Points in the dark
+grey area (green) denote better performances of DRL; points in the light grey area (blue) denote
+better performances of the Oracle (but not statistically better). Points in the white area (red) denote
+statistically better performances of the Oracle (ﬁlled points:ps = 0.2; empty points:ps = 0.8).
+
+∆
+
+ 0.1
+ 0.05
+ 0
+-0.05
+-0.1
+
+∆
+
+ 0.1
+ 0.05
+ 0
+-0.05
+
+ 2  3  4  5  6  7
+
+#peers
+
+ 1
+
+ 5
+
+ 4
+
+ 3
+#shared
+
+ 2
+
+ 7
+
+ 6
+
+2  5
+
+ 10
+#peers
+
+ 15
+
+1
+ 20
+
+ 20
+
+ 15
+
+ 10
+
+ 5
+
+#shared
+
+Table 16: Results of the dummy regularized DRL (Γ = Idd) on domains ﬁrmteacher (left) and
+mice (right), following the convention of Table 8 (ps = 0.2).
+
+24
+
+

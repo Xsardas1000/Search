@@ -1,0 +1,966 @@
+Semi-Automated Design Space
+
+Exploration for Formal Modelling
+
+Gudmund Grov1, Andrew Ireland1, Maria Teresa Llano2, Peter Kovacs1
+
+Simon Colton2, and Jeremy Gow2
+
+1 Heriot-Watt University, School of Mathematical and Computer Sciences
+
+{G.Grov,A.Ireland,PK157}@hw.ac.uk
+
+2 Goldsmiths College, University of London
+
+{m.llano,s.colton,j.gow}@gold.ac.uk
+
+Abstract. Reﬁnement based formal methods allow the modelling of sys-
+tems through incremental steps via abstraction. Discovering the right
+levels of abstraction, formulating correct and meaningful invariants, and
+analysing faulty models are some of the challenges faced when using
+this technique. Here, we propose Design Space Exploration, an approach
+that aims to assist a designer by automatically providing high-level mod-
+elling guidance in real-time. More speciﬁcally, through the combination
+of common patterns of modelling with techniques from automated the-
+ory formation and automated reasoning, diﬀerent design alternatives are
+explored and suitable models that deal with faults are proposed.
+
+Keywords: Formal Methods, Design, Modelling, Reﬁnement, Abstrac-
+tion, Event-B, Automated Reasoning, Automated Theory Formation.
+
+Introduction
+
+1
+During the development of software intensive systems, the mathematical rigour
+of formal methods brings unique beneﬁts. Speciﬁcally, the precision of a formal
+notation enables design decisions to be clearly communicated and formally ver-
+iﬁed. However, the use of a formal notation alone is not suﬃcient to achieve
+these beneﬁts. Developing design models at the “right” level of abstraction is
+a creative process, requiring signiﬁcant skill and experience on the part of the
+designers. Typically within industrial-scale projects, a design will be modelled at
+too concrete a level, with the details obscuring the clarity of key design decisions,
+making it harder to determine if the customer’s requirements have been satis-
+ﬁed. In addition, starting with too concrete a design may prematurely “lock” the
+design team into a particular solution and increase the complexity of the asso-
+ciated formal veriﬁcation task, i.e. proving properties of the design. Addressing
+these problems would signiﬁcantly leverage the creativity of a designer.
+
+We aim at developing a tool that analyses the work of a designer behind the
+scenes, and automatically suggests design alternatives for Event-B models [2]
+– alternatives which improve the clarity and correctness of a design. Moreover,
+a tool that explains for each alternative what issue it is addressing and how it
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+2
+
+ 
+
+ 
+ 
+]
+E
+S
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+6
+3
+6
+0
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+2
+
+Grov, Ireland, Llano, Kovacs, Colton and Gow
+
+will eﬀect the design as a whole. The tool will be semi-automatic in that while
+the analysis and synthesis outlined above will be automatic, the designer will
+remain in full control of the design process. We believe that we can achieve
+this goal by combining common patterns of modelling with techniques from
+automated theory formation and automated reasoning. This paper takes the ﬁrst
+steps towards such tool, where the overall approach is introduced in §3, together
+with the implementations of two sub-components and some initial experiments
+in §4. We introduce our running example together with some background on
+Event-B and automated theory formation in §2, and conclude with a discussion
+of related and future work in §5.
+
+2 Background
+2.1 Event-B
+The approach we propose here addresses the challenge of supporting design ab-
+stractions, and is relevant to formal methods in general, e.g. Alloy [13], B-method
+[1], Event-B [2], Z [18], VDM [5]. However, we believe that focusing on a single
+formalism will enable us to achieve greater immediate impact, and we are there-
+fore targeting Event-B, a formalism for modelling discrete complex systems. Tool
+support for Event-B is provided via Rodin [3], an Eclipse-based platform that
+strongly promotes tool integration via a plug-in style architecture.
+
+Central to Event-B is the notion of a model which represents a sequence
+of progressively more detailed design abstractions. The dynamic aspects of a
+model are represented via a set of variables (the state), constrained by a set of
+invariants (which have to be proven to be correct), and a set of events, which are
+guarded actions. At a given time, any enabled event (an event where the guard
+is satisﬁed) can be triggered.
+
+As a working example, consider the requirements given below of a simpliﬁed
+
+protocol for transferring money between bank accounts:
+
+R1: the sum of money across all accounts should remain constant;
+R2: transactions can only be completed if the source account has enough funds;
+R3: if an amount m is debited from a source account, the target account should
+
+be credited by m;
+
+R4: progress should always be possible (no deadlocks).
+A designer might choose to represent the protocol as follows in Event-B:
+
+start(a1, a2, m)
+
+debit(a1, a2, m)
+
+credit(a1, a2, m)
+
+def
+
+= when a1 /∈ active
+
+then pend := pend ∪ {((a1, a2), m)} || active := active ∪ {a1}
+
+def
+
+= when ((a1, a2), m) ∈ pend ∧ bal(a1) ≥ m
+
+then bal(a1) := bal(a1) − m || pend := pend \ {((a1, a2), m)} ||
+
+trans := trans ∪ {((a1, a2), m)}
+
+def
+
+= when ((a1, a2), m) ∈ trans
+active := active \ {a1}
+
+then bal(a2) := bal(a2) + m || trans := trans \ {((a1, a2), m)} ||
+
+Semi-Automated Design Space Exploration for Formal Modelling
+
+3
+
+The chosen representation involves three steps, each of which is represented
+through an event that is parametrised by the names of the source (a1) and target
+(a2) accounts, along with the value of money (m) associated with the transfer.
+Step one (event start) initiates a transfer by adding the transaction to a pending
+set (pend), and uses a set (active) to ensure that an account can only be the
+source of one transfer at a time. Note that || denotes parallel execution. The
+second step (event debit) removes the funds from the source account if suﬃcient
+funds exist – bal denotes a function that maps an account to its balance. If
+successful, the transaction is removed from the pending set and is added to the
+transfer set. The ﬁnal step (event credit) completes the transaction by adding
+the funds to the target account, as well as updating the trans and active sets
+accordingly. Finally, requirement R1 is formalised as an invariant as follows:
+
+I1: Σa∈dom(bal)bal(a) = C
+
+where C is a constant that represents the sum of money across all accounts.
+
+This design abstraction only represents a starting point for the modelling
+process. A designer will next reﬁne their design ideas through a series of progres-
+sively more concrete design abstractions. This gives leverage over the inherent
+complexity of the design process, enabling the designer to incrementally achieve a
+customer’s requirement. Crucially each reﬁnement step must be formally proved
+correct. This process is called correctness-by-construction.
+
+2.2 Automated Theory Formation and The HR System
+Regarding the exploration of the design space, part of our approach consists of
+building theories of formal speciﬁcations based on example simulations of them.
+This is achieved through the use of Automated Theory Formation (ATF), a
+technique that invents concepts to describe and categorise examples from the
+input domain, makes conjectures which relate the concepts, and seeks proofs
+and counterexamples to determine the truth of the conjectures. In particular,
+we use HR [8], an ATF system that forms theories about a domain through
+an iterative application of general purpose Production Rules (PRs) for concept
+invention. Each PR works by performing operations on the content of one or
+two input data tables – where a data table represents a concept with a set of
+corresponding examples – and a set of parametrisations in order to produce a
+new output data table which represents a new concept.
+To illustrate we show in Figure 1 the data tables used by HR to produce the
+concept of prime numbers. First, HR would take in the concept of divisors (b|a
+where b is a divisor of a), represented by a data table for a subset of integers
+(partially shown in Figure 1 for integers from 1 to 10). Then, HR would apply
+the size PR with the parameterisation < 1 >. This means that the number of
+tuples for each entry in column 1 are counted and recorded in a new data table
+(the Tau function table). For instance, in the divisors data table 1 appears once
+in the ﬁrst column, 2 appears twice, and 10 appears four times. HR then takes in
+this new concept and applies the split PR with the parameterisation < 2=2 >,
+
+4
+
+Grov, Ireland, Llano, Kovacs, Colton and Gow
+
+Divisors
+integer divisor
+b|a
+1
+1
+2
+.
+1
+2
+5
+10
+
+1
+2
+2
+.
+10
+10
+10
+10
+
+Tau function
+
+number of
+divisors
+|{b : b|a}|
+
+size < 1 >−→
+
+integer
+
+1
+2
+3
+.
+9
+10
+
+1
+2
+2
+.
+3
+4
+
+split< 2=2 >
+
+−→
+
+Primes
+
+2 = |{b : b|a}|
+
+integer
+
+2
+3
+5
+7
+
+Fig. 1. Steps applied by HR to produce the concept of prime numbers.
+
+producing a new data table consisting of those entries in the previous data table
+whose value in the second column is 2. This is the concept of a prime number.
+HR then checks to see whether the data table of the new concept is equivalent
+to, subsumed by, or subsumes another data table, or whether it is empty. Assum-
+ing the concept of non-square numbers has been formed previously by HR, with
+a datatable formed by the examples {2,3,5,6,7,8,10} and the logical construction
+¬(exists b.(b|a & b∗b = a)), the data tables of both the concept of prime numbers
+and the concept of non-square numbers are compared. HR would immediately
+see that all of its prime numbers are also non-squares, and so conjectures that
+this is true for all prime numbers through the following conjecture:
+
+(cid:124)
+
+(cid:123)(cid:122)
+
+2 = |{b : b|a}|
+prime number
+
+(cid:125) ⇒ ¬(exists b.(b|a & b ∗ b = a))
+(cid:125)
+
+(cid:123)(cid:122)
+
+(cid:124)
+
+non-square number
+
+In the context of this paper, ATF is coupled with AR techniques in order
+to explore the behaviour of the model and guide the search for ﬂaws and alter-
+natives. This is partly motivated by our previous work on reasoning modelling
+critics [12], a technique where a proof-failure is coupled with a transformation
+of the model (e.g. add a guard to an event). This technique is limited in that the
+critics became too syntactic to handle new situations, and we believe our more
+bottom-up approach of Design Space Exploration will overcome this deﬁciency.
+We have also used HR to discover invariants of Event-B models [10,16]. In
+this work, we guided the search for invariants through proof-failure analysis.
+This involved prioritising concepts and restricting the PRs to be applied.
+
+3 Towards Design Space Exploration
+
+Key to the style of modelling outlined in §2.1 is abstraction – the ability to
+create a design at the right level of detail; and to “glue” it to any abstract
+model through a set of gluing invariants. Trial-and-error is very much part of
+
+Semi-Automated Design Space Exploration for Formal Modelling
+
+5
+
+the expert methodology, where low-level proof failures are examined, and design
+alternatives in terms of abstractions are experimented with manually (see [6]).
+Within Design Space Exploration, our goal is to automate much of the low-level
+grind associated with the trial-and-error nature of formal modelling, and provide
+a designer with high-level modelling advice in real-time.
+
+In particular, we aim to generate alternative models at a higher level of
+abstraction than the original model to deal with a ﬂaw. The intuition is that
+the ﬂaw is a result of being too concrete. Moreover, within a correct abstraction,
+the designer has the additional burden of correctly deﬁning the system behaviour
+and supplying numerous auxiliary invariants that are required for the formal
+veriﬁcation process. To support this, we will suggest adaptations of the initial
+model at the same level of abstraction. This could be for instance in terms of
+additional invariants, or even changes to the behaviour of the system.
+
+The unconstrained generation of new models will result in an enormous search
+space which will be infeasible in practice. Instead, the approach we are proposing
+has two phases:
+
+1. In an analysis phase the initial model is explored through the application
+
+of ATF in order to highlight problematic aspects of the abstraction;
+
+2. The results of the analysis phase are then used in the model generation
+phase, where alternative abstractions and adaptations of the model are gen-
+erated.
+
+This process may be iterative: the generation may be followed by an analysis
+phase that rules out some “non-interesting” alternatives or to identify “interest-
+ing” features of them that require further generations. Below we further explain
+these phases.
+
+3.1 Analysis phase
+A major challenge is to ﬁnd heuristic techniques that eﬀectively prune the design
+space so that a designer is presented with a useful set of modelling alternatives.
+Our heuristic analysis will aim to pin-point both where and what the problem
+may be in order to guide the generation phase – which otherwise will give rise
+to an explosion of design alternatives – and to identify the most interesting
+solutions. Automated Theory Formation (ATF) and Automated Reasoning (AR)
+will play a heavy role in this analysis.
+
+In order to explore the design space we will allow HR to form unrestricted
+theories; i.e. without a predeﬁned set of selected PRs. Moreover, we will include
+event information in order to explore hypotheses related to the events. These
+two features consist of a signiﬁcant evolution of our previous work [10,16], where
+the searched space was restricted by enabling speciﬁc PRs and the focus was
+only on the state of the system (not the events).
+
+The identiﬁcation of interesting conjectures will consist of diﬀerent heuristics.
+Firstly, we will identify conjectures that are associated with failed steps from the
+simulation trace. This strategy has proven successful as evidenced in [10], and is
+
+6
+
+Grov, Ireland, Llano, Kovacs, Colton and Gow
+
+extended here by including event information. Thus, conjectures of the following
+forms are sought:
+
+Variable-based Conjectures
+
+failure ⇒ variable
+failure ⇔ variable
+variable ⇒ failure
+variable ⇔ failure
+
+Event-based Conjectures
+
+failure ⇒ event
+failure ⇔ event
+event ⇒ failure
+event ⇔ failure
+
+which indicate that a variable or an event are associated with failures in the
+model and therefore should be the focus for the generation phase. In other
+words, the execution of an event or a change in a variable leads to a failure
+(event/variable ⇒ failure); e.g. an event that always decreases a variable X
+more than its lower bound limit; or a failure is somehow involved with a variable
+or an event (failure ⇒ event/variable); e.g. the value of a variable Y enables
+the execution of the event in the previous example. In any of these cases ei-
+ther an adaptation or an abstraction, that involve (all or some of) the identiﬁed
+element(s), should be proposed. This will be further illustrated in §4.
+
+Additionally, we will also exploit user given invariants in order to guide the
+selection process. That is, we seek conjectures that can be identiﬁed as correct
+adaptations of the original invariant; i.e. conjectures of the forms:
+
+user_given_invariant ⊕ λ
+λ ⊕ user_given_invariant
+
+λ ⊕ user_given_invariant ⊕ λ
+
+where ⊕ is any correct logical connector, and λ can take the form of a single
+concept or a set of concepts joint themselves by any logical connector. For in-
+stance imagine the user given invariant X ≥ C which speciﬁes that the value
+of X must always be greater or equal than some constant C, and through the
+analysis phase the following conjecture is identiﬁed: Y + X ≥ C, where Y (cid:55)→ λ,
++ (cid:55)→ ⊕ and X ≥ C (cid:55)→ user_given_invariant.
+
+Since we aim at proposing abstractions, we will also search for invariants
+whose aim is to prove the consistency between the abstract and concrete models;
+i.e. gluing invariants (a strategy we have already explored in [16]). To achieve
+this we look for conjectures of the forms:
+and
+
+λ ⇔ abstract_concept
+
+abstract_concept ⇔ λ
+
+Finally, we will exploit HR’s support for the generation of near conjectures,
+i.e. conjectures that are true for a percentage threshold of the examples they
+have. Building upon this functionality, we will explore how this can be tailored
+to the needs of formal modelling. That is, although formal methods are typically
+based on deﬁnite answers, e.g. a property is either true or false, we believe that a
+weaker notion of truth is called for when exploring design alternatives, what we
+call near-properties; i.e. properties that are true for most, but not all, behaviours,
+e.g. “event X always violates invariant I, but it is always re-established by event
+Y ”. Paying attention to such properties can lead to insights of the design and in
+particular suggest solutions which lie just beyond the fringe of what is currently
+true about it.
+
+Semi-Automated Design Space Exploration for Formal Modelling
+
+7
+
+Machines
+
+addAbstractLayer
+addSeesContextToAbstractLayer
+
+Operators
+Events
+deleteArgument insertAbstractLayer
+deleteWitness
+deleteGuard
+deleteVariable moveVariableToAbstractLayer
+deleteInvariant mergeVariable
+deleteAction
+negateGuard
+negateAction
+mergeEvents
+combineEvents
+
+Conditions
+hasAbstractLayer
+hasVariableOfTypePartialFunction
+hasVariableOfTypePowerset
+hasAbstractablePartialFunctionVariable
+hasOneEvent
+
+Combinators
+andApply
+IfRule
+IfElseRule
+RepeatUntilRule
+WhileRule
+AccummulatorRule
+
+The above operators, conditions and combinators have been implemented
+and were used as the basis for our initial experiments (see §4).
+
+Fig. 2. Model generation phase: operators, conditions and combinators.
+
+3.2 Generation phase
+The system must be able to ‘explore’ design alternatives also for new and pre-
+viously unseen scenarios. The component that performs the actual generation
+of new abstractions and adaptations can therefore not be too prescriptive, as
+was the case with our reasoned modelling critics. For his (unpublished) honours
+dissertation, one of the authors (Kovacs) has made the ﬁrst step towards such
+a component by implementing a generic framework for model generation as a
+plug-in of the Rodin tool-set [14]. The key feature of this plug-in is that it has a
+layered design: at the bottom is a set of low-level but generic ‘atomic operators’
+that makes small changes to a model, e.g. ‘delete variable’ and ‘merge events’.
+These atomic operators can then been combined in order to generate new mod-
+els. It is up to the system to ﬁnd the right combination of operators. Thus, a
+“complete” set of atomic operators would allow the generation of all possible al-
+ternative models. This gives ﬂexibility to our proposed approach to design space
+exploration, enabling us to handle new and unforeseen circumstances. Figure
+2 highlights the atomic operators, conditions and combinators that have been
+implemented and tested. Due to space constraints, we will only summarize this
+framework and refer the interested reader to [14] for further details.
+
+Internally, Rodin stores an Event-B model in an abstract syntax tree (AST).
+Using Scala, this is ﬁrst translated into an intermediate representation which is
+
+8
+
+Grov, Ireland, Llano, Kovacs, Colton and Gow
+
+essentially a set of triples that describes the relationship between the compo-
+nents. For example, the triple:
+
+[Machine(C), refines, Machine(A)]
+
+states that machine C is a reﬁnement of machine A. This creates a more natural
+and eﬃcient way to implement atomic transformations, as most transformations
+are small and local. The operators are then applied to this internal triple repre-
+sentation. For example,
+
+Apply deleteVariable On model
+
+will apply the operator that deletes a variable to the Event-B model. Note that
+applied in this unconstrained way, it will explore all possible alternatives. That is,
+one alternative model will be generated for each variable, where each alternative
+corresponds to the deletion of a single variable. We will illustrate more operators
+in the next section. After the generation, the new alternatives are translated back
+to Rodin’s AST and shown to the user.
+
+Figure 2 lists the operators that have been implemented. Here, operators that
+are applied to events and machines have been separated. The ﬁgure also contains
+the implemented combinators, which allows us to combine the operators into
+more complex ones, and conditions, which are used to constrain the application
+of an operator. Examples of these are given in §4. Full details of the operators,
+coombinators and conditions can be found in [14].
+
+3.3 Common patterns of modelling
+As mentioned above, ﬁnding the right combination of operators is the key to
+our approach. Common modelling patterns will play a central role in achieving
+our goal. In comparison with conventional design patterns (see [4] for exam-
+ples of design patterns in Event-B), the patterns we have in mind will be at a
+much higher level whilst being implemented at a much lower level of granularity
+through the above operator framework. We believe that this will give greater
+ﬂexibility in terms of their application and therefore enable us to provide assis-
+tance in situations where there are no applicable design patterns, or where the
+application of a design pattern requires more than just instantiation. The anal-
+ysis will be used to suggest suitable patterns and guidance of how to implement
+it. To support this, we have already identiﬁed several reﬁnement patterns [10]
+in previous work; however as we cannot reﬁne away ﬂaws, this will be applied
+in inverse, essentially turning them into abstraction patterns. Some abstraction
+patterns have also been identiﬁed and represented using the operator framework
+in [14]. The experiments in the next section are utilising two patterns:
+
+1. “undoing” bad behaviour by introducing a special error (or exception) case.
+2. abstracting away the problem when it can be pinpointed between certain
+
+events. This amounts to “atomising” sequential events into a single event.
+
+Semi-Automated Design Space Exploration for Formal Modelling
+
+9
+
+Starting from the initial development, abstraction (A1) and adaptation (A2) are
+suggested to deal with violation of requirement R4. Given that I1 is a near-
+invariant, a new invariant is suggested in (A3); or an abstraction (A4) with the
+required gluing invariant.
+
+Fig. 3. A diagrammatic summary of a small design space exploration.
+
+4
+
+Illustrative examples and initial experiments
+
+In terms of realising our vision we have undertaken experiments at the level of
+analysing design models as well as mechanising generation. We present these
+experiments next. The selection of operators and integrations of the phases is
+currently manual; our ultimate goal is to automate the full development chain.
+Consider again the user provided model of a money transfer protocol given
+in §2. As it stands, the model is ﬂawed since R4 is violated when all accounts
+have started a transaction but none of the source accounts have suﬃcient funds.
+Moreover, event debit violates invariant I1 since the amount removed from the
+source account is not accounted for in the invariant, which makes requirement
+R2 broken. Our aim in such situations will be to oﬀer the designer modelling
+alternatives which address the ﬂaws. Figure 3 summarises the alternatives gen-
+erated through our approach, and below we outline how this was achieved.
+
+Abstraction A1 The ﬁrst step of the analysis is to provide HR with required
+model information. This is shown in Figure 4 for our running example. The
+concepts represent the state of the model, with the examples for each of them
+obtained from simulation traces generated by the ProB simulator [15]. Addition-
+ally, ProB checks if the invariants hold at each step of the simulation trace. The
+concept good speciﬁes states for which ProB did not ﬁnd any invariant violations.
+
+10
+
+Grov, Ireland, Llano, Kovacs, Colton and Gow
+
+state(s)
+S0
+S1
+S2
+S3
+S4
+S5
+S6
+S7
+S8
+
+integer(i)
+0
+1
+2
+...
+event(e)
+start
+debit
+credit
+
+trans(s,a1,a2,i)
+S1 A1 A2 1
+S4 A2 A4 1
+S5 A2 A4 1
+S6 A2 A4 1
+S6 A3 A1 3
+S7 A3 A1 3
+pend(s,a1,a2,i)
+S0 A1 A2 1
+S3 A2 A4 1
+S5 A3 A1 3
+Fig. 4. Background knowledge provided to HR for the initial analysis phase.
+
+account(a)
+A1
+A2
+A3
+A4
+good(x)
+S0
+S2
+S3
+S8
+
+active(s,a)
+S0 A1
+S1 A1
+S3 A2
+S4 A2
+S5 A2
+S5 A3
+S6 A2
+S6 A3
+S7 A3
+
+event(s,e)
+S0 start
+S1 debit
+S2 credit
+S3 start
+S4 debit
+S5 start
+S6 debit
+S7 credit
+S8 credit
+
+bal(s,a,i)
+S0 A1 3
+S0 A2 3
+S0 A3 3
+S0 A4 3
+S1 A1 2
+S1 A2 3
+S1 A3 3
+S1 A4 3
+...
+
+HR is run and in order to prune the output we focus on conjectures related to
+the states where the failures arise, i.e. we search for implications and equivalences
+that involve the concept ¬good. Conjectures (1) are identiﬁed, suggesting the
+generation of bad states associated to event debit and variable active:
+
+debit ⇒ ¬good(a)
+
+¬good(a) ⇒ active(a, b)
+
+(1)
+
+We can apply the “abstract away” pattern to this violation. One implementation
+of this pattern is to remove the variable that two (sequential) events use to
+communicate an intermediate result, and then combine this sequence into an
+atomic event. The following Scala code implements such an operator:
+
+Apply (deleteVariable andApply mergeEvent) On model
+
+We have already discussed deleteVariable above. The mergeEvent operator
+generates all valid possibilities of combining two events; andApply applies the
+operators in sequence, such that the second operator is applied to all alterna-
+tives generated by the ﬁrst operator. Application of the above operator gen-
+erates 12 alternatives. However, if we include the results from the analysis,
+then we can constrain the operator to the given events and variables using the
+WithActiveElements ﬁlter as follows:
+
+Apply (deleteVariable andApply mergeEvent)
+
+On model WithActiveElements (Event(debit), Variable(pend))
+
+This will generate 2 alternatives, one of them being the desired abstraction:
+
+debitabs(a1, a2, m)
+
+def
+
+= when a1 /∈ active ∧ bal(a1) ≥ m
+
+then active := active ∪ {a1} || bal(a1) := bal(a1) − m
+
+|| trans := trans ∪ {((a1, a2), m)}
+
+Adaptation A2 An alternative analysis is to apply the error-case pattern. In-
+tuitively, this means introducing a new “error-handling” event that “undo” some
+
+Semi-Automated Design Space Exploration for Formal Modelling
+
+11
+
+previous state changes when the desired path is not applicable. This can be im-
+plemented so that it reverses a previous action in cases when an event of the
+desired path stays disabled. This requires new atomic events: combineEvents,
+which combines the guards of one event with the actions of another; negateGuard,
+which negates a guard of an event; and undoActions, which reverses the actions
+of an event. An example of the latter is to replace set union by set subtraction.
+Note that this operator will fail if some action cannot be reversed. Applying
+these operators in the order speciﬁed above (the latter two will only be applied
+to a combined event) will generate 10 alternatives. However, based on the previ-
+ous analysis (see A1), we can set event debit as active, which reduces the number
+of alternatives to 7, including the generation of the error-handling event:
+= when ((a1, a2), m) ∈ pend ∧ bal(a1) < m
+
+debiterr(a1, a2, m)
+
+def
+
+then pend := pend \ {((a1, a2), m)} ||
+
+active := active \ {a1}
+
+which handles the case when the source account does not have enough funds.
+
+Adaptation A3 Let’s assume the user selects A1. Through analysis of this
+alternative, invariant (I1) is still violated. We run HR on the new model again.
+The rationale for this is that the user-given invariant (I1) represents a near
+invariant; therefore, the failed steps would be associated to the elements of the
+state that make the invariant fail. Through manual inspection we identify the
+following 2 conjectures:
+
+¬good(a) ⇔ trans(a, b, c, d)
+
+¬good(a) ⇔ active(a, b)
+
+(2)
+
+These conjectures show that the bad states arise when there are transactions
+currently in progress. In other words, when variables trans and active are not
+empty. Based on this we search for conjectures which involve the concepts trans
+and active as well as the invariant itself; i.e. C = Σa∈dom(bal) bal(a).
+
+We run HR again, this time prioritising the selected concepts. Through man-
+ual inspection of the output we identify the following conjecture which is true
+for all the states of the simulation trace:
+
+C(a, b) ⇔ (sum(bal, a) = c ∧ sum(trans, a) = d ∧ b = c + d)
+
+This represents an adaptation of invariant I1 that addresses the violation by
+debit abs. Note that this adaptation is achieved by including the internal state,
+i.e. trans within the invariant. The Event-B translation of the invariant, which
+replaces I1, is:
+
+I2: Σa∈dom(bal)bal(a) + Σ(a1,a2)∈dom(trans)trans(a1, a2) = C
+
+Abstraction A4 Although correct, invariant I2 is not a natural representation
+of R1, as compared with near-invariant I1. The designer may wish to explore
+
+12
+
+Grov, Ireland, Llano, Kovacs, Colton and Gow
+
+an alternative abstraction in which I1 is an invariant. Our ﬁnal alternative A4
+represents such an abstraction.
+
+Based on conjectures (2), identiﬁed in the output given by HR for alternative
+A1, we can then re-apply our “abstract away” pattern, however its implementa-
+tion has to be slightly modiﬁed as two variables have to be deleted:
+
+Apply (deleteVariable andApply deleteVariable andApply mergeEvent)
+On model WithActiveElements (Variable(trans), Variable(active))
+
+Unconstrained, this operator will generate 6 possible alternatives, while the
+above constrained application, which takes into account the analysis, only gen-
+erates 2 alternatives, one of them being the desired transfer event3:
+
+transfer(a1, a2, m)
+
+def
+
+= when abal(a1) ≥ m ∧ a1 (cid:54)= a2
+
+then abal(a1) := abal(a1) − m ||
+abal(a2) := abal(a2) + m
+
+Finally, in order to prove the consistency between the abstract and concrete
+models, a gluing invariant is required. Therefore, we enter again in an analysis
+phase where HR is used to form a theory of the reﬁnement step and search for the
+invariant. By inspecting the output produced by HR, the following conjecture is
+found:
+
+b = sum(trans, a) + sum(bal, a) ⇔ sum(abal, a) = b
+
+Although this is not the required invariant, since it compares the total balance
+instead of the individual balances of each purse, it shows the relation between
+the abstract variable abal and the concrete representation; i.e. variables bal and
+trans. Part of our future work will be focused on tailoring HR for the formal
+methods context so that invariants such as the gluing invariant required in this
+reﬁnement step can be formed.
+
+Instead of proving R1 directly, Design Space Exploration will have helped
+the designer create a more abstract view where the requirements can be naturally
+represented. Moreover, we have shown that this abstraction is respected in the
+concrete view, i.e. the property holds there too. Note that transfer is also a very
+natural representation of R3, and by reﬁnement it also holds in A2.
+
+5 Related work, conclusion and future work
+Focusing on Event-B, we have introduced our approach to Design Space Explo-
+ration for formal modelling, which includes a novel integration of automated
+theory formation, automated reasoning and formal methods. This is supported
+by an initial implementation with partly automated experiments. We believe
+3 Technically, the Event-B syntax of the action should be: abal := abal (cid:47)−{a1 (cid:55)→
+abal(a1) − m, a2 (cid:55)→ abal(a2) + m}
+
+Semi-Automated Design Space Exploration for Formal Modelling
+
+13
+
+this is a novel approach which works due to the innovative integration of auto-
+mated theory formation and automated reasoning with a more traditional formal
+modelling method (Event-B). This work has been motivated by our previous re-
+sults on reasoning modelling critics [12] and reﬁnement plans [10]. As the name
+may suggest, we have taken some inspiration from automated theory exploration,
+which automatically invents theorems and concepts of mathematical theories.
+We are lifting this to the formal modelling level where we explore alternative
+models to a given (faulty) user-deﬁned design. A key feature in this is to ex-
+plore more abstract representations (see e.g. A1 and A4). We are not familiar
+with any work on automating abstractions within formal modelling, albeit it has
+been applied to source code (abstract interpretation) and theorem proving (pred-
+icate abstraction). Automating reﬁnement, on the other hand, has been studied
+within several formal methodologies. We have already mentioned our work on
+reﬁnement plans; other work include: the BART tool for classical B [17]; the
+ZRC reﬁnement calculus for Z [7]; and Event-B based tools and techniques as
+described in e.g. [11,4,9,10]. Contrary to this work, which focuses on automating
+the reﬁnement to a more concrete step, our proposed approach focus is on au-
+tomating patterns for abstractions and adaptations. Moreover, as far as we are
+aware, and diﬀerent from our work in [16], automated theory formation tech-
+niques have not been investigated within the context of reﬁnement style formal
+modelling.
+
+Currently, the sub-components of our approach are partly automated, while
+their integration is manual. HR has to be manually guided and we have to
+manually inspect its output as well as select and combine the relevant operators
+to perform the generations. Our goal is to fully automate all parts, and provide
+users with a set of new (and ideally ordered by perceived relevance) alternatives
+that they can select. This is where we see the approach as semi-automatic: the
+user will have to make the ﬁnal decision. In this paper we have provided the ﬁrst
+step towards the goal and showed feasibility for the overall approach. However,
+there is still a long way to go. In §3 and §4 we have already discussed the next
+steps for the analysis phase; for the model generation we need to identify a
+suﬃciently small, yet complete, set of atomic operators and combinators to be
+able to generate all necessary alternatives. It is crucial that these are controlled
+to avoid generating duplicates. The phases must then be integrated to be able to
+automate the selection and combination of operators based upon the analysis.
+
+The level of support we aim to provide is very ambitious. If successful, our
+approach will increase the productivity and accessibility of Event-B, but more
+importantly, it will provide valuable insights into how formal methods can be
+deployed more widely.
+
+Acknowledgments. This work has been supported by EPSRC platform grants
+EP/J001058/1 and EP/N014758/1, and FP7 WHIM project 611560. We are
+grateful for feedback on our approach by Jean-Raymond Abrial.
+
+14
+
+Grov, Ireland, Llano, Kovacs, Colton and Gow
+
+References
+1. J.-R. Abrial. The B-book - assigning programs to meanings. Cambridge University
+
+2. J.-R. Abrial. Modeling in Event-B - System and Software Engineering. Cambridge
+
+Press, 2005.
+
+University Press, 2010.
+
+3. J.-R. Abrial, M. J. Butler, S. Hallerstede, and L. Voisin. An open extensible tool
+environment for Event-B. In ICFEM, LNCS 4260, pages 588–605. Springer, 2006.
+4. J.-R. Abrial and T. S. Hoang. Using Design Patterns in Formal Methods: an
+
+Event-B Approach. In ICTAC, LNCS 5160, 2008.
+
+5. D. Bjørner and C. B. Jones, editors. The Vienna Development Method: The Meta-
+
+Language, volume 61 of LNCS. Springer, 1978.
+
+6. M. Butler and D. Yadav. An incremental development of the mondex system in
+
+Event-B. Formal Aspects of Computing, 20(1):61–77, 2008.
+
+7. A. Cavalcanti and J. Woodcock. ZRC - A Reﬁnement Calculus for Z. Formal
+
+Aspects of Computing, 10(3), 1998.
+
+8. S. Colton. Automated Theory Formation in Pure Mathematics. Springer, 2002.
+9. A. Fürst. Design Patterns in Event-B and Their Tool Support. Master’s thesis,
+
+ETH Zürich, 2009.
+
+10. G. Grov, A. Ireland, and M. T. Llano. Reﬁnement plans for informed formal design.
+
+In ABZ, volume 7316 of LNCS, pages 208–222. Springer, 2012.
+
+11. A. Iliasov. Design Components. PhD thesis, University of Newcastle, 2008.
+12. A. Ireland, G. Grov, M. Llano, and M. Butler. Reasoned modelling critics: turning
+
+failed proofs into modelling guidance. SCP, 78(3), 2013.
+
+13. D. Jackson. Software Abstractions: logic, language, and analysis. MIT press, 2012.
+14. P. Kovacs. Automating abstractions in formal modelling, 2015. Heriot-Watt Uni-
+
+versity, Undergraduate Honors Thesis. Available from http://bit.ly/1JnL0Ts.
+
+15. M. Leuschel and M. J. Butler. ProB: A model checker for B. In Proceedings of
+
+Formal Methods Europe 2003, pages 855–874, 2003.
+
+16. M. T. Llano, A. Ireland, and A. Pease. Discovery of invariants through automated
+
+theory formation. Formal Aspects of Computing, 2012.
+
+17. A. Requet. BART: A tool for automatic reﬁnement. In ABZ, 2008.
+18. J. M. Spivey. Z Notation - a reference manual (2. ed.). Prentice Hall International
+
+Series in Computer Science. Prentice Hall, 1992.
+
+

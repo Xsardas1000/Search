@@ -1,0 +1,3554 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+7
+1
+
+ 
+ 
+]
+
+C
+D
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+7
+2
+6
+5
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Hypergraph Partitioning for Sparse Matrix-Matrix Multiplication
+
+GREY BALLARD, Sandia National Laboratories, gmballa@sandia.gov
+ALEX DRUINSKY, Lawrence Berkeley National Laboratory, adruinsky@lbl.gov
+NICHOLAS KNIGHT, New York University, nknight@nyu.edu
+ODED SCHWARTZ, Hebrew University, odedsc@cs.huji.ac.il
+
+We propose a ﬁne-grained hypergraph model for sparse matrix-matrix multiplication (SpGEMM), a key
+computational kernel in scientiﬁc computing and data analysis whose performance is often communication
+bound. This model correctly describes both the interprocessor communication volume along a critical path
+in a parallel computation and also the volume of data moving through the memory hierarchy in a sequential
+computation. We show that identifying a communication-optimal algorithm for particular input matrices is
+equivalent to solving a hypergraph partitioning problem. Our approach is sparsity dependent, meaning that
+we seek the best algorithm for the given input matrices.
+
+In addition to our (3D) ﬁne-grained model, we also propose coarse-grained 1D and 2D models that cor-
+respond to simpler SpGEMM algorithms. We explore the relations between our models theoretically, and
+we study their performance experimentally in the context of three applications that use SpGEMM as a
+key computation. For each application, we ﬁnd that at least one coarse-grained model is as communication
+efﬁcient as the ﬁne-grained model. We also observe that different applications have afﬁnities for different
+algorithms.
+
+Our results demonstrate that hypergraphs are an accurate model for reasoning about the communication
+
+costs of SpGEMM as well as a practical tool for exploring the SpGEMM algorithm design space.
+
+1. INTRODUCTION
+Sparse matrix-matrix multiplication (SpGEMM) is a fundamental computation in sci-
+entiﬁc computing and data analysis. It is a key component in applications ranging from
+linear solvers [Brezina and Vassilevski 2011; Yamazaki and Li 2011] and graph algo-
+rithms [Rabin and Vazirani 1989; Azad et al. 2015b] to Kohn-Sham theory in compu-
+tational chemistry [Borˇstnik et al. 2014]. Unlike dense matrix-matrix multiplication,
+SpGEMM is an irregular computation, and its performance is typically communica-
+tion bound. Previous research on SpGEMM algorithms has focused on communication
+costs, both interprocessor communication and data movement within the memory hi-
+erarchy [Buluc¸ and Gilbert 2012; Ballard et al. 2013; Azad et al. 2015a].
+
+We focus on communication costs and argue in this paper that the amount of
+communication required for sequential and parallel SpGEMM algorithms depends
+strongly on the matrices’ nonzero structures. That is, algorithms that are commu-
+nication efﬁcient for SpGEMMs within one application are not necessarily the most
+efﬁcient in the context of another application. The simplest SpGEMM algorithms
+to design, analyze, and implement are based on dense matrix multiplication algo-
+rithms: these algorithms are parametrized only by the matrix dimensions and dif-
+fer from dense matrix-matrix multiplication in that they use sparse data struc-
+tures and avoid operating on and communicating zeros. We refer to these algorithms
+as “sparsity independent” [Ballard et al. 2013, Def. 2.5]; two examples are the row-
+wise algorithm with block partitioning [Faisal et al. 2014] and Sparse SUMMA (Sp-
+SUMMA) [Buluc¸ and Gilbert 2012].
+
+One of the main goals in this paper is to explore sparsity-dependent SpGEMM al-
+gorithms and determine how communication efﬁcient an algorithm can be if it is able
+to inspect the input matrices’ nonzero structures and determine the data distributions
+and parallelization of arithmetic operations accordingly. Currently this approach is
+only theoretical in general: in practice, the cost of nonzero structure inspection can
+exceed that of even an inefﬁcient SpGEMM. However, practical, application-speciﬁc
+
+2
+
+Ballard, Druinsky, Knight, Schwartz
+
+algorithmic insight can be gained from the results of this paper and our techniques
+can be used for other applications not considered here.
+
+We use hypergraphs to model arithmetic operations and dependencies and hyper-
+graph partitioning to model parallelizing and scheduling operations. Hypergraphs
+have previously been used to model sparse matrix-vector multiplication (SpMV) (see,
+e.g., [Vastenhouw and Bisseling 2005; C¸ ataly ¨urek et al. 2010]), and hypergraph parti-
+tioning software has been developed to help design algorithms for SpMV and other
+computations [C¸ ataly ¨urek and Aykanat 1999; Boman et al. 2007]. They have also been
+used in the context of SpGEMM [Akbudak and Aykanat 2014; Ballard et al. 2015a]; in
+this paper we present a hypergraph model that generalizes previous models for SpMV
+and SpGEMM. We discuss these and other related works in Sec. 2.
+
+We present a general, ﬁne-grained hypergraph model for SpGEMM in Sec. 3 and use
+it to prove sparsity-dependent communication lower bounds for both parallel (Sec. 4.1)
+and sequential (Sec. 4.2) algorithms. We reduce identifying a communication-optimal
+algorithm for given input matrices to solving a hypergraph partitioning problem. We
+also compare with previous lower bounds, showing that ours are more general and can
+be tighter.
+
+In addition to our general SpGEMM model, we also consider several restricted
+classes of algorithms. In Sec. 5 we deﬁne a framework for coarsening the ﬁne-grained
+model to obtain simpler hypergraphs that maintain correct modeling of communica-
+tion costs. In particular, we consider the classiﬁcation of 1D, 2D, and 3D SpGEMM
+algorithms [Ballard et al. 2013] and examine the relationships among the seven sub-
+classes of algorithms that naturally arise from this classiﬁcation. The class of 1D algo-
+rithms includes row-wise and outer-product algorithms, and the class of 2D algorithms
+includes SpSUMMA. Finding communication-optimal algorithms within each subclass
+also corresponds to solving simpler hypergraph partitioning problems.
+
+Our experimental results, presented in Sec. 6, use existing hypergraph partition-
+ing software to compare the communication costs of algorithms from each subclass
+for a variety of SpGEMMs, with input matrices coming from three particular appli-
+cations. We use representative examples from each application to explore the algo-
+rithmic space of SpGEMM; our results can guide algorithmic design choices that are
+application speciﬁc. In particular, our empirical results lead to different conclusions
+for each of the three applications we consider. For example, we ﬁnd that certain 1D
+algorithms, although simple, are sufﬁcient in the context of an algebraic multigrid
+application [Brezina and Vassilevski 2011] but that 2D and 3D algorithms are much
+more communication efﬁcient than 1D algorithms in the context of Markov cluster-
+ing applied to social-network matrices [Satuluri and Parthasarathy 2009]. We discuss
+overall conclusions in more detail in Sec. 7.
+
+As is the case for other irregular computations, there exists a tradeoff between
+simplicity and efﬁciency for SpGEMM algorithms and implementations. Using hyper-
+graphs to model SpGEMM communication costs, we provide a mechanism for quan-
+tifying the relative efﬁciency of algorithms of varying complexity. We illuminate this
+tradeoff in the context of several applications, providing practical insight into the de-
+sign of algorithms and software.
+
+2. RELATED WORK
+We base our communication models and analysis on classical results for dense matrix
+multiplication. Hong and Kung [1981] used a two-level sequential memory model and
+established communication lower bounds for dense matrix multiplication and other
+computations using a graph-theoretic approach. Irony, Toledo, and Tiskin [2004] used
+a distributed-memory parallel model and established communication lower bounds
+
+Hypergraph Partitioning for Sparse Matrix-Matrix Multiplication
+
+3
+
+for dense matrix multiplication using a geometric approach. See Ballard et al.’s sur-
+vey [2014] for more details on these models and results.
+
+Ballard et al. [2011; 2012] proved communication lower bounds, in both sequential
+and parallel models, for a general set of matrix computations that includes SpGEMM.
+These lower bounds are parameterized by the number of multiplications involved
+in the multiplication of the speciﬁc input matrices, and they are not tight in gen-
+eral. There has been other theoretical work in deriving bounds on the communication
+costs of SpGEMM in the sequential two-level memory model. Pagh and St¨ockel [2014]
+proved matching worst-case upper and lower bounds based on the number of nonze-
+ros in the matrices. Greiner [2012, Ch. 6] used a different approach to establish other
+worst-case lower and upper bounds that apply to a restricted set of matrices and algo-
+rithms. We compare our lower bounds with previous work in more detail in Secs. 4.1
+and 4.2.
+
+On the practical side of sequential SpGEMM algorithms, Gustavson [1978] proposed
+the ﬁrst algorithm that exploits sparsity in the inputs and outputs, and Davis [2006]
+implemented a variant of that algorithm in the general-purpose CSPARSE library.
+Neither the algorithm nor implementation are designed to speciﬁcally reduce commu-
+nication costs speciﬁcally, but the approach is typically efﬁcient in terms of memory
+footprint and operation count. Buluc¸ and Gilbert [2008] proposed an alternative sparse
+data structure and sequential algorithm that are more memory and operation-count
+efﬁcient than Gustavson’s algorithm for “hypersparse” matrices, which can arise in the
+context of parallel distribution of sparse matrices.
+
+There exists more variation in parallel SpGEMM algorithms. We use the 1D/2D/3D
+classiﬁcation of SpGEMM algorithms deﬁned in [Ballard et al. 2013]. They surveyed
+many of the previous algorithms in the literature and theoretically analyzed their
+communication costs for a particular class of input matrices (Erd˝os-R´enyi random ma-
+trices), comparing with expectation-based communication lower bounds. Buluc¸ and
+Gilbert [2012] proposed a general-purpose 2D algorithm called Sparse SUMMA, which
+uses random permutations to achieve load balance, and they analyzed its communica-
+tion cost for general inputs. Ballard, Siefert, and Hu [2015b] considered the communi-
+cation costs of 1D algorithms in an algebraic multigrid application.
+
+As a tool for minimizing communication, hypergraph partitioning has gained popu-
+larity in the parallel computing community in large part due to its application SpMV.
+While there is a vast literature on hypergraph partitioning for SpMV, we highlight here
+only a small sample from which we borrow notation. C¸ ataly ¨urek and Aykanat [1999]
+introduced column-net and row-net models for 1D SpMV algorithms, and in a subse-
+quent paper [2001] presented the ﬁne-grain model for 2D SpMV. C¸ ataly ¨urek, Aykanat,
+and Uc¸ar [2010] summarize and compare models for 1D and 2D SpMV algorithms (see
+also [Vastenhouw and Bisseling 2005]). Akbudak, Kayaaslan, and Aykanat [2013] also
+used hypergraphs to improve cache locality of SpMV on a single processor.
+
+Hypergraph partitioning has been used in the context of SpGEMM as well. Krish-
+namoorthy et al. [2006] introduced a hypergraph model for a general class of compu-
+tations including SpGEMM, and described a heuristic for scheduling out-of-core algo-
+rithms with the goal of minimizing disk I/O. Akbudak and Aykanat [2014] introduced
+a hypergraph model for parallel outer-product algorithms that represents both the
+computation and the data involved in SpGEMM (see Ex. 5.2); they also implemented
+and benchmarked the performance based on the partitions. Our earlier conference pa-
+per [2015a] introduced a slightly simpler version of the SpGEMM hypergraph model
+given by Def. 3.1; that paper also presented initial results concerning the application
+of algebraic multigrid (see Sec. 6.1).
+
+4
+
+Ballard, Druinsky, Knight, Schwartz
+
+←
+
+K →
+
+J →←
+
+∗
+∗
+
+↑
+I
+
+↓
+
+∗
+
+∗
+
+↑
+
+K
+
+↓
+
+∗
+
+A
+
+∗
+
+∗
+∗ ∗
+∗
+
+B
+
+=
+
+↑
+I
+
+↓
+
+J →←
+
+∗ ∗
+∗
+
+∗
+
+C
+
+Fig. 1: Notation for a particular SpGEMM instance.
+
+3. HYPERGRAPH MODEL FOR SPGEMM
+3.1. Notation and Assumptions
+The notation introduced in this section will be used throughout the rest of the paper.
+Let N = {0, 1, . . .}; for any n ∈ N, [n] = {1, . . . , n}, with [0] = ∅. For any n ∈ N and
+set X, an n-way partition of X, denoted {X1, . . . , Xn}, is a function [n] ∋ i 7→ Xi ⊆ X
+such thatSi∈[n] Xi = X andSi6=j∈[n] Xi ∩ Xj = ∅. Another partition of X, {Y1, . . . , Ym},
+reﬁnes {X1, . . . , Xn} if for every j ∈ [m] there exists an i ∈ [n] such that Yj ⊆ Xi.
+Let A and B be I-by-K and K-by-J matrices with entries from a set X, which con-
+tains an element 0 and is closed under two binary operations called addition (com-
+mutative and associative with identity element 0) and multiplication (with absorbing
+element 0). For example, X could be a semiring.
+
+Matrix multiplication is the function (A, B) 7→ C = A · B, where C is an I-by-J
+matrix over X deﬁned entrywise by cij = Pk∈[K] aikbkj. We let SA ⊆ [I] × [K], SB ⊆
+[K] × [J], and SC ⊆ [I] × [J] denote the nonzero structures of A, B, and C. In this
+work, we study SpGEMM algorithms, the class of algorithms that evaluate and sum all
+nontrivial multiplications aikbkj, where both aik 6= 0 and bkj 6= 0, and thus depend only
+on SA and SB. We do not consider algorithms that exploit additional structure on X or
+more general relations on the entries of A and B: in particular, we ignore numerical
+cancellation, so SA and SB induce SC. Fig. 1 illustrates our notation for a particular
+SpGEMM instance; under our assumptions we do not distinguish the nonzero values
+of the matrices. We maintain the nonzero structure of the example in each of Figs. 1
+to 4.
+
+Given additional structure on X, there may exist many algorithms that do not sim-
+ply compute the sums of products. For example, if X is a ring, then additive inverses
+can be exploited to obtain Strassen’s algorithm, where the multiplicands do not gen-
+erally equal the input matrix entries. As another example, given known relations on
+the entries of A and B, one may be able to avoid evaluating some nontrivial multipli-
+cations.
+
+To simplify the presentation, we assume that neither A or B have any zero rows or
+columns, so every nonzero input matrix entry participates in at least one nontrivial
+multiplication. While this can always be enforced, doing so may incur a preprocessing
+cost.
+
+Hypergraph Partitioning for Sparse Matrix-Matrix Multiplication
+
+5
+
+∗
+
+∗∗
+∗ ∗
+
+∗∗S
+
+B
+
+∗
+
+∗
+
+∗ ∗
+
+SA
+
+∗
+
+SC
+
+∗
+
+←
+
+K →
+
+∗
+
+J →
+
+←
+
+↑
+I
+
+↓
+
+Fig. 2: Geometric view of the SpGEMM instance in Fig. 1. correspond to the iteration
+space of matrix multiplication. Each sub-cube represents a multiplication, which is
+nontrivial if its projections onto the A and B faces both correspond to nonzero val-
+ues. The projections of nontrivial multiplications onto the C face deﬁne the nonzero
+structure of C.
+
+Our hypergraph terminology borrows from C¸ ataly ¨urek and Aykanat [1999]. A hy-
+pergraph H is a generalization of a graph; it consists of a set of vertices V and a set of
+nets N , where each net n ∈ N is a subset of the vertices, n ⊆ V. We use the term pin to
+refer to a vertex in a particular net. Each vertex v ∈ V may have a weight w associated
+with it, and each net n ∈ N may have a cost c associated with it. Weights and costs are
+typically scalar-valued but can be vector-valued; we will use vector-valued weights.
+
+3.2. Fine-Grained Hypergraph Model
+In this section we deﬁne our most general hypergraph model for SpGEMM. It may be
+helpful to visualize an instance of SpGEMM geometrically, as the three-dimensional
+“iteration space” of matrix multiplication: Fig. 2 illustrates this geometric perspective.
+The set of IKJ multiplications are arranged as a set of cubes so that nontrivial mul-
+tiplications are distinguished by having nonzero projections on the A- and B-faces.
+Nonzero entries of C are determined by projecting the nontrivial multiplications onto
+the C-face.
+
+We now deﬁne our hypergraph model and connect its deﬁnition to its geometric in-
+
+terpretation.
+
+Deﬁnition 3.1. Consider matrices A, B, and C = A· B, continuing notation. Deﬁne
+
+the ﬁne-grained SpGEMM hypergraph H(A, B) = (V,N ), where V = V m ∪ V nz, with
+
+V nz = V A ∪ V B ∪ V C,
+V m = {vikj : (i, k) ∈ SA ∧ (k, j) ∈ SB},
+V A = {vA
+V B = {vB
+V C = {vC
+
+ik : (i, k) ∈ SA},
+kj : (k, j) ∈ SB}, and
+ij : (i, j) ∈ SC},
+
+6
+
+Ballard, Druinsky, Knight, Schwartz
+
+and N = N A ∪ N B ∪ N C, with
+
+N A = {nA
+N B = {nB
+N C = {nC
+
+ik : (i, k) ∈ SA},
+kj : (k, j) ∈ SB}, and
+ij : (i, j) ∈ SC}.
+ik ∈ nA
+
+nA
+ik = {vikj : (k, j) ∈ SB} ∪ {vA
+ik},
+
+nB
+jk = {vikj : (i, k) ∈ SA} ∪ {vB
+
+kj},
+
+Net membership is deﬁned such that each vA
+each vikj ∈ nA
+
+ij , and
+ij. Equivalently, pins are deﬁned such that for each (i, k) ∈ SA,
+
+kj , each vC
+
+ik, each vB
+
+kj ∈ nB
+
+ij ∈ nC
+
+ik ∩ nB
+
+kj ∩ nC
+
+for each (j, k) ∈ SB,
+
+and for each (i, j) ∈ SC,
+nC
+ij = {vikj : (i, k) ∈ SA ∧ (k, j) ∈ SB} ∪ {vC
+ij}.
+
+The vertices V have two types of weights, corresponding to computation and memory.
+For all vikj ∈ V m,
+
+wcomp(vikj ) = 1,
+wmem(vikj ) = 0.
+
+For all vA
+
+ik, vB
+
+kj , vC
+
+ij ∈ V m,
+
+wcomp(vA
+wmem(vA
+
+ik) = wcomp(vB
+ik) = wmem(vB
+
+kj ) = wcomp(vC
+kj ) = wmem(vC
+
+ij ) = 0,
+ij ) = 1.
+
+The cost of each net n ∈ N is c(n) = 1.
+
+In summary, each vertex v of H(A, B) corresponds either to a nontrivial multiplica-
+tion or to a nonzero entry of A, B, or C, and each net corresponds to a nonzero of A, B,
+or C. Each multiplication vertex v ∈ V m is a member of the three nets corresponding to
+nonzeros involved in the multiplication; each nonzero vertex v ∈ V nz is a member of its
+corresponding net. Conversely, each net corresponds to a nonzero value and includes
+as members its corresponding nonzero vertex as well all associated multiplication ver-
+tices.
+
+In the geometric context of Fig. 2, we can think of each multiplication vertex vikj as a
+point in the three-dimensional iteration space, and we can think of each nonzero vertex
+vA
+ik, vB
+ij as a point on one of the (two-dimensional) faces of the iteration space.
+Likewise, a net nA
+ij corresponds to a (one-dimensional) ﬁber perpendicular
+to one of the faces, and its pins are the vertices that lie along the ﬁber.
+
+kj , or nC
+
+kj , or vC
+
+ik, nB
+
+We provide two other visualizations of the hypergraph deﬁned by the SpGEMM in-
+stance given in Fig. 1. Fig. 3 depicts the hypergraph as a bipartite graph, where hy-
+pergraph vertices are denoted by circles, hypergraph nets are denoted by squares, and
+net membership is deﬁned by edges in the graph. Fig. 4 shows the incidence matrix of
+the hypergraph, where rows correspond to vertices, columns correspond to nets, and
+net membership is deﬁned by the nonzero pattern.
+
+This hypergraph is nearly the same as the one proposed in our earlier pa-
+per [Ballard et al. 2015a, Deﬁnition 1]. The difference here is the introduction of
+nonzero vertices and the inclusion of each in its corresponding nonzero’s net. The pur-
+pose of adding these vertices is to enable enforcing memory balance in the parallel case
+(see Sec. 4.1), and for relating the hypergraph model to a computation DAG model in
+the sequential case (see Sec. 4.2).
+
+Hypergraph Partitioning for Sparse Matrix-Matrix Multiplication
+
+7
+
+vC
+00
+
+vC
+01
+
+vC
+11
+
+vC
+20
+
+nC
+00
+
+nC
+01
+
+nC
+11
+
+nC
+20
+
+v020
+
+v001
+
+v021
+
+v101
+
+v131
+
+v210
+
+nA
+00
+
+vA
+00
+
+vA
+02
+
+nA
+02
+
+nA
+10
+
+vA
+10
+
+vA
+13
+
+nA
+13
+
+nA
+21
+
+vA
+21
+
+nB
+31
+
+nB
+21
+
+vB
+21
+
+vB
+20
+
+vB
+31
+
+nB
+01
+
+nB
+20
+
+nB
+10
+
+vB
+10
+
+vB
+01
+
+Fig. 3: Hypergraph of the SpGEMM instance in Fig. 1. Circles correspond to vertices
+and squares correspond to nets.
+
+00 nA
+nA
+
+02 nA
+
+10 nA
+
+13 nA
+
+21 nB
+
+01 nB
+
+10 nB
+
+20 nB
+
+21 nB
+
+31 nC
+
+00 nC
+
+01 nC
+
+11 nC
+20
+
+∗
+
+∗
+∗
+
+v020
+
+v001
+
+v021
+
+v101
+
+v131
+
+v210
+
+∗
+
+∗
+
+∗
+∗
+
+∗
+
+∗
+
+∗
+
+∗
+∗
+
+∗
+
+∗
+∗
+
+∗
+
+∗
+
+∗
+
+Fig. 4: Submatrix of the incidence matrix of the hypergraph of the SpGEMM instance
+in Fig. 1. Rows correspond to multiplication vertices and columns correspond to nets.
+The rows of the incidence matrix not shown here correspond to nonzero vertices; they
+form a diagonal submatrix.
+
+4. COMMUNICATION LOWER BOUNDS
+4.1. Parallel Lower Bound
+We consider performing SpGEMM with input matrices A and B on a parallel machine
+with p processors with disjoint memories. Let H = H(A, B). A parallelization is a p-way
+partition of V m (assigning multiplications to processors) and a data distribution is a
+p-way partition of V nz (assigning nonzeros to processors). Thus, a partition of V deﬁnes
+both a parallelization and a data distribution. We deﬁne a parallel SpGEMM algo-
+
+8
+
+Ballard, Druinsky, Knight, Schwartz
+
+rithm by not only a parallelization and data distribution, but also by a communication
+pattern and each processor’s local computation algorithm(s). So, a single partition of V
+corresponds to a family of parallel SpGEMM algorithms, and each parallel SpGEMM
+algorithm corresponds to a single partition of V. For the rest of Sec. 4.1, “algorithm”
+means “parallel SpGEMM algorithm”.
+Given a partition of V, the communication for any corresponding algorithm com-
+prises two phases: the expand phase, where the processors exchange nonzero entries
+of A and B (initially distributed according to the partitions of V A and V B) in order to
+perform their multiplications (assigned according to the partition of V m), and the fold
+phase, where the processors communicate to reduce partial sums for nonzero entries
+of C (ﬁnally distributed according to the partition of V C).
+the cuts of H induced by that algorithm’s associated partition of V.
+
+We now bound below the parallel communication costs of an algorithm in terms of
+
+Deﬁnition 4.1. Given a partition {V1, . . . ,Vp} of V, for each i ∈ [p], Qi denotes the
+subset of N whose elements (nets) have nonempty intersections with both Vi and V\Vi.
+LEMMA 4.2. Given a partition {V1, . . . ,Vp} of V, for any associated algorithm, the
+number of words each processor i ∈ [p] sends or receives is at least |Qi|, and the critical-
+path communication cost is at least maxi∈[p] |Qi|.
+
+PROOF. For each processor i ∈ [p], for each net in Qi, processor i must either receive
+or send the corresponding nonzero, since at most one processor owns each nonzero at
+the start and end of the computation. The bound on the critical-path communication
+cost is obtained by maximizing over i ∈ [p], as each processor can send only one word
+at a time along the critical path [Ballard et al. 2014].
+
+Furthermore, for each partition, there exists an algorithm that attains these lower
+bounds, within constant factors in the cases of the per-processor costs and within a
+logarithmic factor in the case of the critical-path cost.
+
+LEMMA 4.3. Given a partition {V1, . . . ,Vp}, there exists an associated algorithm
+such that the number of words each processor i ∈ [p] sends or receives is O(|Qi|), and
+the critical-path communication cost is O(log p · maxi∈[p] |Qi|).
+
+PROOF. The basic idea of the algorithm is as follows. For the expand phase, every
+input nonzero that corresponds to a cut net will be sent to the processors whose parts Vi
+intersect the net via a binary-tree broadcast. For the fold phase, every output nonzero
+that corresponds to a cut net will be reduced to the processor whose part includes the
+nonzero vertex via a binary-tree reduction.
+
+In more detail, consider ﬁrst the expand phase. All of the broadcasts are performed
+synchronously: in the ﬁrst step, each root sends its nonzero to two other processors;
+in the second step, every processor that receives a nonzero from a root sends it to
+two other processors in the second step; and so on. Since at most p processors can
+be involved in any one broadcast, the expand phase requires at most O(log p) steps.
+Processor i receives each of its required nonzeros at most once and sends each at most
+twice, for a total (per-processor) cost of O(|Qi|). Furthermore, at each expand step,
+processor i performs one receive and two sends in each of a subset of |Qi| broadcast
+trees, so each expand step involves O(maxi∈[p] |Qi|) sends or receives along any critical
+path. Analysis of the fold phase is symmetric, using binary-tree reductions.
+
+For efﬁcient algorithms, we constrain the partitions to enforce load balance of mem-
+ory and computation. We deﬁne sets of load-balanced partitions in terms of two pa-
+rameters:
+
+Hypergraph Partitioning for Sparse Matrix-Matrix Multiplication
+
+9
+
+Deﬁnition 4.4. For any δ, ǫ ∈ [0, p− 1], let Πδ,ǫ be the set of all partitions {V1, . . . ,Vp}
+
+of V where
+
+wmem(Vi) ≤ (1 + δ)|V nz|
+
+p
+
+and
+
+wcomp(Vi) ≤ (1 + ǫ)|V m|
+
+p
+
+for each i ∈ [p]. We say an algorithm with partition {V1, . . . ,Vp} ∈ Πδ,ǫ is (δ, ǫ)-load
+balanced.
+
+Given Πδ,ǫ, if δ = 0 then the memory requirements are perfectly load-balanced,
+and if ǫ = 0 then the computations (multiplications) are perfectly load-balanced. If
+δ = ǫ = p − 1 then Πδ,ǫ includes the trivial partition wherein no interprocessor com-
+munication is required, since one processor stores all three matrices and performs the
+whole computation.
+
+Finally, we state our parallel communication lower bound:
+
+THEOREM 4.5. The critical-path communication cost of an (δ, ǫ)-load balanced par-
+
+allel SpGEMM algorithm is at least
+
+min
+
+{V1,...,Vp}∈Πδ,ǫ
+
+i∈[p] |Qi|.
+max
+
+This lower bound is tight up to at most a logarithmic factor in the number of processors.
+
+PROOF. The lower bound follows directly from Lem. 4.2 and Def. 4.4. The tightness
+
+of the lower bound follows from applying Lem. 4.3 to any optimal partition.
+
+We compare Thm. 4.5 with the distributed-memory parallel communication lower
+bounds for SpGEMM derived by Ballard et al. [2011; 2012]. In our notation, with
+the additional assumption that each processor is restricted to using M words of its
+local memory, the critical-path communication cost is bounded below by a function
+contained in the union of the sets
+
+Ω(cid:18) |V m|
+
+pM 1/2 − αM(cid:19)
+
+and
+
+Ω(cid:18)|V m|2/3
+
+p2/3 − β|V nz|
+p (cid:19)
+
+(1)
+
+for some α, β > 0. These two asymptotic lower bounds are called memory-dependent
+and memory-independent, respectively; the memory-independent bound requires an
+additional asymptotic assumption that the computational load balance parameter ǫ =
+O(1); we refer to [Ballard et al. 2011; Ballard et al. 2012] for details regarding these
+asymptotic expressions, like the constants α, β, and others suppressed by asymptotic
+notation, and a discussion of when one lower bound dominates the other.
+
+The combined lower bound eq. (1) is tight (within constant factors) when A and B
+are dense matrices [Irony et al. 2004], but asymptotically loose in expectation when
+I = J = K = n and each entry of A and B is nonzero with probability d/n for any d in
+the intersection of the sets ω(1), o(√M ), and o(√n) [Ballard et al. 2013]. On the other
+hand, by considering the nonzero structures of A and B, the conclusion of Lem. 4.2 is
+always tight, within a logarithmic factor.
+
+4.2. Sequential Lower Bound
+Now we turn to the communication costs of SpGEMM algorithms executed on a se-
+quential machine with a two-level memory. In this computation model, communica-
+tion is data movement between a fast memory of M -word capacity, M ≥ 3, and a slow
+memory of unbounded capacity; operations are only performed on data in fast mem-
+ory. Communication cost is deﬁned as the total number of loads and stores, i.e., words
+moved from slow to fast and from fast to slow memory. We will derive communication
+
+10
+
+Ballard, Druinsky, Knight, Schwartz
+
+lower bounds in terms of the SpGEMM hypergraph model (see Sec. 3.2. For the rest of
+Sec. 4.2, “algorithm” means “sequential SpGEMM algorithm”.
+
+We follow Hong and Kung’s approach [1981, Sec. 3] for deriving lower bounds on
+communication in this sequential model, as well as their graph-theoretic SpGEMM
+model [1981, Sec. 6]. Hong and Kung model algorithms schematically as uninterpreted
+directed acyclic graphs (DAGs): the SpGEMM hypergraph model in Def. 3.1 is closely
+related to Hong and Kung’s DAG model of SpGEMM. In particular, each SpGEMM
+hypergraph H(A, B) represents a family of SpGEMM DAGs G(A, B) whose members
+differ only in the order in which they sum the (nontrivial) multiplications. After for-
+malizing this relationship, we exploit it to approximate and simplify Hong and Kung’s
+communication lower bounds framework using hypergraphs.
+
+We deﬁne a summation tree as any DAG with exactly one zero-outdegree vertex,
+called the root; the zero-indegree vertices are called the leaves. The members of G(A, B)
+are parameterized by a function that associates each (i, j) ∈ SC with a summation tree
+Tij whose leaves are {vikj : (∃k) vikj ∈ V} and whose non-leaves are disjoint from V and
+the other trees. Having associated disjoint summation trees with SC in this manner,
+the generic member (V, E) ∈ G(A, B) is deﬁned by
+
+V = V A ∪ V B ∪ {V (Tij) : (i, j) ∈ SC}
+E = (cid:8)(vA
+ik, vikj ) : (∃i, k, j) vA
+∪ (cid:8)(vB
+ik, vikj ) : (∃i, k, j) vB
+∪ {E(Tij) : (i, j) ∈ SC} .
+
+ik, vikj ∈ V(cid:9)
+kj , vikj ∈ V(cid:9)
+
+Of the vertices V , we distinguish the inputs I, which have no predecessors, and the
+outputs O, which have no successors; by construction, these two sets are disjoint. We
+remark that G(A, B) can be specialized to obtain Hong and Kung’s SpGEMM DAGs,
+by restricting each Tij to be a binary tree with at least two leaves; this excludes, e.g.,
+multiplication of diagonal matrices.
+
+The key to Hong and Kung’s communication analysis is the set of S-partitions of a
+
+DAG (V, E). A partition {V1, . . . , Vh} of V is an S-partition if additionally
+(1) Each Vi has a dominator set of size at most S — a dominator set of Vi contains a
+
+vertex on every path from I to Vi);
+
+(2) Each Vi has a minimum set of size at most S — the minimum set of Vi is the set of
+
+all elements of Vi with no successors in Vi); and
+
+(3) There is no cyclic dependence among V1, . . . , Vh — where Vi depends on Vj if (Vi ×
+
+Vj) ∩ E 6= ∅.
+
+We exploit G(A, B)’s members’ common structure to derive lower bounds on dominator
+and minimum set sizes.
+
+LEMMA 4.6. Consider any (V, E) ∈ G(A, B) and any U ⊆ V . Let DU be any domi-
+
+nator set of U and let MU be the minimum set of U .
+
+|DU| ≥ max(cid:0)|{(i, k) : (∃j) vikj ∈ U}|, |{(k, j) : (∃i) vikj ∈ U}|(cid:1)
+|MU| ≥ |{(i, j) : (∃k) vikj ∈ U}|
+
+PROOF. There exists a set of disjoint paths, each starting from a distinct element of
+{vA
+ik : (∃j) vikj ∈ U} ⊂ I and ending in U . Similarly, there exists a set of disjoint paths,
+each starting from a distinct element of {vB
+kj : (∃i) vikj ∈ U} ⊂ I and ending in U . By
+deﬁnition, DU must contain at least one vertex from every path in each of the two sets,
+so the ﬁrst lower bound follows. Now observe that for each pair (i, j) such that vikj ∈ U
+for some k ∈ [K], Tij ∩ U is nonempty and, since the summation trees are disjoint, has
+
+Hypergraph Partitioning for Sparse Matrix-Matrix Multiplication
+
+11
+
+at least one element with no successors in U . Thus each such Tij contributes at least
+one element to MU , establishing the second lower bound.
+We now relate the DAGs G(A, B) and the hypergraph H(A, B).
+
+Deﬁnition 4.7. Consider any partition {V1, . . . ,Vh} of V. For each part Vi, let W A
+,
+i be the subsets of N A, N B, and N C, resp., having nonempty intersections
+i , and W C
+
+i
+
+W B
+with Vi.
+
+LEMMA 4.8. Consider any G ∈ G(A, B) and S ∈ {1, 2, . . .}. For any S-partition
+| ≤ S
+
+{V1, . . . , Vh} of G, there exists a partition {V1, . . . ,Vh} of V with |W A
+for each i ∈ [h].
+
+i |,|W C
+
+|,|W B
+
+i
+
+i
+
+PROOF. We construct {V1, . . . ,Vh} from {V1, . . . , Vh} as follows. Deﬁne a partition
+1, . . . , V ′
+h} of V m by intersecting each subset V1, . . . , Vh with V m. Every element of N
+h. Moreover, applying
+| ≤ S. Now add each vA
+ik ∈
+i that intersects the corresponding net nA
+ik, and likewise
+ij ∈ V C. In this manner, we obtain a partition {V1, . . . ,Vh}
+h with elements of V nz in this manner does not
+i = W ′A
+for each
+
+{V ′
+has a nontrivial intersection with at least one subset V ′
+|,|W ′C
+Lem. 4.6 to each subset V ′
+V A to an arbitrarily chosen V ′
+for each vB
+kj ∈ V B and each vC
+of V. Moreover, augmenting V ′
+1 , . . . , V ′
+change the intersected nets, i.e., W A
+(Vi, V ′
+
+i , we have that |W ′A
+
+1 , . . . , V ′
+i
+
+i = W ′C
+
+i = W ′B
+
+|,|W ′B
+
+, and W C
+
+i ) pair.
+
+, W B
+
+i
+
+i
+
+i
+
+i
+
+i
+
+LEMMA 4.9. Consider any S ∈ {1, 2, . . .} and partition {V1, . . . ,Vh} of V with
+|,|W B
+i | ≤ S for each i ∈ [h]. There exists an algorithm with communication
+
+i |,|W C
+
+|W A
+cost O(M h(S/M + 1)3).
+
+i
+
+PROOF. For each i ∈ [h], partition W A
+
+so that each part has size m =
+⌊M/3⌋ except possibly for one smaller part. These three partitions naturally induce
+a partition {U1, . . . ,Ug} of V, whose parts are called blocks. Observe that {U1, . . . ,Ug}
+reﬁnes {V1, . . . ,Vh}; in particular, each part Vi is partitioned into to at most ⌈S/m⌉3
+blocks. Thus, the total number of blocks g ≤ h⌈S/m⌉3.
+
+i , W C
+i
+
+, W B
+
+i
+
+The algorithm considers Uj for each j ∈ [g]:
+
+(1) Load A- and B-matrix entries associated with W A
+
+j and W B
+
+j , as well as any partial
+
+sums of C-matrix entries W C
+
+j previously computed — at most 3m loads.
+
+(2) Perform all possible nontrivial multiplications and additions — this can be done
+
+with no data movement by processing each C-matrix entry in sequence.
+
+(3) Store the updated C-matrix entries — at most m stores.
+There are at most 4mg ≤ 4M h(5S/M + 1)3/3 loads and stores in total.
+
+Finally, we apply these results within Hong and Kung’s communication lower
+
+bounds framework.
+
+THEOREM 4.10. The communication cost of an algorithm is at least M (h−1), where
+i | ≤
+
+h is the minimum cardinality of a partition {V1, . . . ,Vh} of V with |W A
+2M for each i ∈ [h]. When h > 1, this lower bound is tight up to a constant factor.
+
+i |,|W C
+
+|,|W B
+
+i
+
+PROOF. Any algorithm can be represented in Hong and Kung’s model by some G ∈
+G(A, B). By Hung and Kung’s argument [1981, Lem. 3.1], the communication cost is
+at least M (P (2M )− 1), where P (S) denotes the minimum cardinality of an S-partition
+of G. We apply Lem. 4.8 to bound P (2M ) below by h. Tightness follows from applying
+Lem. 4.9 with S = 2M .
+
+12
+
+Ballard, Druinsky, Knight, Schwartz
+
+Thm. 4.10 simpliﬁes Hong and Kung’s key lemma by requiring a single hypergraph
+partitioning problem, vs. |G(A, B)| graph partitioning problems. Additionally, Hong
+and Kung did not address attainability of their key lemma.
+We note that another of Hong and Kung’s results [1981, Thm. 6.1] yields the lower
+bound Ω(|V m|/M 1/2), a sequential analogue of the memory-dependent bound in eq. (1).
+While this lower bound is attainable in the cases where A and B are both dense (see,
+e.g., [Ballard et al. 2011]), it is asymptotically loose in many sparse cases. For example,
+if I = J = K = n and SA = SB = {(i, i) : i ∈ [n]}, then any algorithm requires moving at
+least 3|V m| words between the two levels, the nonzero entries of A, B, and C. However,
+a trivial lower bound of |V nz| also exists, under the assumption that fast memory must
+be empty before and after the computation. It remains open to show whether or not
+the combination of this bound and the memory-dependent one is asymptotically loose.
+We mention some other communication bounds that have appeared previously. Pagh
+and St¨ockel [2014] proved matching worst-case upper and lower bounds based on the
+number of nonzeros in the input and output matrices. That is, given a number of nonze-
+ros, they showed that there exist input matrices that require a certain amount of com-
+munication; they also gave an algorithm that never requires more than a constant
+factor times this worst-case cost. Greiner [2012, Ch. 6] considered restricted classes
+of algorithms and matrices and used a different approach to establish other worst-
+case lower and upper bounds, which are not always tight. In contrast to these results,
+Thm. 4.10 is input speciﬁc rather than worst case.
+
+5. RESTRICTING SPGEMM ALGORITHMS
+Each SpGEMM hypergraph (deﬁned in Sec. 3.2) models a class of SpGEMM algorithms
+via partitions of its vertices. This hypergraph model can be simpliﬁed in the study of
+subclasses of algorithms and matrix nonzero structures. Here, we only consider the
+distributed-memory parallel case, as described in Sec. 4.1.
+
+In Sec. 5.1, we describe how to simplify SpGEMM hypergraphs using a vertex coars-
+ening technique while still correctly modeling algorithmic costs. We use vertex coarsen-
+ing to model subclasses of algorithms, restricting the parallelization (Sec. 5.2), the data
+distribution (Sec. 5.3), and both (Sec. 5.4). We can also use vertex coarsening when
+modeling subclasses of matrix nonzero structures, as we demonstrate in Sec. 5.5 in the
+case of sparse matrix-vector multiplication (SpMV). Lastly, in Sec. 5.6, we show how
+vertex coarsening can also be used to model SpGEMM-like algorithms that violate two
+of the assumptions in Sec. 3.1, exploiting relations between the input matrix entries
+(Sec. 5.6.1) and only computing a subset of the output matrix entries (Sec. 5.6.2).
+
+5.1. Vertex Coarsening
+We can restrict the class of algorithms modeled by an SpGEMM hypergraph by forcing
+certain subsets of vertices to be monochrome, or all assigned to the same part, in the
+partition. For example, we can enforce that a certain subset of multiplications will be
+performed by the same processor or that a particular multiplication is performed by
+the processor that owns a corresponding nonzero entry. To implement such restrictions
+in an SpGEMM hypergraph, we coarsen vertices, choosing a new vertex to represent
+each subset of constituent vertices that must be monochrome. We will use the symbol
+“∼” to mean “represents” in this sense.
+After vertex coarsening, in order to model communication costs correctly, we de-
+ﬁne net membership as follows: a coarsened vertex is a member of a net if any of its
+constituent vertices was a member of that net. This is because the computation corre-
+sponding to the coarsened vertex requires the matrix entries associated with any nets
+that contained a constituent vertex.
+
+Hypergraph Partitioning for Sparse Matrix-Matrix Multiplication
+
+13
+
+In order to model computational and memory costs correctly, the weights of a coars-
+ened vertex equal the sum of the constituent vertices’ weights. This is because the
+processor assigned the coarsened vertex will perform the computation corresponding
+to all of the multiplication constituent vertices and will own all of the nonzero con-
+stituent vertices.
+
+After coarsening the vertices and updating net memberships, there may be multi-
+ple coalesced nets that contain identical sets of vertices, and there may be singleton
+nets that contain only a single vertex. To reduce the number of nets, we can combine
+coalesced nets into one coarsened net; the cost of the coarsened net equals the sum of
+the coalesced nets’ costs. Because singleton nets cannot be cut, we can omit them, a
+further simpliﬁcation.
+
+costs remain unit. Additionally, the nonzero vertices are untouched, so the only weights
+
+dress restricting data distribution subsequently in Secs. 5.3 and 5.4. Net memberships
+
+5.2. Restricted Parallelizations
+We ﬁrst apply vertex coarsening to the multiplication vertices V m ⊂ V of an SpGEMM
+hypergraph (V,N ) = H(A, B), representing parallelizing computation across proces-
+sors at a coarser granularity than individual multiplications. We represent each coars-
+ened set by a new vertex ˆv, and let ˆV m denote the set of these new ˆv vertices. In this
+section, we leave the remaining vertices V nz untouched, so ˆV = ˆV m ∪ V nz; we will ad-
+are updated in terms of the ˆv vertices as described in Sec. 5.1, i.e., N induces a set ˆN
+of nets on ˆV, thus obtaining the simpliﬁed hypergraph ( ˆV, ˆN ). Since each net contains
+a distinct nonzero vertex, no nets are coalesced/combined, so | ˆN| = |N| and the nets’
+that change are the computational weights of elements ˆv of ˆV m: each wcomp(ˆv) equals
+The simpliﬁed hypergraph has fewer vertices than the original: V m is replaced by ˆV m,
+whose cardinality is that of the given partition of V m. Additionally, while the number
+of nets is unchanged, the number of pins generally decreases.
+In the remainder of Sec. 5.2, we will study two types of coarsenings of V m: by slice
+Slice-wise coarsenings, which model what we call 1D parallelizations, coarsen the
+computational cube by slices parallel to one of the three coordinate planes. Coarsening
+by slices means we identify all vikj with the same i, j, or k index — the choice of index
+gives rise to three 1D models, called row-wise, column-wise, and outer-product:
+
+the number of multiplication vertices it combined.
+
+and by ﬁber. Fig. 5 shows visualizations of each type of coarsening.
+
+row-wise
+column-wise
+
+ˆvi ∼ {vits : (∃t, s) vits ∈ V}
+ˆvj ∼ {vrtj : (∃r, t) vrtj ∈ V}
+outer-product ˆV m = {ˆvk : k ∈ [K]}, ˆvk ∼ {vrks : (∃r, s) vrks ∈ V}.
+
+ˆV m = {ˆvi : i ∈ [I]},
+ˆV m = {ˆvj : i ∈ [J]},
+
+Fiber-wise coarsenings, which model what we call 2D parallelizations, coarsen the
+computational cube by ﬁbers parallel to one of the three coordinate axes. Coarsening
+by ﬁbers means we identify all vikj with the same pair (i, k), (k, j), or (i, j), of indices —
+this choice gives rise to three 2D models, called monochrome-A, monochrome-B, and
+monochrome-C:
+
+monochrome-A ˆV m = {ˆvik : (i, k) ∈ SA}, ˆvik ∼ {viks : (∃s) viks ∈ V}
+monochrome-B ˆV m = {ˆvkj : (k, j) ∈ SB}, ˆvkj ∼ {vrkj : (∃r) vrkj ∈ V}
+monochrome-C ˆV m = {ˆvij : (i, j) ∈ SC},
+ˆvij ∼ {vitj : (∃t) vitj ∈ V}.
+
+Each model is identiﬁed with a set of parallelizations. In a row-wise parallelization,
+every B-slice is monochrome, and the parallelization corresponds to a partition of the
+row-wise model; column-wise and outer-product parallelizations are deﬁned similarly.
+
+14
+
+Ballard, Druinsky, Knight, Schwartz
+
+∗
+
+∗∗S
+
+B
+
+∗
+
+∗∗S
+
+B
+
+∗
+
+∗∗S
+
+B
+
+∗∗
+∗ ∗
+
+∗
+
+∗
+
+∗∗
+∗ ∗
+
+∗
+
+∗
+
+∗∗
+∗ ∗
+
+∗
+
+∗
+
+∗ ∗
+
+SA
+
+∗
+
+SC
+
+∗ ∗
+
+SA
+
+∗
+
+SC
+
+∗ ∗
+
+SA
+
+∗
+
+SC
+
+∗
+
+∗
+
+∗
+
+∗
+
+∗
+
+∗
+
+(a) Row-Wise
+
+(b) Column-Wise
+
+(c) Outer-Product
+
+∗
+
+∗∗S
+
+B
+
+∗
+
+∗∗S
+
+B
+
+∗
+
+∗∗S
+
+B
+
+∗∗
+∗ ∗
+
+∗
+
+∗
+
+∗∗
+∗ ∗
+
+∗
+
+∗
+
+∗∗
+∗ ∗
+
+∗
+
+∗
+
+∗ ∗
+
+SA
+
+∗
+
+SC
+
+∗ ∗
+
+SA
+
+∗
+
+SC
+
+∗ ∗
+
+SA
+
+∗
+
+SC
+
+∗
+
+∗
+
+∗
+
+∗
+
+∗
+
+∗
+
+(d) Monochrome-A
+
+(e) Monochrome-B
+
+(f) Monochrome-C
+
+Fig. 5: Visualizations of restricted parallelizations. The top row (Figs. 5a to 5c) corre-
+sponds to slice-wise coarsenings or 1D parallelizations; the bottom row (Figs. 5d to 5f)
+corresponds to ﬁber-wise coarsenings or 2D parallelizations. In each ﬁgure, a partic-
+ular coarsened vertex is highlighted as a shaded set of cubes; the coarsened vertex
+corresponds to all multiplication vertices in the shaded set.
+
+In a monochrome-A parallelization, every A-ﬁber is monochrome, and the paralleliza-
+tion corresponds to a partition of the monochrome-A model; monochrome-B and -C
+parallelizations are deﬁned similarly. A general parallelization is called ﬁne-grained.
+We now discuss relationships among these seven classes of parallelizations, as il-
+lustrated in Fig. 6. Let F denote the set of all (ﬁne-grained) parallelizations. Let
+R,L,U,A,B,C ⊆ F denote the row-wise, column-wise, outer-product, monochrome-A,
+-B, and -C parallelizations, respectively. Fig. 6 depicts the inclusions that hold among
+these 7 sets. Notice in particular that these 7 sets deﬁne a 13-way partition of F , whose
+parts are listed in the ﬁrst column of Tab. I; we now verify that these 13 parts indeed
+form a partition of F . Observe that R ⊆ A ∩ C, L ⊆ B ∩ C, and U ⊆ A ∩ B. Actu-
+ally, U = A ∩ B. To see the converse inclusion, consider any P ∈ A ∩ B, and observe
+that every C-slice must be monochrome in P ; this is because C-slices are Cartesian
+products of their projections onto the A- and B-faces, but a similar property does not
+generally hold for the A- and B-slices. The preceding inclusions sufﬁce to demonstrate
+correctness of the 13-way partition of F in Fig. 6.
+
+Hypergraph Partitioning for Sparse Matrix-Matrix Multiplication
+
+15
+
+ﬁne-grained
+
+monochrome-C
+
+row-wise
+
+m
+
+o
+
+n
+
+c
+
+o
+
+l
+
+-
+
+w
+
+i
+
+s
+
+e
+
+o
+
+c
+
+h
+
+r
+
+o
+
+m
+
+e
+
+-
+
+A
+
+outer
+
+product
+
+B
+
+monochrome-
+
+Fig. 6: Venn diagram showing relationships among restricted parallelizations.
+
+Tab. I uses the following four SpGEMM instances to show that each of the 13 parts
+
+is not empty.
+
+∗ ∗(cid:21) =(cid:20) ∗ ∗
+(cid:20) ∗ ∗
+∗ ∗(cid:21) =(cid:20) ∗
+(cid:20) ∗ ∗
+∗ ∗(cid:21) =(cid:20) ∗ ∗
+(cid:20) ∗ ∗
+∗ ∗(cid:21) =(cid:20) ∗
+(cid:20) ∗ ∗
+
+∗ ∗(cid:21)
+∗ ∗(cid:21)(cid:20) ∗ ∗
+∗ ∗(cid:21)
+∗(cid:21)(cid:20) ∗ ∗
+∗(cid:21)
+∗ ∗(cid:21)(cid:20) ∗
+∗
+∗(cid:21)
+∗
+∗
+
+
+∗
+
+(2)
+
+(3)
+
+(4)
+
+(5)
+
+
+
+
+∗
+∗
+
+viously in Sec. 5.2 and will synthesize the two approaches subsequently in Sec. 5.4. Net
+
+5.3. Restricted Data Distributions
+Now we apply vertex coarsening to the nonzero vertices V nz ⊂ V of an SpGEMM hyper-
+graph (V,N ) = H(A, B), representing distributing data across processors at a coarser
+granularity than individual matrix entries. We represent each coarsened set by a new
+vertex ˆv, and let ˆV nz be the set of these new ˆv vertices. In this section, we leave the
+remaining vertices V m untouched, so ˆV = V m ∪ ˆV nz; we addressed parallelizations pre-
+memberships are updated in terms of the ˆv vertices, i.e., N induces a set ˆN of nets on
+ˆV, thus obtaining the simpliﬁed hypergraph ( ˆV, ˆN ). Now, it is possible that some nets
+are coalesced, and thus are combined in ˆN ; the cost of each net in ˆN is the number
+so the only weights that change are the memory weights of elements ˆv of ˆV nz: each
+wmem(ˆv) equals the number of nonzero vertices it combines.
+
+of coalesced nets it combines. Additionally, the multiplication vertices are untouched,
+
+16
+
+Ballard, Druinsky, Knight, Schwartz
+
+Table I: Examples showing that each of the 13 parts in Fig. 6 is nonempty. The “ﬁnest”
+parallelization is where each nontrivial multiplication is assigned to a distinct proces-
+sor. A parallelization “by ﬁber” means that each ﬁber (of a given type) is assigned to a
+distinct processor. A parallelization “by slice” means that each slice (of a given type) is
+assigned to a distinct processor. The “coarsest” parallelization is where all nontrivial
+multiplications are assigned to the same processor.
+
+Part
+
+SpGEMM Instance
+
+Parallelization
+
+F \ (A ∪ B ∪ C)
+
+A \ (B ∪ C)
+B \ (A ∪ C)
+C \ (A ∪ B)
+
+((B ∩ C) \ A) ∩ L
+((A ∩ C) \ B) ∩ R
+
+(A ∩ B) \ C
+
+A ∩ B ∩ C ∩ R ∩ L
+((B ∩ C) \ A) \ L
+
+(A ∩ B ∩ C ∩ R) \ L
+
+((A ∩ C) \ B) \ R
+
+(A ∩ B ∩ C ∩ L) \ R
+(A ∩ B ∩ C) \ (R ∪ L)
+
+eq. (2)
+eq. (2)
+eq. (2)
+eq. (2)
+eq. (2)
+eq. (2)
+eq. (2)
+eq. (2)
+eq. (3)
+eq. (3)
+eq. (4)
+eq. (4)
+eq. (5)
+
+ﬁnest
+
+by A-ﬁber
+by B-ﬁber
+by C-ﬁber
+by A-slice
+by B-slice
+by C-slice
+coarsest
+
+ﬁnest
+
+by A-ﬁber
+
+ﬁnest
+
+by B-ﬁber
+
+ﬁnest
+
+ˆV nz, whose cardinality is that of the given partition of V nz.
+
+The simpliﬁed hypergraph has fewer vertices than the original: V nz is replaced by
+In the remainder of Sec. 5.2, we will study two classes of data distributions, row-wise
+and column-wise, meaning the matrix nonzeros are distributed by rows or columns. We
+
+coarsen V A, V B, and V C separately, leading to sets of coarsened vertices ˆV A, ˆV B, and
+ˆV C:
+
+i
+
+B row-wise
+
+A row-wise
+
+ˆV A = {ˆvA
+A column-wise ˆV A = {ˆvA
+ˆV B = {ˆvB
+B column-wise ˆV B = {ˆvB
+ˆV C = {ˆvC
+C column-wise ˆV C = {ˆvC
+
+C row-wise
+
+: i ∈ [I]},
+
+i ∼ {vA
+ˆvA
+k ∼ {vA
+k : k ∈ [K]}, ˆvA
+k : k ∈ [K]}, ˆvB
+k ∼ {vB
+: j ∈ [J]}, ˆvB
+j ∼ {vB
+i ∼ {vC
+ˆvC
+: i ∈ [I]},
+: j ∈ [J]}, ˆvC
+j ∼ {vC
+
+it : (∃t) vA
+rk : (∃r) vA
+ks : (∃s) vB
+tj : (∃t) vB
+is : (∃s) vC
+rj : (∃r) vC
+
+it ∈ V}
+rk ∈ V}
+ks ∈ V}
+tj ∈ V}
+is ∈ V}
+rj ∈ V}.
+
+j
+
+j
+
+i
+
+The unrestricted choices ˆV A = V A, ˆV B = V B, and ˆV C = V C, are called ﬁne-grained.
+Having picked a distribution for each of A, B, and C, we assemble ˆV nz = ˆV A ∪ ˆV V ∪ ˆV C.
+
+We remark here that some choices of these distributions naturally correspond to the
+1D parallelization schemes. That is, a row-wise parallelization corresponds to a match-
+ing distribution of the rows of A and C, a column-wise parallelization corresponds to a
+matching distribution of the columns of B and C, and an outer-product parallelization
+corresponds to a matching distribution of the columns of A and rows of B. We revisit
+this connection next, in Sec. 5.4, when we consider pairing parallelizations and data
+distributions.
+
+5.4. Restricted Algorithms
+In Secs. 5.2 and 5.3, we considered vertex coarsening using partitions of V m or V nz.
+Now we extend this idea to partitions of V whose parts may combine vertices from both
+
+Hypergraph Partitioning for Sparse Matrix-Matrix Multiplication
+
+17
+
+V m and V nz. This models the algorithmic constraint where a processor who performs a
+certain set of multiplications must also store a certain set of matrix entries.
+Revisiting the parallelizations in Sec. 5.2, when coarsening V m by ﬁber, there is a
+natural choice of a nonzero vertex to associate with each ﬁber; likewise, when coars-
+ening V m by slice, there is a natural set of nonzero vertices to associate with each
+slice. More generally, if all the multiplication vertices associated with a particular
+set of nonzero vertices are to be coarsened, it is natural to include those nonzero
+vertices. (However, this assignment does impose additional constraints on load bal-
+ance, which may be unnatural in certain applications.) An expression (xyz), where
+x, y, z ∈ {r,c,f,R,C,F}, indicates the data distributions (row-wise, column-wise, or ﬁne-
+grained) used for A, B, and C. Capital letters indicate that the data distribution is
+a natural choice, in the sense just described, and the corresponding nonzero vertices
+have been absorbed into coarsened vertices. We highlight the following coarsenings:
+
+row-wise (RfR):
+
+V B
+
+V A
+
+V C
+
+column-wise (fCC):
+
+
+
+
+
+
+
+
+
+{vits : (∃t, s) vits ∈ V},
+ˆV = S(cid:26){ˆvi : i ∈ [I]},
+(cid:27) ,
+it : (∃t) vA
+{vA
+it ∈ V},
+ˆvi ∼ S
+{vC
+is : (∃s) vC
+
+is ∈ V}
+
+{vrtj : (∃r, t) vrtj ∈ V},
+ˆV = S(cid:26){ˆvj : j ∈ [J]},
+(cid:27) ,
+tj : (∃t) vB
+{vB
+tj ∈ V},
+ˆvj ∼ S
+{vC
+rj : (∃r) vC
+
+rj ∈ V}
+
+{vrks : (∃r, s) vrks ∈ V},
+outer-product (CRf): ˆV = S(cid:26){ˆvk : k ∈ [K]},
+(cid:27) , ˆvk ∼ S
+rk : (∃r) vA
+{vA
+rk ∈ V},
+{vB
+ks : (∃s) vB
+
+ks ∈ V}
+(cid:27) , ˆvik ∼ S(cid:26){viks : (∃s) viks ∈ V},
+monochrome-A (Fff): ˆV = S(cid:26){ˆvik : (i, k) ∈ SA},
+(cid:27)
+)
+(cid:27) , ˆvkj ∼ S({vrkj : (∃r) vrkj ∈ V},
+monochrome-B (fFf): ˆV = S(cid:26){ˆvkj : (k, j) ∈ SB},
+)
+ˆvij ∼ S({vitj : (∃t) vitj ∈ V},
+monochrome-C (ffF): ˆV = S(cid:26){ˆvij : (i, j) ∈ SC},
+(cid:27) ,
+
+{vA
+ik}
+{vB
+kj}
+
+V B, V C
+
+V A, V C
+
+V A, V B
+
+{vC
+ij}
+
+The coarsened vertices now have both nonzero computational and memory weights,
+indicating the number of multiplication and nonzero vertices, respectively, that they
+combined. Note that the nets corresponding to the coarsened nonzero vertices become
+singletons, and are therefore omitted from the simpliﬁed hypergraph — in the six
+cases above, the nets induced by N A ∪ N C, N B ∪ N C, N A ∪ N B, N A, N B, and N C,
+respectively, are omitted from ˆN .
+Further simpliﬁcations are possible, but perhaps less natural. For instance, in the
+row-wise and monochrome-A cases, it is arguably natural to coarsen V B along rows
+of B: every entry in a row of B is involved in multiplications with the same entries of
+A. After this coarsening, the nets induced by N B are coalesced along each row of B,
+and so are combined into a single net whose cost equals the number of coalesced nets
+(also the sum of their costs). Similarly, in the column-wise and monochrome-B cases,
+it is arguably natural to coarsen V A along columns of A: every entry in a column of
+A multiplies the same entries of B; the nets induced by N A are coalesced/combined
+along column of A as before.
+These (arguably) natural simpliﬁcations don’t always coarsen the nonzeros of all
+three matrices. In particular, in the outer-product, monochrome-A, and monochrome-
+
+18
+
+Ballard, Druinsky, Knight, Schwartz
+
+B cases, there is no natural choice of rows or columns of C, and in the monochrome-
+C case, there is no natural choice of rows or columns of A or B. Of course, nonzero
+vertex coarsening may be dictated by the application. For example, C may need to be
+distributed in a certain way for use after the SpGEMM. Or, in the row-wise case, if A
+and C are to be distributed row-wise, then additionally distributing B row-wise may be
+simplest from a software-design standpoint (and similarly distributing A column-wise
+in the column-wise case).
+
+We have presented several restricted classes of algorithms that enable simpliﬁ-
+cations to the SpGEMM hypergraph. For concreteness, we conclude with four self-
+contained examples, stated similarly to Def. 3.1. (We continue our simplifying assump-
+tion that A and B have no zero rows or columns.)
+
+Example 5.1 (Row-wise (RrR)). Our ﬁrst example pairs a row-wise parallelization
+with row-wise distributions of A, B, and C, where the distributions of A and C are
+matched with the parallelization while the distribution of B is not.
+
+V = {vi : i ∈ [I]} ∪ {vB
+N = {nB
+
+k : k ∈ [K]},
+
+k = {vi : (∃i) (i, k) ∈ SA} ∪ {vB
+
+k } : k ∈ [K]},
+wcomp(vi) = |{(i, k, j) : (∃k) ((i, k) ∈ SA ∧ (∃j) (k, j) ∈ SB)}|,
+wmem(vi) = |{(i, k) : (∃k) (i, k) ∈ SA}| + |{(i, j) : (∃j) (i, j) ∈ SC}|,
+wcomp(vB
+k ) = |{(k, j) : (∃j) (k, j) ∈ SB}|.
+
+k ) = 0, wmem(vB
+
+k ) = c(nB
+
+We have that |V| = I + K and |N| = K, where each net has between 2 and I + 1 pins.
+Note that computing the weights vmem(vi) requires determining SC.
+
+Example 5.2 (Outer-product (CRf)). Our second example pairs an outer-product
+parallelization with a column-wise distribution of A, a row-wise distribution of B, and
+a ﬁne-grained distribution of C, where the distributions of A and B are matched with
+the parallelization while the distribution of C is not.
+
+V = {vk : k ∈ [K]} ∪ {vC
+N = {nC
+
+ij : (i, j) ∈ SC},
+
+ij = {vk : (∃k) (i, k) ∈ SA ∧ (k, j) ∈ SB} ∪ {vC
+
+ij} : (i, j) ∈ SC},
+
+wcomp(vk) = |{i : (∃k) (i, k) ∈ SA}| · |{j : (∃k) (k, j) ∈ SB}|,
+wmem(vk) = |{i : (∃k) (i, k) ∈ SA}| + |{j : (∃k) (k, j) ∈ SB}|,
+
+wcomp(vC
+
+ij ) = 0, wmem(vC
+
+ij ) = c(nC
+
+ij ) = 1.
+
+We have that |V| = K + |SC| and |N| = SC, where each net has between 2 and K + 1
+pins. Note that constructing V and N requires determining SC. A closely related hyper-
+graph model for this example and two specializations (CRr and CRc) was previously
+studied [Akbudak and Aykanat 2014].
+
+Example 5.3 (Monochrome-A (Frf)). Our third example pairs a monochrome-A
+parallelization with a row-wise distribution of B and ﬁne-grained distributions of A
+and C, where the distribution of A is matched with the parallelization while the dis-
+
+Hypergraph Partitioning for Sparse Matrix-Matrix Multiplication
+
+19
+
+tributions of B and C are not.
+
+V = {vik : (i, k) ∈ SA} ∪ {vB
+
+k : k ∈ [K]} ∪ {vC
+
+ij : (i, j) ∈ SC},
+
+N =[(
+
+{nB
+
+k = {vik : (∃i) (i, k) ∈ SA} ∪ {vB
+
+ij = {vik : (∃k) (i, k) ∈ SA ∧ (k, j) ∈ SB} ∪ {vC
+
+{nC
+wcomp(vik) = wmem(vB
+
+k } : k ∈ [K]},
+
+ij} : (i, j) ∈ SC}) ,
+
+k ) = c(nB
+ij) = 1,
+
+k ) = |{j : (∃j) (k, j) ∈ SB}|,
+k ) = wcomp(vC
+
+wcomp(vB
+
+ij ) = 0.
+
+wmem(vik) = wmem(vC
+
+ij ) = c(nC
+
+We have that |V| = |SA| + K + |SC| and |N| = K + |SC|, where each of the K nets nB
+k
+has between 2 and I + 1 pins, and each of the |SC| nets nC
+ij has between 2 and K + 1
+pins. Note that constructing V and N requires determining SC.
+
+Example 5.4 (Monochrome-C (ffF)). Our fourth example pairs a monochrome-C
+parallelization with ﬁne-grained distributions of A, B, and C, where the distribution
+of C is matched with the parallelization while the distributions of A and B are not.
+
+V = {vij : (i, j) ∈ SC} ∪ {vA
+
+ik : (i, k) ∈ SA} ∪ {vB
+
+kj : (k, j) ∈ SB},
+
+N =[({nA
+
+{nB
+
+ik = {vij : (∃j) (k, j) ∈ SB} ∪ {vA
+kj = {vij : (∃i) (i, k) ∈ SA} ∪ {vB
+
+ik} : (i, k) ∈ SA},
+
+kj} : (k, j) ∈ SB}) ,
+
+wcomp(vij ) = |{k : (∃k) (i, k) ∈ SA ∧ (k, j) ∈ SB}|,
+ik) = c(nB
+
+ik) = wmem(vB
+
+wmem(vij ) = wmem(vA
+
+kj ) = 1,
+
+wcomp(vA
+
+ik) = wcomp(vB
+
+kj ) = c(nA
+kj ) = 0.
+
+We have that |V| = |SA| +|SB| +|SC| and |N| = |SA| +|SB|, where each of the |SA| nets
+nA
+ik has between 2 and J + 1 pins, and each of the |SB| nets nB
+kj has between 2 and I + 1
+pins. Note that constructing V requires determining SC.
+
+In each of these four examples, the simpliﬁed hypergraph is potentially much
+smaller than the original (ﬁne-grained) hypergraph in terms of the numbers of ver-
+tices, nets, or pins. Our experiments in Sec. 6 using the PaToH hypergraph partitioning
+software demonstrated orders-of-magnitude improvements in runtime when partition-
+ing simpliﬁed (vs. ﬁne-grained) hypergraphs.
+
+We caution that constructing the simpliﬁed hypergraphs in these four examples re-
+quires determining SC, which can be as expensive as computing C. This cost can be
+avoided, e.g., in the row-wise (RrR) case (Ex. 5.1), if we omit memory weights.
+
+5.5. Sparse Matrix-Vector Multiplication (SpMV)
+In the case of multiplying a sparse matrix by a dense vector (SpMV), our hypergraph
+model simpliﬁes in several ways. If the input matrix B is a dense vector of length K,
+then the output matrix C is a dense vector of length I, since A has a nonzero in every
+row under the assumptions of Sec. 3.1. In this case, there is only one multiplication
+performed for each nonzero of A, so the multiplication vertices of V can be indexed by
+only two parameters, letting us write V m = {vik : (i, k) ∈ SA}. Furthermore, the B and
+C nonzero vertices can be indexed by only one parameter and simplify to V B = {vB
+k :
+k ∈ [K]} and V C = {vC
+In addition to the simpliﬁcations based on the inputs of SpMV, we can also apply
+vertex coarsening, restricting the set of algorithms, to reproduce the “ﬁne-grain” model
+for SpMV of C¸ ataly ¨urek and Aykanat [2001]; this model assumes that I = K, i.e., A is
+a square matrix. There are three steps in the following derivation.
+
+: i ∈ [I]}.
+
+i
+
+20
+
+Ballard, Druinsky, Knight, Schwartz
+
+First, because each nonzero of A is involved in exactly one multiplication, we force
+vik and vA
+ik to be monochrome for each (i, k) ∈ SA. (This corresponds to monochrome-A
+(Fff), discussed in Sec. 5.4.) We use the notation ˆvik to refer to the coarsened vertex,
+which has weights wcomp(ˆvik) = 1 and wmem(ˆvik) = 1. Note that this coarsening implies
+that all nets in N A have exactly one vertex, and thus we omit them.
+Second, we apply further coarsening to attain a symmetric partitioning of the
+input and output vector entries. We do this to satisfy the “consistency condi-
+tion” [C¸ ataly ¨urek and Aykanat 2001], motivated by the problem of performing re-
+i , vC
+peated SpMV operations with the same matrix. For every i ∈ [I] = [K], we force vB
+i ,
+and ˆvii (if it exists) to be monochrome. This corresponds to assigning vector entries to
+the processor that owns the corresponding diagonal entry of the matrix. We maintain
+the notation ˆvii to reference the coarsened vertex, which has weights wcomp(ˆvii) = 1
+and wmem(ˆvii) = 3, if (i, i) ∈ SA, and wcomp(ˆvii) = 0 and wmem(ˆvii) = 2, if (i, i) 6∈ SA.
+Third, because the ﬁne-grain SpMV model does not explicitly enforce memory bal-
+ance, we drop the memory balance constraint on partitions by setting δ = p − 1. Even
+though we removed the memory balance constraints, computational balance in this
+model guarantees a balanced partition of the nonzeros of A. However, the memory al-
+located to the input and output vectors is not accounted for, and so the overall memory
+imbalance can potentially be higher than the computational imbalance.
+
+The
+
+preceding
+
+reproduces
+
+the
+
+derivation
+
+“ﬁne-grain” model
+
+for
+SpMV [C¸ ataly ¨urek and Aykanat 2001], which consists of a vertex for every nonzero
+in the matrix (and a zero-weight “dummy” vertex for every zero diagonal en-
+try) and a net for each row and each column. Similar simpliﬁcations to 1D
+SpGEMM algorithms (see Sec. 5.4) yield row-wise and column-wise SpMV algo-
+rithms [C¸ ataly ¨urek and Aykanat 1999]. In particular, the row-wise (RrR) hypergraph
+(Ex. 5.1) is identical to the “column-net” SpMV hypergraph (modeling a row-wise
+algorithm), except for the presence of the B-nonzero vertices and the memory
+weights. Similarly, the outer-product (CRf) hypergraph (Ex. 5.2) is identical to the
+“row-net” SpMV hypergraph (modeling a column-wise algorithm), except for the
+presence of the C-nonzero vertices and the memory weights. On the other hand,
+the column-wise SpGEMM parallelizations applied to SpMV have no analogue in
+C¸ ataly ¨urek and Aykanat’s models [1999; 2001] since there is no parallelism. Addition-
+ally, the monochrome-A, -B, and -C SpGEMM parallelizations, in the case of SpMV,
+correspond to the aforementioned “ﬁne-grain”, “row-net”, and “column-net” SpMV
+hypergraphs.
+
+5.6. Generalizing SpGEMM Algorithms
+In this section, we explore two directions in which the class of SpGEMM algorithms
+(deﬁned in Sec. 3) can be generalized. The ﬁrst generalization exploits relations among
+the input matrices’ entries to reduce algorithmic costs — recall that Sec. 3.1 assumed
+A- and B-entries are unrelated. A common application is exploiting symmetry of A, B,
+or C. The second generalization considers the case where only a subset of the output
+entries are desired, a task called masked SpGEMM — recall that Sec. 3.1 assumed all
+nonzero C-entries are computed.
+
+We show that both classes of algorithms can be modeled by straightforward simpli-
+ﬁcations to the SpGEMM hypergraph (deﬁned in Sec. 3.2). In particular, we apply ver-
+tex coarsening similarly to as in Sec. 5.1, except here we adjust vertex weights and net
+costs in a simpler manner. The hypergraph-based communication bounds in Secs. 4.1
+and 4.2, as well as the restrictions studied in the previous subsections of Sec. 5, extend
+to both these classes of algorithms with only minor changes required to address the
+vertex coarsening.
+
+Hypergraph Partitioning for Sparse Matrix-Matrix Multiplication
+
+21
+
+5.6.1. Exploiting Input Matrix Relations. We consider modifying SpGEMM algorithms to
+exploit known equivalence relations on the nonzero entries of A and B to reduce algo-
+rithmic costs. For simplicity, we will consider equality relations: e.g., if A = AT , then
+nonzeros in the upper triangle of A equal the corresponding entries in the lower tri-
+angle of A. However, the following approach extends to cases like A = −AT , or more
+generally to the case where each equivalence class is assigned a single value and each
+nonzero in that equivalence class is a function of that value.
+
+Consider any equality relation on the nonzeros of A and B. We ﬁrst consider
+SpGEMM-like algorithms that store exactly one copy of repeated A- and B-entries, but
+still perform all nontrivial multiplications and compute all nonzero C-entries, regard-
+less of whether these values also include repetitions. Such algorithms can be naturally
+modeled by altering the SpGEMM hypergraph (V,N ) = H(A, B) according to a given
+partition of V A ∪ V B, where each part is a set of nonzero entries that must have the
+same value. For example, if an algorithm only inputs the unique entries of A = AT ,
+then the partition groups each pair of distinct vertices vA
+ki while keeping the
+nonzero vertices associated with the diagonal of A, as well as all of V B, in singleton
+parts. Now coarsen these vertex sets, following the approach in Sec. 5.1 except setting
+the memory costs of the coarsened vertices to 1, rather than the number of coarsened
+vertices. Since only nonzero vertices are combined, no nets are coalesced by this coars-
+ening.
+
+ik and vA
+
+We next extend the preceding class of SpGEMM-like algorithms to avoid perform-
+ing redundant nontrivial multiplications and computing redundant C-entries. We say
+that two nontrivial multiplications are redundant if their left operands are equal and
+their right operands are equal. For example, if A = AT and B = BT , then any nontriv-
+ial multiplication almbml must equal amlblm. More generally, if there exist (i, k, j) and
+(r, t, s) such that aik = art and bkj = bts, then aikbkj = artbts — only one of these two
+multiplicationsies needs to be performed. We say that two C-entries are redundant
+if their summands can be matched as pairs of redundant nontrivial multiplications.
+For example, if all entries of A and B are equal to the same nonzero value, then all
+C-entries are equal. More generally, if there exist (i, j) and (r, s) in SC and a bijection
+
+φ : K = {k : (∃k) ((i, k) ∈ SA ∧ (k, j) ∈ SB)} → {t : (∃t) ((r, t) ∈ SA ∧ (t, s) ∈ SB)}
+
+such that aik = arφ(k) and bkj = bφ(k)s for each k ∈ K, then cij = crs, and only one of
+the two needs to be computed. We further alter the SpGEMM hypergraph to exploit
+these savings as follows. Let the notation u ≡ v assert that u, v ∈ V are contained
+in the same part in some ﬁxed partition of V. We extend the partition of V A ∪ V B
+to all of V in two steps, partitioning V m and then V C. First, for each pair vikj , vrts ∈
+V m, we specify that vikj ≡ vrts if vA
+rt and vB
+rs ∈
+rs intersect the same parts of V m. We then
+V C, we specify that vC
+rs if nC
+coarsen V according to this partition: we follow the approach in Sec. 5.1 except setting
+both the memory costs of the coarsened nonzero vertices and the computation costs
+of the coarsened multiplication vertices to 1, rather than to the numbers of coarsened
+nonzero and multiplication vertices. Now, it is possible that some nets are coalesced:
+coalesced nets can be combined without increasing net costs since only one nonzero
+needs to be stored/sent/received.
+
+ts. Second, for each vC
+
+ij ≡ vC
+
+ik ≡ vA
+ij and nC
+
+kj ≡ vB
+
+ij , vC
+
+Lastly, we next extend the preceding class of SpGEMM-like algorithms to exploit
+commutative multiplication, which is not guaranteed in our model (see Sec. 3). For
+example, if B = A, then almbml = amlblm; or, if B = AT , then C = CT ; neither of
+these redundancies necessarily occur without commutative multiplication. We model
+algorithms that avoid this larger class of redundant multiplications (and C-entries) by
+
+22
+
+Ballard, Druinsky, Knight, Schwartz
+
+augmenting the preceding construction in just one place: for each pair vikj , vrts ∈ V m,
+we additionally specify that vikj ≡ vrts if vA
+
+kj ≡ vB
+ts.
+
+ik ≡ vB
+
+rt and vA
+
+5.6.2. Masked SpGEMM. We consider modifying SpGEMM algorithms to only com-
+pute a subset of the entries of C = A · B; this is known as masked SpGEMM (see,
+e.g., [Azad et al. 2015b]), where S ⊆ SC indexes the desired subset of C-entries and
+SC \ S is called the mask. That is, only for each (i, j) ∈ S are cij and its associated
+nontrivial multiplications aikbkj computed. We develop a hypergraph model starting
+with the usual SpGEMM hypergraph, (V,N ) = H(A, B). We remove from N C each net
+nC
+ij where (i, j) 6∈ S, as well as that net’s elements (vertices) from V. In particular, for
+ij and from V m each vertex vikj
+each (i, j) ∈ SC \ S, this removes from V C the vertex vC
+with k ∈ [K].
+Depending on SA, SB, and S, it is possible that some entries of A and B are not
+involved in any nontrivial multiplications after masking. Avoiding this triviality moti-
+vated our simplifying assumption in Sec. 3 that A and B have no zero rows or columns.
+In terms of the hypergraph, this manifests as elements of N A and N B becoming single-
+tons, containing only their associated nonzero vertices vA
+kj . To model algorithms
+that reduce memory costs by not storing the associated nonzero entries, these nets and
+vertices can be removed from N A or N B, and V A or V B, respectively.
+Next, we consider a generalization of masked SpGEMM. When the underlying set
+X has a right multiplicative identity 1, masking can be viewed as computing (A ·
+B) ⊙ M, where ⊙ denotes the Hadamard (or entrywise) matrix product and where
+the {0, 1}-valued matrix M has the same dimensions as C = A · B and SM = S.
+To generalize, consider computing C = (A · B) ⊙ M, where M is a general sparse
+matrix with the same dimensions as C. Let (V,N ) denote the hypergraph for masked
+SpGEMM with S = SM, as in the preceding paragraphs. Suppose the algorithmic
+constraint that any processor who stores some cij also must both store mij and perform
+the multiplication involving mij . To model this, for each of the (unmasked) nonzero
+vertices vC
+ij , we set its memory cost to 2 and its computation cost to 1. It is possible
+to relax this algorithmic constraint by introducing additional multiplication vertices
+v′
+ij for the Hadamard product, additional nonzero vertices vM
+for the M-entries, and
+ij
+additional nets nM
+
+ik or vB
+
+ij = {v′
+
+ij, vM
+
+ij , vC
+ik}.
+
+6. EXPERIMENTAL RESULTS
+We now compare our ﬁne-grained hypergraph model from Sec. 3.2 with the six re-
+stricted parallelizations developed in Sec. 5.2, in the context of three applications:
+algebraic multigrid (AMG, Sec. 6.1), linear programming (LP, Sec. 6.2), and Markov
+clustering (MCL, Sec. 6.3). A list of the SpGEMMs that we study in our experiments is
+shown in Tab. II. Our experiments consider only the distributed-memory parallel case,
+where we expect communication cost to be most closely correlated with execution time.
+Because hypergraph partitioning is NP-hard (in general), hypergraph partitioners use
+heuristics to approximate optimal partitions; results we present are not guaranteed
+to be optimal. However, it remains open whether partitioning SpGEMM hypergraph
+instances are NP-hard.
+hypergraph
+
+(version
+[C¸ ataly ¨urek and Aykanat 1999]. PaToH minimizes the “connectivity metric,”
+3.2)
+deﬁned as the sum, over all nets, of the product of each net’s cost and its number
+of incident parts minus one. The communication costs shown below represent the
+maximum, over all parts, of the sum of each part’s non-internal incident nets’ costs
+(matching Lem. 4.2). This cost is most closely aligned with the parallel running time
+
+partitioner
+
+PaToH
+
+The
+
+use
+
+we
+
+is
+
+Hypergraph Partitioning for Sparse Matrix-Matrix Multiplication
+
+23
+
+Table II: The SpGEMMs that we studied in our experiments and their parameters. The
+model AMG problem is represented by the rows 27-AP and 27-PTAP, corresponding to
+the A·P and P T·(AP ) SpGEMMs, respectively, and the SA-ρAMGe problem is similarly
+represented by the rows SA-AP and SA-PTAP. The AMG experiments were carried out
+in a weak scaling regime and are represented in this table by the largest instances.
+The LP experiments have one input matrix and compute C = A · AT , and the MCL
+experiments have one input matrix and compute C = A · A. In addition to the the
+dimensions of the SpGEMM, we provide the average number of nonzeros per row of
+each matrix and the ratio of nontrivial multiplications to output nonzeros.
+
+Name
+
+I
+
+K
+
+J
+
+|SA|/I
+
+|SB|/K |SC|/I
+
+|V m|/|SC|
+
+G
+M
+A
+
+P
+L
+
+.
+c
+e
+S
+(
+
+)
+2
+6
+
+.
+
+.
+c
+e
+S
+(
+
+L
+C
+M
+
+)
+3
+6
+
+.
+
+.
+c
+e
+S
+(
+
+) 27-AP
+1
+6
+
+.
+
+27-PTAP
+SA-AP
+SA-PTAP
+
+fome21
+pds80
+pds100
+cont11l
+sgpf5y6
+
+biogrid11
+dip
+wiphi
+dblp
+enron
+facebook
+roadnetca
+
+970,299
+35,937
+1,088,640
+31,496
+
+67,748
+129,181
+156,243
+1,468,599
+246,077
+
+5,853
+5,051
+5,955
+425,957
+36,692
+4,039
+1,971,281
+
+970,299
+970,299
+1,088,640
+1,088,640
+
+216,350
+434,580
+514,577
+1,961,394
+312,540
+
+5,853
+5,051
+5,955
+425,957
+36,692
+4,039
+1,971,281
+
+35,937
+35,937
+31,496
+31,496
+
+67,748
+129,181
+156,243
+1,468,599
+246,077
+
+5,853
+5,051
+5,955
+425,957
+36,692
+4,039
+1,971,281
+
+26.5
+4.5
+26.4
+696.3
+
+6.9
+7.2
+7.0
+3.7
+3.4
+
+21.5
+8.7
+8.4
+4.9
+10.0
+43.7
+2.8
+
+4.5
+12.1
+20.1
+38.5
+
+2.2
+2.1
+2.1
+2.7
+2.7
+
+21.5
+8.7
+8.4
+4.9
+10.0
+43.7
+2.8
+
+12.1
+25.4
+38.5
+216.4
+
+9.5
+9.7
+9.4
+12.3
+11.3
+
+2,105.7
+200.9
+85.6
+64.8
+831.0
+717.1
+6.5
+
+9.9
+49.0
+13.9
+139.3
+
+1.6
+1.6
+1.6
+1.5
+1.2
+
+1.6
+1.6
+1.5
+1.7
+1.7
+6.5
+1.4
+
+devoted to communicating words of data, called the “critical-path bandwidth cost” by
+Ballard et al. [2014].
+
+We do not constrain memory load balance (i.e., δ = p − 1) — and so we omit V nz
+from the hypergraphs — but we do constrain computation load balance, ǫ = 0.01. In a
+few cases, our partitioner failed to produce such a balanced partition. We discuss these
+cases below.
+
+We performed our experiments on two machines at the National Energy Research
+Supercomputing Center in Berkeley, California. The experiments with the AMG model
+problem were carried out on a node (1 TB memory) of the machine Carver; all other
+experiments were carried out on a node (128 GB memory) of the machine Cori.
+
+Building the ﬁne-grained hypergraph and partitioning it is as expensive as perform-
+ing the associated SpGEMM, and furthermore our partitioner is sequential. Although
+we are not focused on partitioning times in this study, fast partitioning is important
+for a user who seeks to ﬁnd the best SpGEMM strategy for a particular problem. In
+our experiments, the partitioning times varied from a few seconds up to 5 hours, while
+the time to build the hypergraph was negligible in comparison. We observed that the
+partitioning time varied with the dimensions of the matrices (smaller was faster), the
+hypergraph model (1D was fastest while ﬁne-grained was slowest), and on whether
+the matrices have a regular nonzero structure (the 27-point stencil matrices in Sec. 6.1
+were quicker to partition, while the social-network matrices in Sec. 6.3 were slower).
+
+24
+
+Ballard, Druinsky, Knight, Schwartz
+
+t
+s
+o
+C
+n
+o
+i
+t
+a
+c
+i
+n
+u
+m
+m
+o
+C
+
+t
+s
+o
+C
+n
+o
+i
+t
+a
+c
+i
+n
+u
+m
+m
+o
+C
+
+215
+
+214
+
+213
+
+212
+
+211
+
+216
+
+215
+
+214
+
+213
+
+214
+
+213
+
+212
+
+211
+
+210
+
+29
+
+29
+
+211
+
+23
+
+23
+
+27
+
+25
+Processors
+
+(a) Model A ∗ P
+
+27
+
+25
+Processors
+
+29
+
+211
+
+(b) Model P T ∗ (AP )
+
+216
+
+214
+
+212
+
+210
+
+Row-wise
+Column-wise
+Outer-product
+Monochrome-A
+Monochrome-B
+Monochrome-C
+Fine-grained
+Geometric-row
+Geometric-outer
+
+Row-wise
+Column-wise
+Outer-product
+Monochrome-A
+Monochrome-B
+Monochrome-C
+Fine-grained
+
+23
+
+25
+
+27
+
+29
+
+211
+
+23
+
+25
+
+27
+
+29
+
+211
+
+Processors
+
+(c) SA-ρAMGe A ∗ P
+
+Processors
+
+(d) SA-ρAMGe P T ∗ (AP )
+
+Fig. 7: Communication costs of various parallelizations for performing the top-level
+triple product in the setup phase of algebraic multigrid (AMG — Sec. 6.1).
+
+6.1. Application: Algebraic Multigrid
+First, we consider the SpGEMMs that arise in the context of algebraic multigrid
+(AMG). AMG methods are linear solvers typically applied to systems of linear equa-
+tions arising from the discretization of partial differential equations (PDEs). AMG
+methods operate in two stages: setup and solve. The setup stage consists of forming a
+“grid hierarchy,” which is a sequence of matrices that represent the PDE at progres-
+sively coarser levels of discretization.
+
+To build the grid hierarchy, we generate a sequence of “prolongators” P1, . . . , Pℓ−1,
+where ℓ is the number of levels in the hierarchy, an algorithm parameter. Prolongators
+are matrices with more rows than columns and the number of rows in each prolongator
+is equal to the number of columns in its predecessor. The grid hierarchy A1, . . . , Aℓ is
+then formed by successively computing
+
+A2 = P T
+
+1 A1P1,
+
+A3 = P T
+
+2 A2P2,
+
+. . . ,
+
+Aℓ = P T
+
+ℓ−1Aℓ−1Pℓ−1,
+
+(6)
+
+where A1 is the ﬁne-grained discretization of the PDE, an algorithm input.
+
+Typically, AMG methods are designed such that all of the matrices in eq. (6) are
+sparse, so each triple product is computed using two SpGEMMs: one that forms Ak·Pk,
+followed by another that forms P T
+k · (AkPk) for k ∈ [ℓ− 1]. In practice, the SpGEMMs in
+eq. (6) can take a large part of the time spent in the setup phase, and the setup phase
+
+Hypergraph Partitioning for Sparse Matrix-Matrix Multiplication
+
+25
+
+can take a large part of the total time. Considerable effort has been made recently to
+optimize these SpGEMMs (see, e.g., [Ballard et al. 2015b; Park et al. 2015]).
+
+We consider the ﬁrst level of the grid hierarchy for both a model problem and a
+realistic problem. In the model problem, the rows of the input matrix A1 correspond
+to points of an N × N × N regular grid, and its nonzero structure corresponds to a
+27-point stencil so that each point is adjacent to its (at most) 26 nearest neighbors.
+The prolongator matrix P1 is N 3 × (N/3)3 (we assume N is divisible by 3) and is de-
+ﬁned so that 3 × 3 × 3 sub-grids correspond to single points in the coarser grid, and its
+values are computed using the technique of “smoothed aggregation” (using damped Ja-
+cobi). This model problem is one that has been previously studied [Ballard et al. 2015a;
+Ballard et al. 2015b]. Because the grid is regular, we can compare our partitioning re-
+sults with regular, geometric partitions. For example, the natural partition of the rows
+of A corresponds to assigning each processor a contiguous (N/p1/3)×(N/p1/3)×(N/p1/3)
+subcube of points (assuming N/p1/3 is an integer).
+The second set of matrices comes from an oil-reservoir simulation called
+SPE10 [Christie and Blunt 2001]. In this problem, the Darcy equation, in dual form,
+is used to model ﬂuid ﬂow in porous media. The spatial domain is a rectangular
+prism, tessellated using a hexahedral mesh and discretized using linear ﬁnite el-
+ements [Barker et al. 2015; Christensen et al. 2015]. Brezina and Vassilevski [2011]
+solved this problem using an AMG variant called SA-ρAMGe, wherein P1 has approx-
+imately 35× more rows than columns (slightly more aggressive coarsening than the
+model problem) and is constructed using a polynomial smoother, giving more nonze-
+ros. For details of the implementation, see [Kalchev 2012; Kalchev et al. 2013].
+
+We consider both SpGEMMs for both problems, comparing the ﬁne-grained model
+with all six restricted parallelizations from Sec. 5.2. In the case of the model problem,
+we also compare against 1D algorithms based on geometric partitions of the regular
+grid; these natural and efﬁcient (but not necessarily optimal) instances can validate
+the quality of results obtained from the hypergraph partitioner. For both problems, we
+present a weak-scaling study, maintaining I/p, where I = K is the number of rows and
+columns of A1. The model problem ranges from dimension 183 = 5832 on 8 processors
+up to dimension 993 = 970229 on 1331 processors, and the SA-ρAMGe problem ranges
+from dimension 4900 on 8 processors up to dimension 1088640 on 2048 processors.
+
+In four cases involving the SA-ρAMGe matrices, our partitioner failed with an out-
+of-memory error. The P1 matrix in SA-ρAMGe has more nonzero entries than in the
+model problem, and so the corresponding hypergraphs and their partitioning require
+more memory. The SpGEMMs that failed were the largest for the ﬁne-grained model
+of A · P , the largest for the monochrome-C model of P T · (AP ), and the two largest for
+the ﬁne-grained model of P T · (AP ).
+The results for the model problem are given in the top row of Fig. 7. We see in Fig. 7a
+that for the ﬁrst SpGEMM, all parallelizations except for column-wise require about
+the same amount of communication (to within a factor of 2). Note that the row-wise
+algorithm with geometric partitioning (labeled “Geometric-row”) achieves the least
+communication on 1331 processors; this implies that PaToH is not ﬁnding an opti-
+mal partition at that scale (at least in the row-wise, monochrome-A, monochrome-C,
+or ﬁne-grained cases), but we believe that the optimal partition is not much better
+than the geometric one. We can also compare the relative costs discovered by hyper-
+graph partitioning with Ballard et al.’s theoretical analysis [2015b, Table 2] based on
+geometric partitioning. Theoretically, for geometric partitions, the row-wise algorithm
+requires factors of 2.0 and 4.9 less communication than outer-product and column-wise
+algorithms, respectively; the ratios for partitions discovered by PaToH are 1.3 and 6.7
+on 1331 processors. We conclude from this data that a row-wise parallelization is the
+
+26
+
+Ballard, Druinsky, Knight, Schwartz
+
+simplest parallelization that is nearly optimal for computing A · P ; this agrees with
+previous results [Ballard et al. 2015a; Ballard et al. 2015b].
+For the second SpGEMM, we see that the outer-product, monochrome-A, and
+monochrome-B parallelizations all perform as well as the ﬁne-grained model (recall
+from Fig. 6 that monochrome-A and -B parallelizations reﬁne outer product paral-
+lelizations). The other parallelizations all perform similarly to each other, and require
+about 10× more communication than the ﬁne-grained parallelization. We note that the
+outer-product algorithm based on geometric partitioning (labeled “Geometric-outer”)
+is (slightly) outperformed by the partitions discovered by PaToH. For geometric parti-
+tions, the outer-product algorithm communicates a factor of 5× less than the row-wise
+algorithm (matching previous theoretical analyses [Ballard et al. 2015b, Tab. 2]); us-
+ing hypergraph partitioning that difference increases to 7× on 1331 processors. We
+conclude that an outer-product parallelization is the simplest parallelization that is
+nearly optimal for computing P T · (AP ). In our earlier paper [Ballard et al. 2015a],
+for the second SpGEMM, we compared Geometric-row with the ﬁne-grained model
+and concluded that Geometric-row was suboptimal. The present experiments add the
+course-grained models and Geometric-outer and draw stronger conclusions.
+
+The results for the SA-ρAMGe problem are shown in the bottom row of Fig. 7. For
+both SpGEMMs, the results are qualitatively very similar to those of the model prob-
+lem. Because the mesh’s geometry is not available within the AMG code, we do not
+have parallelizations based on geometric partitions with which to compare. The con-
+clusions are the same: the row-wise algorithm is nearly optimal for the case of A · P ,
+and the outer-product parallelization is nearly optimal for the case of P T · (AP ).
+6.2. Application: Linear Programming Normal Equations
+We next consider SpGEMMs within a linear programming application, studied pre-
+viously by Akbudak and Aykanat [2014], wherein a linear program is solved by an
+interior-point method. During each iteration of this method, normal equations of the
+form A · D2 · AT are constructed via SpGEMM, and the resulting system is solved ei-
+ther directly (via Cholesky factorization) or iteratively (via a Krylov subspace method).
+Boman, Parekh, and Phillips [2005] reported that these SpGEMMs can dominate
+the overall runtime. The matrix A encodes the linear constraints and remains ﬁxed
+throughout the iterations, while the positive diagonal matrix D varies with each itera-
+tion. Therefore, the SpGEMMs always have the form A · B, where SB = SAT and both
+SA and SB remain unchanged throughout the iterations. This means there is potential
+to amortize the cost of forming and partitioning the SpGEMM hypergraph.
+
+Akbudak and Aykanat considered SpGEMM algorithms similar to what we call
+
+outer-product (CRf), (CRr), and (CRc) — see Ex. 5.2).
+
+We consider the same ﬁve linear programming constraint matrices as Akbudak and
+Aykanat — fome21, pds-80, pds-100, sgpf5y6, and cont11l — all from the Univer-
+sity of Florida collection [Davis and Hu 2011]. In each case, the SpGEMM dimensions
+I = J < K, i.e., the output matrix is smaller in dimension than the input matrices.
+In Fig. 8, we compare the ﬁne-grained hypergraph model with the six restricted par-
+allelizations from Sec. 5.2 for these ﬁve problems; note that since SB = SAT , column-
+wise is equivalent to row-wise and monochrome-B is equivalent to monochrome-A, so
+we omit these curves. We perform a strong-scaling study, increasing the number of
+processors for ﬁxed matrices.
+
+In the ﬁrst four problems (Figs. 8a to 8d), the ﬁne-grained, outer-product, and
+monochrome-A parallelizations were the most communication efﬁcient, while the row-
+wise and monochrome-C parallelizations were the least. The largest difference be-
+tween row-wise and outer-product parallelizations was observed in the fourth prob-
+lem (Fig. 8d), with a communication cost ratio of 23× (on 128 processors). This trend is
+
+Hypergraph Partitioning for Sparse Matrix-Matrix Multiplication
+
+27
+
+less clear in the ﬁfth problem (Fig. 8e), where all parallelizations’ costs varied within
+a factor of two. For all problems, we observed the differences between parallelization
+costs to be much less sensitive to processor count than in the following experiment (see
+Fig. 9).
+
+Since monochrome-A includes outer-product and monochrome-C includes row-wise
+(in the sense of Fig. 6), these results suggest that 2D parallelizations don’t provide
+much advantage over 1D parallelizations; on the other hand, it is important to use
+outer-product instead of row-wise. The observation in all cases that the outer-product
+curve closely tracks the ﬁne-grained curve supports Akbudak and Aykanat’s decision
+to consider only outer-product parallelizations, at least for these problems.
+
+6.3. Application: Markov Clustering
+Van Dongen’s Markov Clustering Algorithm (MCL) [2000] is an iterative scheme for
+determining clusters in graphs. The basic idea is to square the adjacency matrix of
+a graph, “inﬂate” and prune the result based on its values to maintain sparsity, and
+then iterate on the result. The computational bottleneck for the algorithm is using
+SpGEMM to square the sparse matrix, so in this section we explore squaring several
+different matrices coming from social-network and protein-interaction graphs, where
+Markov clustering is commonly used.
+
+We consider only the ﬁrst
+
+iteration of MCL, squaring the original ad-
+the iteration. There have
+jacency matrix, as a representative example of
+regularized
+been several proposed variants of MCL,
+MCL [Satuluri and Parthasarathy 2009; Niu et al. 2014], that perform slightly differ-
+ent SpGEMMs. We believe that the present experiments can help inform algorithmic
+choices for parallelizing any clustering algorithm applied to scale-free graphs that uses
+SpGEMM as its computational workhorse.
+
+including (multi-level)
+
+Of the 11 non-synthetic data sets considered by Niu et al. [2014], we present results
+for the 7 matrices that are publicly available and whose ﬁne-grained hypergraphs ﬁt
+in memory on our machine. The matrices dblp, enron, and facebook are social network
+matrices, roadnetca is a graph representing roads and intersections, and dip, wiphi,
+and biogrid11 are protein-protein interaction matrices. Fig. 9 presents the results.
+
+We consider the ﬁne-grained hypergraph model as well as four of the restricted par-
+allelizations: row-wise, outer-product, monochrome-A, and monochrome-B. Because
+we’re squaring symmetric matrices in this section, column-wise and monochrome-B
+parallelizations are equivalent. Note that we do not exploit symmetry in these experi-
+ments. As in Sec. 6.2, we perform a strong-scaling study.
+
+The overall conclusion from Fig. 9 is that 2D algorithms seem to require signiﬁ-
+cantly less communication than 1D algorithms, particularly at high processor counts.
+The largest difference was for the facebook matrix, where the ratio of communica-
+tion costs between monochrome-C and outer-product was 83× (on 4096 processors).
+Furthermore, the downward trend of 2D and 3D plot lines show that per-processor
+communication costs decreased as the number of processors increased, indicating scal-
+ability. The 1D plot lines are mostly horizontal, implying that 1D algorithms are not
+scalable for these problems. The partitions of the 1D models we obtained from the
+partitioner violated our load-balance constraint (ǫ = 0.01) and were increasingly im-
+balanced as we increased the number of parts. We attribute this to the presence of
+“heavy” vertices whose weights exceeded the maximum per-part weight prescribed by
+our constraint. The exception to these trends is the roadnetca matrix, which is quali-
+tatively different from the social network and protein-protein interaction matrices (we
+include it for completeness).
+
+We mention that Faisal, Parthasarathy, and Sadayappan [2014] parallelized regular-
+ized MCL within a graph framework. Their MPI-based algorithm used a 1D (row-wise)
+
+28
+
+Ballard, Druinsky, Knight, Schwartz
+
+213
+
+211
+
+29
+
+27
+
+212
+
+210
+
+28
+
+t
+s
+o
+C
+n
+o
+i
+t
+a
+c
+i
+n
+u
+m
+m
+o
+C
+
+t
+s
+o
+C
+n
+o
+i
+t
+a
+c
+i
+n
+u
+m
+m
+o
+C
+
+212
+
+210
+
+28
+
+24
+
+25
+
+27
+
+26
+28
+Processors
+
+(a) fome21
+
+29
+
+210
+
+24
+
+25
+
+29
+
+210
+
+27
+
+26
+28
+Processors
+
+(b) pds-80
+
+213
+
+211
+
+29
+
+27
+
+24
+
+25
+
+27
+
+26
+28
+Processors
+
+(c) pds-100
+
+29
+
+210
+
+24
+
+25
+
+27
+
+26
+28
+Processors
+
+29
+
+210
+
+(d) sgpf5y6
+
+t
+s
+o
+C
+n
+o
+i
+t
+a
+c
+i
+n
+u
+m
+m
+o
+C
+
+213
+
+212
+
+211
+
+210
+
+Row-wise
+Outer-product
+Monochrome-A
+Monochrome-C
+Fine-grained
+
+24
+
+25
+
+27
+
+26
+28
+Processors
+
+29
+
+210
+
+(e) cont11l
+
+Fig. 8: Communication costs of various hypergraph models for constructing the coefﬁ-
+cient matrix for the normal equations in the context of the interior point methods for
+Linear Programming (LP — Sec. 6.2).
+
+parallelization, but the data from these experiments suggests that a 2D parallelization
+would likely perform better for these types of matrices. This conclusion agrees with Bo-
+man, Devine, and Rajamanickam’s premise [2013] in the context of SpMV: when SA is
+a scale-free graph, 1D partitions of the SpMV hypergraph are often sub-optimal.
+
+7. CONCLUSION
+We have proposed a framework for studying SpGEMM algorithms, called the ﬁne-
+grained hypergraph model, which captures communication and computation costs, as
+well as memory usage (see Sec. 3). We have deﬁned hypergraph partitioning problems
+
+Hypergraph Partitioning for Sparse Matrix-Matrix Multiplication
+
+29
+
+t
+s
+o
+C
+n
+o
+i
+t
+a
+c
+i
+n
+u
+m
+m
+o
+C
+
+t
+s
+o
+C
+n
+o
+i
+t
+a
+c
+i
+n
+u
+m
+m
+o
+C
+
+t
+s
+o
+C
+n
+o
+i
+t
+a
+c
+i
+n
+u
+m
+m
+o
+C
+
+218
+
+216
+
+214
+
+212
+
+218
+
+216
+
+214
+
+212
+
+215
+
+214
+
+213
+
+212
+
+211
+
+219
+
+217
+
+215
+
+213
+
+24 25 26 27 28 29 210 211 212
+
+24 25 26 27 28 29 210 211 212
+
+Processors
+
+(a) dblp
+
+Processors
+
+(b) enron
+
+210
+
+29
+
+28
+
+24 25 26 27 28 29 210 211 212
+
+24 25 26 27 28 29 210 211 212
+
+Processors
+
+(c) facebook
+
+Processors
+
+(d) roadnetca
+
+214
+
+213
+
+212
+
+211
+
+210
+
+29
+
+24
+
+25
+
+27
+
+26
+28
+Processors
+
+(e) dip
+
+29
+
+210
+
+24
+
+25
+
+29
+
+210
+
+27
+
+26
+28
+Processors
+
+(f) wiphi
+
+t
+s
+o
+C
+n
+o
+i
+t
+a
+c
+i
+n
+u
+m
+m
+o
+C
+
+220
+
+218
+
+216
+
+214
+
+Row-wise
+Outer-product
+Monochrome-A
+Monochrome-C
+Fine-grained
+
+24
+
+25
+
+27
+
+26
+28
+Processors
+
+29
+
+210
+
+(g) biogrid11
+
+Fig. 9: Communication costs of various hypergraph models for squaring symmetric
+matrices in the context of the Markov Clustering Algorithm (MCL — Sec. 6.3).
+
+30
+
+Ballard, Druinsky, Knight, Schwartz
+
+whose solutions yield lower bounds on communication costs on both parallel and se-
+quential machines, and algorithms that attain these lower bounds within constant
+factors (see Sec. 4). We have also shown how to simplify the ﬁne-grained hypergraph
+model, applying vertex coarsening to focus on special classes of SpGEMM algorithms
+such as 1D and 2D classes (see Sec. 5). We applied these theoretical tools to real-
+world SpGEMM problems, experimentally conﬁrming that hypergraph partitioning
+helps identify algorithms with reduced communication costs (see Sec. 6).
+
+A key feature of our approach to SpGEMM analysis is that it is sparsity dependent.
+The fact that our communication lower bounds, parameterized by the nonzero struc-
+tures of the input matrices, are tight suggests that a simpler parameterization — in
+terms of numbers of nonzeros, number of arithmetic operations, etc. — is unlikely.
+However, for speciﬁc classes of instances, simpler tight lower bounds are possible: e.g.,
+in the case where the input matrices are both dense, tight lower bounds are parame-
+terized by the matrix dimensions (see, e.g., [Ballard et al. 2014]).
+
+The class of SpGEMM algorithms studied in this paper is quite general, and efﬁ-
+ciently implementing a generic member of this class remains a practical challenge.
+On the other hand, implementations of 1D and 2D algorithms are much simpler, and
+our experiments demonstrated that in some cases these simpler approaches sufﬁce
+to minimize communication. For example, in the AMG and LP applications (Secs. 6.1
+and 6.2), we observed that some (but not all) of the 1D algorithms could minimize
+communication. On the other hand, in the MCL application (Sec. 6.3), 2D algorithms
+minimized communication and 1D algorithms did not, assuming that the partition of
+the ﬁne-grained model is optimal, or nearly so.
+
+We have proposed hypergraph analysis as a practical tool for SpGEMM algorithm
+design. We do not advocate solving hypergraph partitioning problems on the ﬂy: this
+cost could dominate that of the actual SpGEMM computation. Our approach would
+be most practical when the preprocessing overhead can be amortized over many
+SpGEMMs, like when a sequence of matrices with the same (or similar) nonzero struc-
+ture are to be multiplied (see, e.g., [Boman et al. 2005; Kalchev et al. 2013]).
+
+One direction for future work is reﬁning our parallel communication cost model to
+capture latency cost (number of messages) in addition to bandwidth cost (number of
+words). It is straightforward to derive a lower bound on latency cost by modifying
+Lem. 4.2 to count the number of adjacent parts instead of the number of adjacent nets.
+On the other hand, the algorithm in Lem. 4.3 may not attain the latency lower bound,
+due to sending messages of containing single words.
+
+Another interesting extension to our model is considering parallel machines with
+shared memory. A promising approach is to generalize our sequential model to have
+multiple processors, each with their own fast memory. Of course, Hong and Kung’s
+communication lower bound result, invoked in Thm. 4.10, must be replaced by a
+shared-memory extension, of which several have appeared in the literature.
+
+Another direction for future work is considering additional coarsenings of the ﬁne-
+grained model. In the case of SpMV, “regular” partitions have been proposed to
+limit latency costs [Vastenhouw and Bisseling 2005; Boman et al. 2013]. In the case
+of SpGEMM, SpSUMMA [Buluc¸ and Gilbert 2012] corresponds to a regular partition,
+a special case of monochrome-C. Coarsening the ﬁne-grained model and restricting
+to regular partitions yields simpler algorithms that may also exhibit reduced latency
+cost.
+
+ACKNOWLEDGMENTS
+
+We thank Erik Boman and Siva Rajamanickam for helpful discussions, particularly their suggestion to
+augment the hypergraph model with nonzero vertices.
+
+Hypergraph Partitioning for Sparse Matrix-Matrix Multiplication
+
+31
+
+This research was supported in part by an appointment to the Sandia National Laboratories Truman
+Fellowship in National Security Science and Engineering, sponsored by Sandia Corporation (a wholly owned
+subsidiary of Lockheed Martin Corporation) as Operator of Sandia National Laboratories under its U.S.
+Department of Energy Contract No. DE-AC04-94AL85000.
+
+Research is supported by grants 1878/14 and 1901/14 from the Israel Science Foundation (founded by the
+Israel Academy of Sciences and Humanities) and grant 3-10891 from the Ministry of Science and Technology,
+Israel. Research is also supported by the Einstein Foundation and the Minerva Foundation. This paper
+is supported by the Intel Collaborative Research Institute for Computational Intelligence (ICRI-CI). This
+research was supported by a grant from the United States-Israel Binational Science Foundation (BSF),
+Jerusalem, Israel.
+
+This material is based upon work supported by the U.S. Department of Energy, Ofﬁce of Science, Ofﬁce of
+
+Advanced Scientiﬁc Computing Research.
+
+This research used resources of the National Energy Research Scientiﬁc Computing Center, which is a
+
+DOE Ofﬁce of Science User Facility.
+
+REFERENCES
+
+K. Akbudak and C. Aykanat. 2014. Simultaneous input and output matrix partitioning for outer-product–
+parallel sparse matrix-matrix multiplication. SIAM Journal on Scientiﬁc Computing 36, 5 (2014), C568–
+C590. DOI:http://dx.doi.org/10.1137/13092589X
+
+K. Akbudak, E. Kayaaslan, and C. Aykanat. 2013. Hypergraph partitioning based models and methods for
+exploiting cache locality in sparse matrix-vector multiplication. SIAM Journal on Scientiﬁc Computing
+35, 3 (2013), C237–C262. DOI:http://dx.doi.org/10.1137/100813956
+
+A. Azad, G. Ballard, A. Buluc, J. Demmel, L. Grigori, O. Schwartz, S. Toledo, and S. Williams. 2015a. Exploit-
+ing multiple levels of parallelism in sparse matrix-matrix multiplication. Technical Report 1510.00844.
+arXiv. http://arxiv.org/abs/1510.00844
+
+A. Azad, A. Buluc¸, and J. Gilbert. 2015b. Parallel triangle counting and enumeration using matrix algebra.
+In Proceedings of the IPDPSW, Workshop on Graph Algorithm Building Blocks (GABB ’15). 804 – 811.
+DOI:http://dx.doi.org/10.1109/IPDPSW.2015.75
+
+G. Ballard, A. Buluc¸, J. Demmel, L. Grigori, B. Lipshitz, O. Schwartz, and S. Toledo. 2013. Com-
+munication optimal parallel multiplication of sparse random matrices. In Proceedings of the 25th
+ACM Symposium on Parallelism in Algorithms and Architectures (SPAA ’13). ACM, 222–231.
+DOI:http://dx.doi.org/10.1145/2486159.2486196
+
+G. Ballard, E. Carson, J. Demmel, M. Hoemmen, N. Knight, and O. Schwartz. 2014. Communication lower
+bounds and optimal algorithms for numerical linear algebra. Acta Numerica 23 (May 2014), 1–155.
+DOI:http://dx.doi.org/10.1017/S0962492914000038
+
+G. Ballard, J. Demmel, O. Holtz, B. Lipshitz, and O. Schwartz. 2012. Brief announcement: strong scaling of
+matrix multiplication algorithms and memory-independent communication lower bounds. In Proceed-
+ings of the 24th ACM Symposium on Parallelism in Algorithms and Architectures (SPAA ’12). ACM,
+New York, NY, USA, 77–79. DOI:http://dx.doi.org/10.1145/2312005.2312021
+
+G. Ballard, J. Demmel, O. Holtz, and O. Schwartz. 2011. Minimizing communication in numerical lin-
+ear algebra. SIAM Journal on Matrix Analysis and Applications 32, 3 (September 2011), 866–901.
+DOI:http://dx.doi.org/10.1137/090769156
+
+G. Ballard, A. Druinsky, N. Knight, and O. Schwartz. 2015a. Brief announcement: hypergraph parti-
+tioning for parallel sparse matrix-matrix multiplication. In Proceedings of the 27th ACM Sympo-
+sium on Parallelism in Algorithms and Architectures (SPAA ’15). ACM, New York, NY, USA, 86–88.
+DOI:http://dx.doi.org/10.1145/2755573.2755613
+
+G. Ballard, C. Siefert, and J. Hu. 2015b. Reducing communication costs for sparse matrix multiplica-
+tion within algebraic multigrid. Technical Report SAND2015-3275. Sandia National Laboratories.
+http://prod.sandia.gov/techlib/access-control.cgi/2015/153275.pdf
+
+A. Barker, D. Kalchev, I. Mishev, P. Vassilevski, and Y. Yang. 2015. Accurate coarse-scale AMG-based ﬁnite
+volume reservoir simulations in highly heterogeneous media. In SPE Reservoir Simulation Symposium.
+SPE–173277–MS. DOI:http://dx.doi.org/10.2118/173277-MS
+
+E. Boman, K. Devine, L. Fisk, R. Heaphy, B. Hendrickson, C Vaughan,
+
+¨U. C¸ ataly ¨urek, D. Bozdag,
+W. Mitchell, and J. Teresco. 2007. Zoltan 3.0: Parallel Partitioning, Load Balancing, and Data-
+Management Services; User’s Guide. Technical Report SAND2007-4748W. Sandia National Laborato-
+ries. http://www.cs.sandia.gov/Zoltan/ug html/ug.html
+
+E. Boman, K. Devine, and S. Rajamanickam. 2013. Scalable matrix computations on large scale-free graphs
+using 2D graph partitioning. In Proceedings of the International Conference on High Performance Com-
+
+32
+
+Ballard, Druinsky, Knight, Schwartz
+
+puting, Networking, Storage and Analysis (SC ’13). ACM, New York, NY, USA, Article 50, 12 pages.
+DOI:http://dx.doi.org/10.1145/2503210.2503293
+
+E. Boman, O. Parekh, and C. Phillips. 2005. LDRD ﬁnal report on massively-parallel
+
+linear pro-
+gramming: the parPCx system. Technical Report SAND2004-6440. Sandia National Laboratories.
+http://prod.sandia.gov/techlib/access-control.cgi/2004/046440.pdf
+
+U. Borˇstnik, J. VandeVondele, V. Weber, and J. Hutter. 2014. Sparse matrix multiplication: the
+distributed block-compressed sparse row library. Parallel Computing 40, 5–6 (2014), 47–58.
+DOI:http://dx.doi.org/10.1016/j.parco.2014.03.012
+
+M. Brezina and P. Vassilevski. 2011. Smoothed aggregation spectral element agglomeration AMG: SA-
+ρAMGe. In Proceedings of the 8th International Conference on Large-Scale Scientiﬁc Computing (LSSC)
+(Lecture Notes in Computer Science), I. Lirkov, S. Margenov, and J. Wa´sniewski (Eds.), Vol. 7116.
+Springer, 3–15. DOI:http://dx.doi.org/10.1007/978-3-642-29843-1 1
+
+A. Buluc and J. Gilbert. 2008. On the representation and multiplication of hypersparse matrices.
+In IEEE International Symposium on Parallel and Distributed Processing (IPDPS ’08). 1–11.
+DOI:http://dx.doi.org/10.1109/IPDPS.2008.4536313
+
+A. Buluc¸ and J. Gilbert. 2012. Parallel sparse matrix-matrix multiplication and indexing:
+
+imple-
+mentation and experiments. SIAM Journal on Scientiﬁc Computing 34, 4 (2012), C170–C191.
+DOI:http://dx.doi.org/10.1137/110848244
+
+¨U. C¸ ataly ¨urek and C. Aykanat. 1999. PaToH: Partitioning Tool for Hypergraphs. Technical Report. (Revised
+
+March 2011). http://bmi.osu.edu/umit/PaToH/manual.pdf
+
+¨U. C¸ ataly ¨urek and C. Aykanat. 2001. A ﬁne-grain hypergraph model for 2D decomposition of sparse matri-
+ces. In Proceedings of the 15th International Parallel and Distributed Processing Symposium (IPDPS
+’01). 118–123. DOI:http://dx.doi.org/10.1109/IPDPS.2001.925093
+
+¨U. C¸ ataly ¨urek, C. Aykanat, and B. Uc¸ar. 2010. On two-dimensional sparse matrix partitioning:
+models, methods, and a recipe. SIAM Journal on Scientiﬁc Computing 32, 2 (2010), 656–683.
+DOI:http://dx.doi.org/10.1137/080737770
+
+U. C¸ ataly ¨urek and C. Aykanat. 1999. Hypergraph-partitioning-based decomposition for parallel sparse-
+matrix vector multiplication. IEEE Transactions on Parallel and Distributed Systems 10, 7 (Jul 1999),
+673–693. DOI:http://dx.doi.org/10.1109/71.780863
+
+M. Christensen, U. Villa, and P. Vassilevski. 2015. Multilevel techniques lead to accurate numerical up-
+scaling and scalable robust solvers for reservoir simulation. In SPE Reservoir Simulation Symposium.
+SPE–173257–MS. DOI:http://dx.doi.org/10.2118/173257-MS
+
+M. Christie and M. Blunt. 2001. Tenth SPE comparative solution project: a comparison of up-
+scaling techniques. SPE Reservoir Evaluation & Engineering 4, 04 (August 2001), 308–317.
+DOI:http://dx.doi.org/10.2118/72469-PA
+
+T. Davis. 2006. Direct Methods for Sparse Linear Systems. Society for Industrial and Applied Mathematics.
+
+DOI:http://dx.doi.org/10.1137/1.9780898718881
+
+T. Davis and Y. Hu. 2011. The University of Florida sparse matrix collection. ACM Transactions on Mathe-
+
+matical Software 38 (2011), 1:1–1:25.
+
+S. Faisal, S. Parthasarathy, and P. Sadayappan. 2014. Global graphs: a middleware for large
+scale graph processing. In 2014 IEEE International Conference on Big Data (Big Data). 33–40.
+DOI:http://dx.doi.org/10.1109/BigData.2014.7004369
+
+G. Greiner. 2012. Sparse Matrix Computations and Their I/O Complexity. Dissertation. Technische Univer-
+
+sit ¨at M ¨unchen, M ¨unchen. http://mediatum.ub.tum.de?id=1113167
+
+F. Gustavson. 1978. Two
+
+fast algorithms
+
+transposition. ACM Transactions
+DOI:http://dx.doi.org/10.1145/355791.355796
+
+sparse matrices: multiplication and permuted
+on Mathematical Software 4, 3 (Sept. 1978), 250–269.
+
+for
+
+J. Hong and H. Kung. 1981. I/O complexity: the red-blue pebble game. In Proceedings of
+
+the
+Thirteenth Annual ACM Symposium on Theory of Computing (STOC ’81). ACM, 326–333.
+DOI:http://dx.doi.org/10.1145/800076.802486
+
+D. Irony, S. Toledo, and A. Tiskin. 2004. Communication lower bounds for distributed-memory ma-
+trix multiplication. Journal of Parallel and Distributed Computing 64, 9 (2004), 1017–1026.
+DOI:http://dx.doi.org/10.1016/j.jpdc.2004.03.021
+
+D. Kalchev. 2012. Adaptive Algebraic Multigrid for Finite Element Elliptic Equations with Random Coefﬁ-
+
+cients. Master’s thesis. Soﬁa University. https://e-reports-ext.llnl.gov/pdf/594392.pdf
+
+D. Kalchev, C. Ketelsen, and P. Vassilevski. 2013. Two-level adaptive algebraic multigrid for a sequence of
+problems with slowly varying random coefﬁcients. SIAM Journal on Scientiﬁc Computing 35, 6 (2013),
+B1215–B1234. DOI:http://dx.doi.org/10.1137/120895366
+
+Hypergraph Partitioning for Sparse Matrix-Matrix Multiplication
+
+33
+
+S. Krishnamoorthy, ¨U. C¸ ataly ¨urek, J. Nieplocha, A. Rountev, and P. Sadayappan. 2006. Hypergraph par-
+titioning for automatic memory hierarchy management. In Proceedings of the ACM/IEEE SC 2006
+Conference (SC ’06). 34–46. DOI:http://dx.doi.org/10.1109/SC.2006.36
+
+Q. Niu, P.-W. Lai, S. Faisal, S. Parthasarathy, and P. Sadayappan. 2014. A fast implementation of MLR-MCL
+algorithm on multi-core processors. In 21st International Conference on High Performance Computing
+(HiPC ’14). 1–10. DOI:http://dx.doi.org/10.1109/HiPC.2014.7116888
+
+R. Pagh and M. St¨ockel. 2014. The input/output somplexity of sparse matrix multiplication. In Algorithms
+- ESA 2014, A. Schulz and D. Wagner (Eds.). Lecture Notes in Computer Science, Vol. 8737. Springer
+Berlin Heidelberg, 750–761. DOI:http://dx.doi.org/10.1007/978-3-662-44777-2 62
+
+J. Park, M. Smelyanskiy, U. Meier Yang, D. Mudigere, and P. Dubey. 2015. High-performance algebraic
+multigrid solver optimized for multi-core based distributed parallel systems. In Proceedings of the In-
+ternational Conference on High Performance Computing, Networking, Storage and Analysis (SC ’15).
+Article 54, 12 pages. DOI:http://dx.doi.org/10.1145/2807591.2807603
+
+M. Rabin and V. Vazirani. 1989. Maximum matchings in general graphs through randomization. Journal of
+
+Algorithms 10, 4 (1989), 557 – 567. DOI:http://dx.doi.org/10.1016/0196-6774(89)90005-9
+
+V. Satuluri and S. Parthasarathy. 2009. Scalable graph clustering using stochastic ﬂows: applica-
+tions to community discovery. In Proceedings of the 15th ACM SIGKDD International Confer-
+ence on Knowledge Discovery and Data Mining (KDD ’09). ACM, New York, NY, USA, 737–746.
+DOI:http://dx.doi.org/10.1145/1557019.1557101
+
+S. van Dongen. 2000. Graph Clustering by Flow Simulation. Ph.D. Dissertation. University of Utrecht.
+
+http://www.library.uu.nl/digiarchief/dip/diss/1895620/full.pdf
+
+B. Vastenhouw and R. Bisseling.
+
+2005. A two-dimensional
+
+data
+
+parallel
+
+for
+DOI:http://dx.doi.org/10.1137/S0036144502409019
+
+sparse matrix-vector multiplication. SIAM Review 47,
+
+distribution method
+67–95.
+
+(2005),
+
+1
+
+I. Yamazaki and X. Li. 2011. On techniques to improve robustness and scalability of a parallel hybrid lin-
+ear solver. In 9th International Conference on High Performance Computing for Computational Science
+(VECPAR ’10), Jos´e M. Laginha M. Palma, Michel Dayd´e, Osni Marques, and Jo ˜ao Correia Lopes (Eds.).
+Springer Berlin Heidelberg, 421–434. DOI:http://dx.doi.org/10.1007/978-3-642-19328-6 38
+
+

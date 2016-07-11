@@ -1,0 +1,1638 @@
+Technical report
+
+A Scalable and Distributed Solution
+
+to the Inertial Motion Capture
+
+Problem
+
+Manon Kok, Sina Khoshfetrat Pakazad, Thomas B. Sch¨on,
+
+Anders Hansson and Jeroen D. Hol
+
+Abstract
+
+In inertial motion capture, a multitude of body segments are equipped with inertial sensors,
+consisting of 3D accelerometers and 3D gyroscopes. Using an optimization-based approach to solve
+the motion capture problem allows for natural inclusion of biomechanical constraints and for modeling
+the connection of the body segments at the joint locations. The computational complexity of solving
+this problem grows both with the length of the data set and with the number of sensors and body
+segments considered. In this work, we present a scalable and distributed solution to this problem
+using tailored message passing, capable of exploiting the structure that is inherent in the problem.
+As a proof-of-concept we apply our algorithm to data from a lower body conﬁguration.
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+1
+2
+
+ 
+ 
+]
+
+Y
+S
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+3
+4
+4
+6
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+A Scalable and Distributed Solution to the Inertial
+
+Motion Capture Problem
+
+Manon Kok(cid:63), Sina Khoshfetrat Pakazad(cid:63), Thomas B. Sch¨on†,
+
+Anders Hansson(cid:63) and Jeroen D. Hol‡
+
+(cid:63)Department of Electrical Engineering, Link¨oping University, SE-581 83 Link¨oping, Sweden
+
+E-mail: {manon.kok, sina.khoshfetratpakazad, anders.g.hansson}@liu.se
+†Department of Information Technology, Uppsala University, Sweden
+
+E-mail: thomas.schon@it.uu.se
+
+‡Xsens Technologies B.V., Enschede, the Netherlands
+
+E-mail: jeroen.hol@xsens.com
+
+March 22, 2016
+
+Abstract
+
+In inertial motion capture, a multitude of body segments are equipped with inertial sensors,
+consisting of 3D accelerometers and 3D gyroscopes. Using an optimization-based approach to solve
+the motion capture problem allows for natural inclusion of biomechanical constraints and for modeling
+the connection of the body segments at the joint locations. The computational complexity of solving
+this problem grows both with the length of the data set and with the number of sensors and body
+segments considered. In this work, we present a scalable and distributed solution to this problem
+using tailored message passing, capable of exploiting the structure that is inherent in the problem.
+As a proof-of-concept we apply our algorithm to data from a lower body conﬁguration.
+
+1 Introduction
+
+Inertial motion capture focuses on estimating the relative position and orientation (pose) of diﬀerent
+human body segments. To this end, inertial sensors (3D accelerometers and 3D gyroscopes) are placed on
+diﬀerent body segments as shown in Figure 1. Each body segment’s pose can be estimated by integrating
+the gyroscope data and double integrating the accelerometer data in time and combining these integrated
+estimates with a biomechanical model. Inertial sensors are successfully used for full body motion capture
+in many applications such as character animation, sports and biomechanical analysis [Xsens Technologies
+B. V., 2016, Roetenberg et al., 2013, Kang et al., 2011, Yun and Bachmann, 2006].
+
+In Kok et al. [2014], an optimization-based solution to the inertial motion capture problem was
+presented. It obtains a smoothing estimate of the body’s relative pose and solves the problem using
+sequential quadratic programming (SQP) [Nocedal and Wright, 2006]. The method was shown to result
+in drift-free and accurate pose estimates. Using an optimization-based approach allows for natural
+inclusion of biomechanical constraints and for modeling the connection between the body segment at
+the joint locations. Furthermore, it naturally handles nonlinearities and opens up the possibility for
+incorporating non-Gaussian noise and for simultaneous estimation of calibration parameters.
+
+Compared to ﬁltering approaches, optimization-based approaches are computationally more expen-
+sive. Obtaining the complete smoothing solution can be challenging both due to the computational
+complexity of solving the problem and due to storage requirements for constructing the problem. This
+is speciﬁcally of concern when processing long data sets. In this case, approximate solutions need to be
+considered, for instance using moving horizon estimation [Rao et al., 2001].
+
+In this paper we solve the same problem as in Kok et al. [2014]. Again we use SQP, but at each
+iteration we compute the search directions using the message passing algorithm presented in Khoshfe-
+trat Pakazad et al. [2015]. This allows us to eﬃciently make use of the structure inherent in the problem.
+We exploit this structure in two diﬀerent ways:
+
+1. We reorder the problem based on time. This allows us to solve the problem by solving a large
+
+number of small problems which enables us to process long data sets.
+
+1
+
+Figure 1: Example of inertial motion capture. Left: olympic and world champion speed skating Ireen W¨ust
+wearing an inertial motion capture suit with 17 inertial sensors. Right: graphical representation of the estimated
+position and orientation of the body segments.
+
+2. We reorder the problem based on sensors and segments. This leads to less computational beneﬁts
+– the number of sensors and body segments is typically much smaller than the number of time
+steps considered – but it allows for solving the problem in a distributed manner. It also relaxes the
+need for a centralized unit and streaming of data to it.
+
+Using message passing for computing the search directions for the time-ordered problem has close connec-
+tions to serial dynamic programming [Bertsekas, 1995]. This is due to the chain-like coupling structure
+in the problem. In fact, using serial dynamic programming, the search directions can be computed by
+sweeping through the available data forward and backwards, similar to the approach used for Rauch-
+Tung-Striebel (RTS) smoothing [Rauch et al., 1965]. Using message passing, we compute the search
+directions by simultaneously starting from the ﬁrst and ﬁnal time steps and sweeping towards the middle
+of the data set and back. This allows us to speed up the search direction computation by a factor of two.
+If we only consider the lower body for the sensor-ordered problem, the chain-like coupling structure
+will also be present in the problem.
+Instead of running through time, this chain runs from one foot
+through both legs to the other foot. Consequently, it enjoys the same similarities to serial dynamic
+programming as discussed above. For the full body, the coupling structure will not be chain-like. It
+will, however, have an inherent tree structure. Hence, we can still use message passing for computing
+the search directions. In this paper, we focus on the lower body to simplify both the notation and the
+biomechanical modeling. The presented material can, however, straightforwardly be extended to the full
+body problem.
+
+The paper is organized as follows. In Section 2 we introduce the inertial motion capture problem
+for which the models are subsequently introduced in Section 3. In Section 4, we reorder the problem
+in the two ways described above. These two equivalent formulations of the original problem enjoy a
+special structure which allows us to use message passing to compute the search directions. The message
+passing algorithm will be introduced in Section 5. The resulting algorithm that can be used to solve the
+reordered problems is subsequently discussed in Section 6. In Section 7, we will discuss experimental
+results where the algorithm is applied to data from inertial sensors placed on the lower body.
+
+2 Problem formulation
+
+The problem of estimating the relative pose of each body segment is formulated as a constrained estima-
+tion problem. Given NT measurements y = {y1, . . . , yNT }, a point estimate of the static parameters θ
+and the time-varying variables x = {x1, . . . , xNT } can be obtained as a constrained maximum a posteriori
+(MAP) estimate,
+
+maximize
+
+x,θ
+
+p(x, θ | y)
+
+subj. to c(x) = 0,
+
+In this work we consider NS sensors placed on NS
+where c(x) represents the equality constraints.
+body segments, where sensor Si is placed on body segment Bi. The time-varying variables x consist
+of variables both related to sensors and to body segments, i.e. xt = {xS1
+}.
+
+, . . . , xBNS
+
+, xB1
+
+t
+
+t , . . . , xSNS
+
+t
+
+t
+
+2
+
+(1)
+
+Table 1: Notation to refer to the variables and the constraints in our problem, introduced in Sections 2 and 3.3,
+respectively.
+
+Symbol
+
+xSi
+
+xBi
+
+xi
+
+xt
+
+x
+θ
+
+ci(xi, xi+1)
+
+ct(xt)
+c(x)
+
+Deﬁnition
+}
+}
+
+1 , . . . , xSi
+NT
+1 , . . . , xBi
+NT
+
+xSi = {xSi
+xBi = {xBi
+xi = {xBi , xSi}
+xt = {xS1
+SNS
+t , . . . , x
+t
+x = {x1, . . . , xNT }
+θ = {θS1 , . . . , θNS}
+
+, xB1
+
+t
+
+BNS
+, . . . , x
+t
+
+}
+
+Explanation
+
+Time-varying variables pertaining to
+sensor Si
+Time-varying variables pertaining to
+body segment Bi
+Time-varying variables pertaining to
+sensor Si and body segment Bi
+Time-varying variables pertaining to
+time t
+All time-varying variables
+Static parameters
+
+ci(xi, xi+1) = {ci
+t ), . . . , cNS−1
+ct(xt) = {c1
+c(x) = {ct(x1), . . . , ct(xNT }
+
+t, xi+1
+t
+t , x2
+
+1(xi
+t (x1
+
+), . . . , ci
+
+NT
+
+t
+
+NT
+
+(xi
+(xNS−1
+
+)}
+Biomechanical constraints for joint i
+, xi+1
+NT
+at time t = 1, . . . , NT
+t } Biomechanical constraints at time t
+, xNS
+
+t
+
+All biomechanical constraints
+
+1 , . . . , xBi
+NT
+
+To refer to the time-varying variables for sensor Si, we use the notation xSi = {xSi
+}, while
+} denotes time-varying variables for body segment Bi. The set of time-varying
+xBi = {xBi
+variables pertaining to sensor Si and segment Bi is denoted xi = {xBi, xSi}. The static parameters are
+given by θ = {θS1 , . . . , θSNS }. This notation will be used throughout this work and is summarized in
+Table 1.
+
+1 , . . . , xSi
+NT
+
+Using the Markov property of the time-varying variables and the fact that the logarithm is a mono-
+
+tonic function, we can rewrite (1) as
+
+minimize
+
+x,θ
+
+log p(xSi
+t
+
+| xSi
+
+t−1, θSi , ySi
+t )
+
+(cid:125)
+
+dynamics of the state x
+
+Si
+t
+
+log p(xBi
+t
+
+| xSi
+t )
+
+− NT(cid:88)
+(cid:124)
+
+t=2
+
+i=1
+
+NS(cid:88)
+− NT(cid:88)
+(cid:124)
+
+t=1
+
+(cid:123)(cid:122)
+NS(cid:88)
+(cid:123)(cid:122)
+− NS(cid:88)
+(cid:124)
+
+i=1
+
+i=1
+
+placement of sensor Si on body segment Bi
+
+(cid:125)
+1 ) − NS(cid:88)
+1 | ySi
+(cid:123)(cid:122)
+
+i=1
+
+prior
+
+log p(xSi
+
+(2)
+
+log p(θSi )
+
+(cid:125)
+
+subj. to c(x) = 0.
+
+Obtaining the MAP estimate thus amounts to solving a constrained optimization problem where the
+constraints c(x) represent the connection between the body segments at the joint locations. The cost
+function consists of terms related to a dynamic model for the time-varying states xSi
+t , a model regarding
+the placement of the sensors on the body segments and a prior on the initial states xSi
+1 and the constant
+parameters θSi for i = 1, . . . , NS.
+
+3 Model
+
+To estimate the relative pose of the lower body, we assume that 7 IMUs are placed on diﬀerent body
+segments. For notational simplicity, we assume that sensor Si is attached to body segment Bi. The
+body segments are connected at the joint locations. Figure 2 illustrates two body segments, which can
+be thought of as the upper and the lower leg. A sensor is attached to each body segment and the body
+segments are connected at the joint J2 (the knee). The ﬁgure also introduces the relevant coordinate
+frames: the sensor coordinate frame Si of the moving sensor Si, the body segment coordinate frame Bi
+ﬁxed to the bone in body segment Bi and a local coordinate frame L. Estimating the relative pose of
+the body amounts to expressing the position and orientation of the sensors and the body segments in
+the local coordinate frame L. The variables considered optimization problem (2) are given by:
+
+3
+
+Figure 2: Connection of two body segments and deﬁnition of the relevant coordinate frames.
+
+Table 2: Summary of the body segments, sensors and joints used in the model.
+
+Body segment
+
+Sensor
+
+Joint
+
+B1: Right foot
+B2: Right lower leg
+B3: Right upper leg
+B4: Pelvis
+B5: Left upper leg
+B6: Left lower leg
+B7: Left foot
+
+S1
+S2
+S3
+S4
+S5
+S6
+S7
+
+J1: Right ankle
+J2: Right knee
+J3: Right hip
+J4: Left hip
+J5: Left knee
+J6: Left ankle
+
+Connecting body segments
+
+B1 ⇔ B2
+B2 ⇔ B3
+B3 ⇔ B4
+B4 ⇔ B5
+B5 ⇔ B6
+B6 ⇔ B7
+
+• The time-varying variables xSi
+
+Si at time t. Furthermore, for one of the sensors Si, the variables xSi
+estimate its mean acceleration at time t.
+
+t , consisting of the 3D position, velocity and orientation of sensor
+t also include variables to
+
+• The time-varying variables xBi
+
+t
+
+at time t.
+
+consisting of the 3D position and orientation of body segment Bi
+
+• The constant variables θSi consisting of the gyroscope bias bSi
+
+ω ∈ R3 of sensor Si.
+
+Hence, the variables in the optimization problem are x ∈ R(15NS +3)NT and θ ∈ R3NS , where it is assumed
+that the rotation variables are encoded using a three-dimensional vector, see e.g. [Crassidis et al., 2007,
+Grisetti et al., 2010, Hol, 2011]. In the remainder of this section, we discuss the structure of the cost
+functions and of the constraints in (2). This structure will be exploited in our message passing algorithm.
+For an alternative and more explicit formulation of the problem, we refer to Kok et al. [2014].
+
+3.1 Dynamics of the state xSi
+t
+
+The dynamics in (2) expresses the position, velocity and orientation of each sensor Si in terms of their
+values at the time instance t−1 and in terms of the constant variables θSi. The change in position, velocity
+and orientation of sensor Si is modeled in terms of the acceleration and angular velocity measured by
+
+4
+
+J2S3S2LB2B3sensor Si. The mean acceleration is modeled in terms of xSi
+t−1, θSi and the accelerometer measurements.
+For more details on the acceleration model we refer to Kok et al. [2014]. The dynamics of the state xSi
+t
+can hence be expressed as in (2).
+
+3.2 Placement of the sensors on the body segments
+
+As shown in Figure 2, sensor Si is assumed to be attached to the body segment Bi. We assume that
+the relative position and orientation of the sensors on the body segments is known from calibration.
+At each time instance, the position and orientation of sensor Si can therefore be expressed in terms of
+the position and orientation of the body segment Bi. Ideally, this can be incorporated using equality
+constraints in (2). However, it is physically impossible to place the sensor directly on the bone. Hence, it
+has to be placed on the soft tissue and the sensor will inevitably move slightly with respect to the bone.
+To allow for small random movements of the sensor, we incorporate the knowledge about the placement
+of the sensors on the body segments in the cost function.
+
+3.3 Biomechanical constraints
+
+The constraints c(x) in the optimization problem (2) enforce the body segments to be connected at the
+joint locations at all times. Hence, for joint Ji, they model the position and the orientation of body
+segment Bi in terms of the position and the orientation of body segment Bi+1 for i = 1, . . . , NS − 1.
+Here, the ordering of the indices of the joints and the body segments is assumed to be as in Table 2.
+Note that we assume that the length of the body segments is known either from calibration or from a
+biomechanical model.
+t ∈ R3 at time t. The set of constraints at time t is given
+)} and the set of constraints for joint Ji
+by ct(xt) = {c1
+, xNS
+is given by
+)}. The complete set of biomechanical constraints is given
+ci(xi, xi+1) = {ci
+by c(x) = {ct(x1), . . . , ct(xNT )}. This notation is summarized in Table 1. Note that we explicitly indicate
+which states are involved in the constraints using the ordering of body segments and joints in Table 2.
+
+Each joint Ji results in a constraint ci
+(xNS−1
+t
+(xi
+
+t
+, xi+1
+NT
+
+t ), . . . , cNS−1
+), . . . , ci
+
+t , x2
+1, xi+1
+1
+
+t (x1
+1(xi
+
+NT
+
+NT
+
+t
+
+4 Problem Reformulation Enabling Structure Exploitation
+
+In this section we focus on reordering the problem (2) in two diﬀerent ways. In Section 4.1, we reorder
+the problem based on the time indices t = 1, . . . , NT .
+In Section 4.2, we reorder the problem based
+on sensor and body segment indices i = 1, . . . , NS. The inertial motion capture problem can be solved
+iteratively using SQP, where at each iteration k we solve a quadratic approximation of (2). Hence, in
+each of the sections below, we also introduce an explicit formulation of the quadratic approximation that
+needs to be solved, where the reordering will allow us to exploit the structure inherent in the problem.
+
+4.1 Reordering based on time
+
+The objective function in (2) can be reordered based on time resulting in
+
+(cid:16)
+
+− NS(cid:88)
+− NT(cid:88)
+
+i=1
+
+minimize
+
+x,θ
+
+log p(xBi
+1
+
+| xSi
+1 )
+
+(cid:17)
+
+log p(θSi )
+
+NS(cid:88)
+
+(cid:16)
+
++ log p(xSi
+
+1 | ySi
+
+1 ) + 1
+NT
+
+log p(xSi
+t
+
+| xSi
+
+t−1, θSi )
+
+t=2
+
+i=1
+
++ log p(xBi
+t
+
+| xSi
+
+t ) + 1
+NT
+
+log p(θSi )
+
+subj. to c(x) = 0.
+
+(cid:17)
+
+(3)
+
+Let f1(x1, θ) and ft(xt, xt−1, θ) for t = 2, . . . , NT correspond to diﬀerent terms in the cost function of
+(3). We can then rewrite (3) more compactly as
+
+NT(cid:88)
+
+t=2
+
+minimize
+
+x,θ
+
+f1(x1, θ) +
+
+ft(xt, xt−1, θ)
+
+(4)
+
+subj. to
+
+ct(xt) = 0,
+
+t = 1, . . . , NT ,
+
+5
+
+where we use the notation ct(xt) to denote the biomechanical constraints at time t as introduced in
+Table 1. It is beneﬁcial to equivalently reformulate this problem as
+
+NT(cid:88)
+
+minimize
+
+x,¯θ
+
+subj. to
+
+f1(x1, ¯θ1) +
+
+ft(xt, xt−1, ¯θt)
+
+ct(xt) = 0,
+¯θt = ¯θt+1,
+
+t=2
+t = 1, . . . , NT ,
+t = 1, . . . , NT − 1,
+
+where ¯θ = {¯θ1, . . . , ¯θNT }. This formulation models the constant variables θ in terms of time-varying
+variables ¯θt. Inclusion of the additional equality constraints in (5) ensures that ¯θt will be equal for all t
+and makes the formulations (4) and (5) equivalent.
+
+The reordered problem (5) enjoys a desirable structure that can be exploited.
+
+It can be solved
+
+iteratively using SQP, where at each iteration k we solve the quadratic approximation
+
+(cid:20)∆x
+(cid:21)T
+
+∆¯θ
+
+(cid:16)
+
+(cid:16)
+
+(cid:21)
+
+(cid:20)∆x
+(cid:17)T
+
+∆¯θ
+
+minimize
+
+∆x,∆ ¯θ
+
+1
+2
+
+H(x(k), ¯θ(k))
+
++
+
+Jf (x(k), ¯θ(k))
+
+subj. to ct(x(k)
+
+t
+
+) +
+
+Jct (x(k)
+∆¯θt − ∆¯θt+1 = 0,
+
+t
+
+∆xt = 0, t = 1, . . . , NT ,
+
+)
+t = 1, . . . , NT − 1,
+
+(cid:17)T(cid:20)∆x
+(cid:21)
+
+∆¯θ
+
+to compute a step,(cid:2)∆xT ∆¯θT(cid:3)T
+
+. This step will be used to update the estimates of the variables x and
+
+¯θ. The Jacobians of the objective function and of the constraints are given by
+∇x,¯θft(xt, xt−1, ¯θt),
+
+Jf (x, ¯θ) = ∇x,¯θf1(x1, ¯θ1) +
+Jct(xt) = ∇xtct(xt).
+
+For the Hessian of the objective function we use a Gauss-Newton approximation as
+
+H(x, ¯θ) ≈ ∇x,¯θf1(x1, θ1)∇x,¯θf1(x1, ¯θ1)T +
+
+∇x,¯θft(xt, xt−1, ¯θt)∇x,¯θft(xt, xt−1, ¯θt)T.
+
+(8)
+
+If we choose the ordering of variables as (∆x1, ∆¯θ1, ∆x2, ∆¯θ2, . . . , ∆xNT , ∆¯θNT ), the Hessian H(x, ¯θ)
+takes a special form as illustrated in Figure 3. In this case it is possible to ﬁnd matrices Ht and ht and
+write the problem in (6) equivalently as
+
+NT(cid:88)
+
+t=2
+
+NT(cid:88)
+
+t=2
+
+(5)
+
+(6)
+
+(7a)
+
+(7b)
+
+(9)
+
+(10)
+
+NT −1(cid:88)
+
+t=1
+
+minimize
+
+∆x,∆ ¯θ
+
+ 1
+
+2
+
+T
+
+ ∆xt
+(cid:16)
+
+∆¯θt
+∆xt+1
+∆¯θt+1
+
+Ht
+
+(cid:17)T
+
+ ∆xt
+
+∆¯θt
+∆xt+1
+∆¯θt+1
+
+ +
+
+ ∆xt
+
+∆¯θt
+∆xt+1
+∆¯θt+1
+
+T
+
+
+
+ht
+
+subj. to ct(x(k)
+
+t
+
+) +
+
+Jct (x(k)
+∆¯θt − ∆¯θt+1 = 0,
+
+t
+
+∆xt = 0, t = 1, . . . , NT ,
+
+)
+t = 1, . . . , NT − 1.
+
+This time-ordered equivalent formulation of the problem (2) in (9) enjoys a special structure which
+allows us solve it eﬃciently using message passing. Before introducing this approach, we will ﬁrst reorder
+the problem (2) in a second way, based on sensors and body segments.
+
+4.2 Reordering based on sensors and body segments
+
+The problem (2) can also be rearranged or reordered based on sensors and body segments. Here, we
+group the terms in the cost function related to sensor Si and body segment Bi for i = 1, . . . , NS, resulting
+in
+
+(cid:32)
+
+− NS(cid:88)
+
+minimize
+
+x,θ
+
+NT(cid:88)
+
+log p(xSi
+
+1 ) +
+
+1 | ySi
+NT(cid:88)
+
+log p(xBi
+t
+
+i=1
+
++
+
+log p(xSi
+t
+
+| xSi
+
+t−1, θSi )
+
+t=2
+
+| xSi
+
+t ) + log p(θSi )
+
+(cid:33)
+
+subj. to c(x) = 0.
+
+t=1
+
+6
+
+Figure 3: Form of the Hessian H(x, ¯θ) for the quadratic approximation (6) with the time-ordered variables as
+described in Section 4.1. The blue blocks indicate the non-zero terms in the Hessian. For clarity, we indicate
+which variables are associated with which blocks.
+
+Letting each term in the cost function be denoted by gi(xi, θSi ), we can write (10) compactly as
+
+NS(cid:88)
+
+gi(xi, θSi)
+
+minimize
+
+x,θ
+
+subj. to
+
+i=1
+ci(xi, xi+1) = 0,
+
+i = 1, . . . , NS − 1,
+
+(11)
+
+(12)
+
+(13a)
+
+(13b)
+
+where the constraints are grouped per joint. Note again that xi and ci(xi, xi+1) are deﬁned in Table 1.
+Analogously to the development in Section 4.1, solving the problem in (11) using SQP amounts to
+
+solving
+
+minimize
+
+∆x,∆θ
+
+1
+2
+
+(cid:20)∆x
+(cid:21)T
+
+∆θ
+
+subj. to ci(xi,(k), xi+1,(k))
+
++
+
+at each iteration, where
+
+¯H(x(k), θ(k))
+
++
+
+Jg(x(k), θ(k))
+
+(cid:20)∆x
+
+(cid:21)
+
+∆θ
+
+(cid:16)
+
+(cid:16)
+
+Jci (xi,(k), xi+1,(k))
+
+(cid:17)T(cid:20)∆x
+(cid:21)
+(cid:21)
+
+∆¯θ
+
+(cid:17)T(cid:20) ∆xi
+
+∆xi+1
+
+= 0,
+i = 1, . . . , NS − 1,
+
+NS(cid:88)
+
+∇x,θgi(xi, θSi),
+Jg(x(k), θ(k)) =
+Jci(xi, xi+1) = ∇xi,xi+1ci(xi, xi+1).
+
+i=1
+
+¯H(x, θ) ≈ NS(cid:88)
+
+The Hessian of the objective function of this problem is again based on a Gauss-Newton approximation,
+
+∇x,θgi(¯xi, θSi)∇x,θgi(¯xi, θSi)T.
+
+(14)
+
+If we choose the ordering of variables as (x1, θS1, x2, θS2, . . . , xNS , θSNS ), the Hessian becomes block-
+diagonal with each block corresponding to sensor Si and body segment Bi. This then enables us to write
+
+i=1
+
+7
+
+the problem in (12) as
+
+ 1
+
+2
+
+NS−1(cid:88)
+
+i=1
+
+minimize
+
+∆x,∆θ
+
+subj. to ci(xi,(k), xi+1,(k))
+
+T
+
+¯H i
+
+ ∆xi
+
+∆θSi
+∆xi+1
+∆θSi+1
+
+ ∆xi
+(cid:16)
+
+∆θSi
+∆xi+1
+∆θSi+1
+
+ +
+ ∆xi
+(cid:17)T(cid:20) ∆xi
+
+∆θSi
+∆xi+1
+∆θSi+1
+
+
+
+¯hi
+
+T
+(cid:21)
+
+(15)
+
++
+
+Jci (xi,(k), xi+1,(k))
+
+∆xi+1
+
+= 0,
+i = 1, . . . , NS − 1,
+
+through consistent choices of matrices ¯H i and vectors ¯hi. The problem formulation (15) again enjoys
+a special structure which allows us to solve it eﬃciently using message passing. Next we brieﬂy review
+this approach.
+
+5 Tree Structure in Coupled Problems and Message Passing
+
+Consider the following coupled optimization problem
+
+f1(z) + f2(z) + ··· + fNC (z),
+
+z
+
+minimize
+
+(16)
+where z ∈ Rnz and fa : Rnz → R for a = 1, . . . , NC. This problem can be seen as a combination of NC
+subproblems, each of which is deﬁned by a term in the cost function and depends only on a few elements
+of z. Note that fa can include indicator functions on constraints. Hence, the problem formulations of the
+inertial motion capture problem (5), (9) for the time ordering and (11), (15) for the sensor and segment
+ordering, are of the form (16).
+
+Let us denote the ordered set of indices of z that each subproblem a depends on by Ca. We can then
+
+equivalently rewrite (16) as
+
+(cid:0)zC1
+
+(cid:1) + ··· + ¯fNC (zNC
+
+¯f1
+
+z
+
+),
+
+minimize
+
+(17)
+is a |Ca|-dimensional vector that contains the elements of z indexed by Ca, with |Ca| denoting
+where zCa
+: R|Ca| → R are lower dimensional
+the number of elements in the set Ca. Also the functions ¯fa
+descriptions of fas such that fa(z) = ¯fa(zCa
+) for all z and a = 1, . . . , NC. It is possible to describe the
+coupling structure of the problem graphically using undirected graphs. Particularly, let us deﬁne the
+sparsity graph of the problem as a graph Gs(Vs,Es) with the vertex set Vs = {1, . . . , nz} and (a, b) ∈ Es
+if and only if variables za and zb appear in the same subproblem. Let us assume that each Ca for
+a = 1, . . . , NC, be a clique of this graph, where a clique is a maximal subset of Vs that induces a
+complete subgraph on Gs. This in turn means that no clique is contained in another clique [Blair
+and Peyton, 1994]. Assume furthermore that there exists a tree deﬁned on CGs such that for every
+Ca, Cb ∈ CGs where a (cid:54)= b, Ca ∩ Cb is contained in all the cliques in the path connecting the two cliques
+in the tree. This property is called the clique intersection property [Blair and Peyton, 1994]. Graphs
+with this property have an inherent tree structure and can be represented using a clique tree.
+
+Let us assume that the sparsity graph of the problem (17) has an inherent tree structure. The
+problem can then be solved distributedly using a message passing algorithm that utilizes the clique
+tree as its computational graph. This means that the nodes Vc = {1, . . . , NC} act as computational
+agents that communicate or collaborate with their neighbors deﬁned by the edge set Ec. The message-
+passing algorithm solves (17) by performing an upward-downward pass through the clique tree, see e.g.,
+[Khoshfetrat Pakazad et al., 2015, Koller and Friedman, 2009] and references therein. The upward pass
+starts from the agents at the leaves of the tree, i.e., all agents a ∈ leaves(T ), where every such agent
+computes and communicates the message
+
+(cid:16)
+
+(cid:17)
+
+ma par(a)
+
+zAa par(a)
+
+=
+
+z
+
+min
+
+Ca\Aa par(a)
+
+(cid:8) ¯fa
+
+(cid:0)zCa
+
+(cid:1)(cid:9) ,
+
+(18)
+
+to its parent, denoted by par(a). Here Aab = Ca ∩ Cb is the so-called separator set of agents a and b.
+Then every agent a that has received all messages from its children, computes and communicates the
+
+8
+
+Algorithm 1 Distributed Optimization Using Message Passing
+
+1: Given a sparsity graph Gs of an optimization problem
+extract its cliques and a clique tree over the cliques;
+2:
+assign each subproblem to one and only one of the agents.
+3:
+
+end if
+
+end for
+agents = agents \ elim.
+
+if ch(a) ⊆ elim then
+This agent computes the message in (19) and communicates it to agent par(a).
+elim = elim ∪ {a}.
+
+4: Set agents = {1, . . . , NC} \ r and elim = {}.
+5: Perform the upward pass as
+6: while |agents| (cid:54)= 0 do
+for i ∈ agents do
+7:
+8:
+9:
+10:
+11:
+12:
+13:
+14: end while
+15: Set agents = {1, . . . , NC} and elim = {}.
+16: Perform the downward pass as
+17: while |agents| (cid:54)= 0 do
+for a ∈ agents do
+18:
+19:
+20:
+21:
+22:
+23:
+24:
+25: end while
+26: By the end of the downward pass all agents have computed their optimal solutions and the algorithm is
+
+if par(a) ⊆ elim then
+This agent computes optimal solution as in (21) and communicates it to agents ch(a).
+elim = elim ∪ {a}.
+
+end for
+agents = agents \ elim.
+
+end if
+
+terminated.
+
+message
+
+(cid:16)
+
+zAa par(a)
+
+(cid:17)
+
+=
+
+ma par(a)
+
+(cid:1) +
+
+(cid:88)
+
+b∈ch(i)
+
+mba
+
+(cid:16)
+
+zAab
+
+(cid:17) ,
+
+(19)
+
+with ch(a) denoting the children of agent a, to its parent. This procedure is continued until we reach
+the agent, r, at the root. At this point, agent r computes its corresponding optimal solution by solving
+
+min
+
+z
+Ca\Aa par(a)
+
+ ¯fr
+
+(cid:0)zCr
+
+(cid:0)zCa
+
+ ¯fa
+(cid:88)
+(cid:1) +
+(cid:16)
+
+b∈ch(r)
+
+∗
+Cr
+
+z
+
+= arg min
+
+z
+
+Cr
+
+and initiates the downward pass by communicating this solution to its children. During the downward
+
+pass each agent a having received the optimal solution
+corresponding optimal solution as
+
+(cid:40)
+
+(cid:0)zCa
+
+(cid:1) +
+
+(cid:88)
+
+b∈ch(a)
+
+(cid:16)
+
+(cid:17)
+
+mba
+
+zAab
+
++
+
+1
+2
+
+∗
+Ca
+
+z
+
+= arg min
+
+¯fa
+
+z
+
+Ca
+
+mbr
+
+(cid:16)
+
+zAbk
+
+(cid:17) ,
+(cid:17)par(a)
+(cid:13)(cid:13)(cid:13)(cid:13)zApar(a)a
+−(cid:16)
+
+Apar(a)a
+
+z
+
+z∗
+
+(20)
+
+(21)
+
+from its parent computes its
+
+(cid:17)par(a)(cid:13)(cid:13)(cid:13)(cid:13)2(cid:41)
+
+,
+
+∗
+Apar(a)a
+
+and communicates this solution to its children. Once the downward pass is accomplished, all agents have
+computed their respective optimal solution and the algorithm is terminated. We have summarized this
+scheme in Algorithm 1.
+
+Remark 1 Notice that within the upward pass all agents that have received messages from their children
+can compute their messages simultaneously and in parallel. This also holds for the downward pass, as
+all agents that have received the optimal solution from their parents can compute their respective optimal
+solution in parallel.
+
+6 Scalable and Distributed Solutions Using Message Passing
+
+We will now rewrite the problem reorderings (9) and (15) such that Algorithm 1 can be used to solve
+the problem. Let us ﬁrst reconsider the problem in (9). We can rewrite this problem compactly as
+
+9
+
+Figure 4: Clique tree corresponding to the sparsity graph of problem (9).
+
+NT −1(cid:88)
+
+t=1
+
+minimize
+
+∆x,∆ ¯θ
+
+subj. to
+
+t
+
+Jct (x(k)
+
+) +
+
+ct(x(k)
+∆¯θt − ∆¯θt+1 = 0
+
+t
+
+¯ft(∆xt, ∆xt+1, ∆¯θt, ∆¯θt+1)
+
+ ,
+
+∆xt = 0
+
+(cid:17)T
+
+)
+
+(cid:17)T
+
+)
+
+(cid:16)
+
+(cid:16)
+(cid:16)
+(cid:16)
+
+Jct (x(k)
+
+t
+
+t
+
+) +
+
+ct(x(k)
+∆¯θt − ∆¯θt+1 = 0
+ct(x(k)
+
+t+1) +
+
+Jct+1 (x(k)
+
+t+1)
+
+t+1) +
+
+ct(x(k)
+∆¯θt − ∆¯θt+1 = 0
+
+Jct+1 (x(k)
+
+t+1)
+
+∆xt = 0
+
+(cid:17)T
+(cid:17)T
+
+∆xt+1 = 0
+
+∆xt+1 = 0
+
+t = 1, . . . , r − 1,
+
+ , t = r,
+ ,
+
+t = r + 1, . . . , NT − 1,
+
+(22a)
+
+(22b)
+
+(22c)
+
+(22d)
+
+where r = (cid:98)NT /2(cid:99). The sparsity graph of this problem has an inherent tree structure, with NT − 1
+cliques. Each clique Ca consists of the variables ∆xa, ∆¯θa, ∆xa+1 and ∆¯θa+1. The clique tree for
+this problem is illustrated in Figure 4. Consequently, we can use Algorithm 1 for solving this problem.
+During the upward pass, each agent a sends a message as in (18) and (19) to its parent as a function
+of the variables it shares with its parents. Hence, if a < r – the agent is on the left side of agent r in
+Figure 4 – the message to its parents is a function of ∆xa+1 and ∆¯θa+1. Equivalently, if a > r – the
+agent is on the right side of agent r in Figure 4 – the message to its parents is a function of ∆xa and
+∆¯θa. As a result, each agent except agent r has to factorize a matrix of size |xa| +|¯θa| plus the number of
+constraints, which is equal to 6, as can be seen in (22). The root agent instead has to factorize a matrix
+of size 2|xa| + 2|¯θa| + 9. The computational complexity of Algorithm 1 is dominated by the upward
+pass since the downward pass does not require a matrix factorization. For details on this, we refer to
+Khoshfetrat Pakazad et al. [2015]. Hence, the computational complexity and storage requirements for
+the resulting algorithm grow linearly with NT . The reduction in the memory requirements follows from
+the fact that using Algorithm 1 we have relaxed the need for even forming the problem in (9). The
+resulting algorithm to solve the problem (22) is summarized in Algorithm 2.
+The problem in (15) is also a coupled problem but with NS − 1 subproblems. The clique tree for
+this problem has the same structure as for (15), where the only diﬀerences are in the number of cliques
+which in this case is NS − 1 and that r = (cid:98)NS/2(cid:99). Each clique Ca consists of the variables ∆xa, ∆θSa ,
+∆xa+1 and ∆θSa+1. Hence, we can solve the problem in (15) distributedly using Algorithm 1. This
+
+10
+
+Algorithm 2 Inertial Motion Capture
+
+1: Place the sensors on the body, calibrate the system and collect inertial measurements.
+2: Initialize x and θ or ¯θ and set k = 0.
+3: while the algorithm has not converged and the solution is not feasible do
+4:
+
+reordering.
+
+5:
+
+Formulate the quadratic approximation (22) using the time reordering or (15) using the sensor / segment
+
+Use Algorithm 1 to solve the problem formulated in Step 4 and to obtain a step (cid:2)∆xT ∆¯θT(cid:3)T
+time ordered problem or a step(cid:2)∆xT ∆θT(cid:3)T
+
+for the sensor / segment ordered problem.
+
+for the
+
+Update x := x + ∆x, θ := θ + ∆θ or ¯θ := ¯θ + ∆¯θ.
+Set k := k + 1 and check for convergence and feasibility.
+
+6:
+7:
+8: end while
+
+can be achieved using a network of computational agents, that can be installed on the body and that
+collaborate based on the clique tree.
+
+Remark 2 Note that in (22) we have adopted a particular grouping of the constraints. This is to ensure
+that each of the subproblems is well-posed in terms of their local variables. This was not necessary for
+the problem in (15).
+
+Remark 3 The reason that the clique trees for both problems in (22) and (15) have the same structure
+is due to the fact that we have focused on the motion capture problem for the lower body. For solving
+the full body problem we can use the same approach as presented in this paper, since the inherent tree
+structure will still be present in the problem. However, the clique tree for the corresponding problem will
+be more complicated than a chain and will correspond to the body formation.
+
+7 Results and discussion
+
+We consider experimental data from a subject walking around for approximately 37 seconds wearing
+inertial sensors as shown in Figure 5. We focus on estimating the pose of the lower body using data
+from 7 sensors attached to the diﬀerent body segments as described in Section 3. The estimated joint
+angles from this problem have previously been presented in Kok et al. [2014]. In this work, we solve the
+same optimization problem but reorder the problem to eﬃciently make use of its structure. Hence, the
+estimates obtained using Algorithm 2 are equal to the ones presented in Kok et al. [2014].
+
+The optimization problem is solved at 10 Hz with NT = 373, leading to a total number of 40284 time-
+varying variables x and 21 constant variables θ and 6714 constraints.1 Notice that if the sparsity of the
+problem is not taken into account, the computational complexity of solving the SQP for the smoothing
+problem (6) or (12) grows cubically with the number of sensors and body segments NS and with the
+number of time steps NT . Also, the storage requirements for forming this problem grows quadratically
+with NT and NS.
+
+To solve the problem in a more scalable manner, we have reordered the variables based on time
+and formed the problem as in (22), which allows us to solve the problem using Algorithm 2. For each
+iteration k in Algorithm 2, we then form NT − 1 subproblems. Computing the messages in the upward
+pass requires each agent except the root agent to factorize a matrix of size 167 since |xt| + |¯θ| = 258 and
+39 constraints are involved in the subproblem. The root agent needs to instead factorize a matrix of size
+315 since 2|xt| + 2|¯θ| = 129 and 57 constraints are involved in this subproblem instead. Using message
+passing to solve the problem, it is no longer required to form and store the large problem of size 46998.
+Instead, it is only required to store one of these subproblems.
+
+We have also solved the problem by reordering the variables based on sensors and segments. The
+computational beneﬁts of this reordering are much less signiﬁcant – the problem is split up in 6 subprob-
+lems. However, the approach no longer requires collecting all data at a centralized unit, which can be
+communication intensive, and hence can potentially hamper our ability to have a seamless solution for
+the motion capture problem. Instead, it allows for decentralized computation of the solution, where the
+computational power on the sensors can be used to compute solutions to the subproblems.
+
+1Note that the inertial sensors themselves are sampled at a much higher rate but strapdown integration [Savage, 1998a,b]
+
+is used to capture the high frequency signals, allowing for a lower update frequency of the optimization problem.
+
+11
+
+Figure 5: Experimental setup where the human body is equipped with inertial sensors (orange boxes) on diﬀerent
+body segments. High-accuracy reference measurements were obtained using an optical tracking system to validate
+the estimated joint angles. To this end, triangles with optical markers were placed on a number of sensors.
+
+8 Conclusions and future work
+
+In this work, we have introduced a method to exploit the structure inherent in the inertial motion
+capture problem. The method allows for a scalable solution where small subproblems for each time
+step are formed and hence longer data sets can be processed. The approach is successfully applied
+to experimental data to estimate the pose of the lower body.
+It also opens up for the possibility of
+distributedly solving the problem by making use of the computational resources of each of the sensors.
+The structure that we exploit in this work is not unique to the motion capture problem. We believe
+that the message passing algorithm can be applied to a large number of other problems appearing in
+signal processing and estimation, e.g., in large-scale signal processing and estimation application. This
+is because these problems commonly enjoy desirable sparsity structures arising from physical and / or
+dynamic properties in the problem, as we saw for the inertial motion capture problem in this work.
+
+Acknowledgment
+
+This work is supported by CADICS, a Linnaeus Center and by the project Probabilistic modeling of
+dynamical systems (Contract number: 621-2013-5524), both funded by the Swedish Research Council
+(VR) and by the Swedish Department of Education within the ELLIIT project.
+
+12
+
+References
+
+D. P. Bertsekas. Dynamic programming and optimal control, volume 1. Athena Scientiﬁc Belmont, MA,
+
+3rd edition, 1995.
+
+J. R. S. Blair and B. W. Peyton. An introduction to chordal graphs and clique trees. In J. A. George,
+J. R. Gilbert, and J. W-H. Liu, editors, Graph Theory and Sparse Matrix Computations, volume 56,
+pages 1–27. Springer-Verlag, 1994.
+
+J. L. Crassidis, F. Landis Markley, and Y. Cheng. A survey of nonlinear attitude estimation methods.
+
+Journal of Guidance, Control, and Dynamics, 30(1):12–28, 2007.
+
+G. Grisetti, R. Kummerle, C. Stachniss, U. Frese, and C. Hertzberg. Hierarchical optimization on
+manifolds for online 2D and 3D mapping. In Proceedings of the IEEE International Conference on
+Robotics and Automation (ICRA), pages 273–278, Anchorage, Alaska, 2010.
+
+J. D. Hol. Sensor Fusion and Calibration of Inertial Sensors, Vision, Ultra-Wideband and GPS. PhD
+
+thesis, Link¨oping University, Sweden, Jun 2011.
+
+D. H. Kang, Y. J. Jung, A. J. Park, and J. W. Kim. Human body motion capture system using
+magnetic and inertial sensor modules. In Proceedings of the 5th international universal communication
+symposium (IUCS), Gumi, Korea, oct 2011.
+
+S. Khoshfetrat Pakazad, A. Hansson, and M. S. Andersen. Distributed primal-dual interior-point methods
+for solving loosely coupled problems using message passing. ArXiv e-prints, jun 2015. arXiv:1502.06384.
+
+M. Kok, J. D. Hol, and T. B. Sch¨on. An optimization-based approach to human body motion capture
+using inertial sensors. In Proceedings of the 19th World Congress of the International Federation of
+Automatic Control, pages 79–85, Cape Town, South Africa, August 2014.
+
+D. Koller and N. Friedman. Probabilistic Graphical Models: Principles and Techniques. MIT press, 2009.
+
+J. Nocedal and S. J. Wright. Numerical Optimization. Springer Series in Operations Research, 2nd
+
+edition, 2006.
+
+C. V. Rao, J. B. Rawlings, and J. H. Lee. Constrained linear state estimation - a moving horizon
+
+approach. Automatica, 37(10):1619–1628, 2001.
+
+H. E. Rauch, C. T. Striebel, and F. Tung. Maximum likelihood estimates of linear dynamic systems.
+
+AIAA journal, 3(8):1445–1450, 1965.
+
+D. Roetenberg, H. J. Luinge, and P. Slycke. Xsens MVN: Full 6DOF human motion tracking using
+
+miniature inertial sensors, May 2013.
+
+P. G. Savage. Strapdown inertial navigation integration algorithm design part 1: Attitude algorithms.
+
+Journal of Guidance, Control and Dynamics, 21(1):19–28, 1998a.
+
+P. G. Savage. Strapdown inertial navigation integration algorithm design part 2: Velocity and position
+
+algorithms. Journal of Guidance, Control and Dynamics, 21(2):208–221, 1998b.
+
+Xsens Technologies B. V. http://www.xsens.com, Accessed on March 5, 2016.
+
+X. Yun and E. R. Bachmann. Design, implementation, and experimental results of a quaternion-based
+Kalman ﬁlter for human body motion tracking. IEEE Transactions on Robotics, 22(6):1216–1227,
+2006.
+
+13
+
+

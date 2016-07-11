@@ -1,0 +1,1483 @@
+Mon. Not. R. Astron. Soc. 000, 000–000 (0000)
+
+Printed March 3, 2016
+
+(MN LATEX style ﬁle v2.2)
+
+FastPM: a new scheme for fast simulations of dark
+matter and halos
+
+Yu Feng1(cid:63), Man-Yat Chu2, Uroˇs Seljak3
+1,2,3Berkeley Center for Cosmological Physics, University of California, Berkeley, Berkeley CA, 94720
+
+March 3, 2016
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+1
+
+ 
+
+ 
+ 
+]
+
+.
+
+O
+C
+h
+p
+-
+o
+r
+t
+s
+a
+[
+ 
+ 
+
+1
+v
+6
+7
+4
+0
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+ABSTRACT
+We introduce FastPM, a highly-scalable approximated particle mesh N-body
+solver, which implements the particle mesh (PM) scheme enforcing correct linear
+evolution via a cheap low resolution broadband correction at each time step. Em-
+ploying a 2-dimensional domain decomposing scheme, FastPM scales extremely
+well with a very large number of CPUs. In contrast to COmoving-LAgrangian
+(COLA) approach, we do not require to split the force or track separately the
+2LPT solution, reducing the code complexity and memory requirements. We
+compare FastPM with diﬀerent number of steps (Ns) and force resolution fac-
+tor (B) against 3 benchmarks: halo mass function from Friends of Friends halo
+ﬁnder, halo and dark matter power spectrum, and cross correlation coeﬃcient (or
+stochasticity), relative to a high resolution TreePM simulation. We show that the
+broadband correction scheme reduces the halo stochasticity when compared to
+COLA with the same number of steps and force resolution. While increasing Ns
+and B improves the transfer function and cross correlation coeﬃcient, for many
+applications FastPM achieves suﬃcient accuracy at low Ns and B. For example,
+Ns = 10 and B = 2 simulation provides a substantial saving (a factor of 10) of
+computing time relative to Ns = 40, B = 3 simulation, yet the halo benchmarks
+are very similar at z = 0. We ﬁnd that for abundance matched halos the stochas-
+ticity remains low even for Ns = 5. FastPM compares well against less expensive
+schemes, being only 7 (4) times more expensive than 2LPT initial condition gen-
+erator for Ns = 10 (Ns = 5). Some of the applications where FastPM can be
+useful are generating a large number of mocks, producing non-linear statistics
+where one varies a large number of nuisance or cosmological parameters, or serv-
+ing as part of an initial conditions solver. The development of FastPM is hosted
+at https://github.com/rainwoodman/fastpm, and collaboration is welcomed.
+A user’s guide is included the appendix.
+
+1 INTRODUCTION
+
+Extracting full information from observations of the large
+scale structure (LSS) of the universe, both in weak lens-
+ing and in galaxies, requires accurate predictions, which
+are only possible using simulations. These simulations can
+be used to create mock galaxy or weak lensing catalogs
+for co-variance estimation (Knebe et al. 2015), to vary
+the predictions as a function of cosmological or nuisance
+parameters (for example, galaxy formation parameters in
+halo occupation models as by Cooray & Sheth 2002), or
+even as a tool to generate initial conditions (Wang et al.
+2013; Jasche & Wandelt 2013). A full N-body simulation
+is too expensive both in terms of CPU-hours and wall-
+clock times. For this reason approximated N-body solvers
+that produces a reasonably accurate dark matter density
+ﬁeld provides a practical alternative in critical applica-
+tions. They range from simple Lagrangian perturbation
+theory ﬁeld realizations (Kitaura, Yepes & Prada 2014;
+Monaco et al. 2013), to N-body simulations optimized for
+speciﬁc applications.
+
+A large class of codes that employ the latter is the
+particle mesh (PM) family (e.g. Merz, Pen & Trac 2005;
+
+c(cid:13) 0000 RAS
+
+Carlson, White & Padmanabhan 2009; Heitmann et al.
+2010; White et al. 2010; Tassev, Zaldarriaga & Eisen-
+stein 2013; White, Tinker & McBride 2014). The idea is
+to ignore the force calculation on small scales by skip-
+ping the Tree (PP) force part of a full Tree-PM (P3M)
+code. Vanilla PM has been criticized for failing to re-
+produce the linear theory growth at large scale as the
+number of time steps is reduced to less than 40. Recently,
+Tassev, Zaldarriaga & Eisenstein (2013) introduced the
+COmoving-LAgrangian enhanced particle mesh (COLA)
+scheme, where the large scale displacement is governed
+by the analytic calculation from second order Lagrangian
+theory (2LPT), and the particle mesh is used only to
+solve for the “residual” small scale displacement that af-
+fects the formation of halos. COLA scheme has gained
+a lot of attention recently (Tassev, Zaldarriaga & Eisen-
+stein 2013; Tassev et al. 2015; Howlett, Manera & Perci-
+val 2015; Izard, Crocce & Fosalba 2015; Koda et al. 2015)
+because it adds a relatively small overhead to the vanilla
+particle mesh method, yet enforces the linear growth at
+large scales. As expected, this approach fails on small
+scales, where approximate tree solvers Sunayama et al.
+(2015) proposed to reduce the frequency of updating the
+
+2
+
+Yu Feng, Man-Yat Chu, Uroˇs Seljak
+
+small scale force produce better results (percentage level
+agreement at high k), although at a higher computational
+cost. An alternative approach to reduce the cost of small
+scale interactions is to neglect the Tree force calculation
+for particles that have formed halos (Khandai & Bagla
+2009).
+
+The wall-clock time of a simulation is a somewhat
+overlooked issue (likely because the usual applications
+of approximate methods focus on a large number of in-
+dependent mocks). The wall-clock time is still of rele-
+vance from a practical point of view, especially so for cer-
+tain applications. For example, for Markov Chains Monte
+Carlo or similar sampling algorithms, a shorter wall-clock
+time in the simulations allows more steps per chain which
+can be of signiﬁcant importance. There are two possible
+ways to reduce the wall-clock time. The ﬁrst is to redraw
+the compromise between amount of calculation and ac-
+curacy – usually, less accurate results can be obtained
+by faster simulations. The second approach is to employ
+more computing resources. In the second approach the
+idea is that the implementation of the scheme can eﬃ-
+ciently use a larger amount of computing resource – the
+so called strong scaling performance. Strong-scaling will
+become even more relevant as the number of comput-
+ing nodes of super-computing systems grows with time.
+Usually, the more complex is the code, the harder it is
+to enforce strong scaling, specially when moving to new
+platforms.
+
+To address some of these issues, we implement a sim-
+ple PM scheme into a new code we call FastPM, where
+the linear theory growth is enforced by an iterative broad-
+band correction factor that scales the gravitational accel-
+eration at every step. The particle mesh solver in FastPM
+is written from scratch to ensure that it scales extremely
+well with a large number of computing nodes. We im-
+plement the latter both within our approach, and within
+the COLA implementation, so that we can compare their
+performances.
+
+We will describe the FastPM code in Section 2 of
+this paper. We discuss the numerical schemes brieﬂy in
+Section 2.1, then move on to discuss the 2-dimensional
+parallel decomposition in Section 2.2 and show the strong
+scaling of FastPM in Section 2.3. In Section 3, we explore
+the parameter space (number of time steps and force res-
+olution) and investigate a favorable scheme for approxi-
+mated halo formation.
+
+2 THE FASTPM CODE
+
+2.1 Numerical Schemes
+
+The time integration in FastPM follows the Kick-Drift-
+Kick symplectic scheme described in Quinn et al. (1997).
+For brevity we do not repeat the discussion in this paper.
+We will discuss the transfer functions for force calculation
+in Fourier space.
+
+In a particle mesh solver, the gravitational force is
+calculated via Fourier transforms. First, the particles are
+painted to the density mesh, with a given a window func-
+tion W (r). We use a linear window of unity size (Hockney
+& Eastwood 1988, cloud-in-cell). We then apply a Fourier
+transform to obtain the over-density ﬁeld δk. A transfer
+function relates δk to the force ﬁeld in Fourier space.
+There are various ways to write down the transfer
+function ∇∇−2 in a discrete Fourier-space. The most fre-
+
+quently used formula is
+
+∇∇−2 = ik/k2R(k),
+
+(1)
+
+where R(k) is a smoothing ﬁlter that suppresses noise
+at small scale, usually a Gaussian function is used (e.g.
+White, Tinker & McBride 2014). The Gaussian func-
+tion probably inherited from the long range force compo-
+nent in TreePM (Bagla 2002; Springel 2005; Habib et al.
+2013). Alternatively, some authors have completely ne-
+glected the smoothing ﬁlter, yet still obtained reasonable
+results(Tassev, Zaldarriaga & Eisenstein 2013).
+
+In FastPM, we follow the ﬁlters described in Ham-
+ming (1989). First, a discrete Fourier space Laplacian op-
+erator is used for potential calculation
+
+ (cid:88)
+
+d=x,y,z
+
+(cid:16)
+
+∇−2 =
+
+(cid:17)2
+
+−1
+
+ωd
+2
+
+x0ωdsinc
+
+,
+
+(2)
+
+where x0 = L/Ng is the mesh size, and ω = k/x0 is the
+circular frequency that goes from (−π, π].
+
+Secondly, a Fourier space ﬁnite diﬀerentiation opera-
+tor is used for force calculation (order-1 low noise super-
+Lanczos ﬁlter),
+
+D1(ω) =
+
+1
+6
+
+(8 sin ω − sin 2ω) .
+
+(3)
+
+The D1 ﬁlter corresponds to the 4-point discrete diﬀeren-
+tiation ﬁlter used in GADGET Springel (2005). As men-
+tioned before, apodizing by a Gaussian ﬁlter is usually
+used to reduce noise and the aliasing eﬀect that contami-
+nates the large scale power spectrum. However, since the
+ﬁlter drops to zero at Nyquist frequency (ω = π), the
+Gaussian ﬁlter is not used in FastPM. We note that us-
+ing a diﬀerentiation ﬁlter with order higher than 1 reduces
+the power in small scale.
+
+FastPM accepts an arbitrary list of time steps. Short-
+cuts for several commonly used time stepping schemes
+(including linear and logarithmic) are provided:
+
+• Time steps that are linear in scaling factor a. Lin-
+ear stepping improves halo mass function, but requires
+assistance (e.g. COLA or the broadband correction in
+FastPM) for an accurate linear scale growth factor if num-
+ber of time steps is less than 40(Tassev, Zaldarriaga &
+Eisenstein 2013; Tassev et al. 2015; Howlett, Manera &
+Percival 2015; Izard, Crocce & Fosalba 2015).
+• Time steps that are linear in log a. Logarithmic step-
+ping improves linear scale at the cost of underestimating
+mass function (White, Tinker & McBride 2014).
+• A hybrid scheme that controls the time step resolu-
+
+tion in high redshift and low redshift independently:
+
+−1 =(cid:112)(1/a1)2 + (a/a2)2),
+
+(δa/a)
+
+(4)
+
+where a1 controls the early time stepping and a2 controls
+the late time stepping. An example value of a1 = 0.05
+and a2 = 0.025 gives about 90 steps from a = 0.025 to
+a = 1.0(Carlson, White & Padmanabhan 2009).
+
+To compensate for the lack of short range resolution, the
+resolution of the force mesh can be boosted by a factor
+B. The size per side of the mesh used for force calculation
+is B times the number of particles per side. Most recent
+authors of PM/COLA advocated a mesh of B = 3 in or-
+der to capture the non-linear formation of halos. (Tassev,
+Zaldarriaga & Eisenstein 2013; Izard, Crocce & Fosalba
+2015), while others advocated for B = 1(Howlett, Man-
+era & Percival 2015). We will investigate the choice of B
+in later in this paper. In FastPM B can be provided as a
+function of time.
+
+c(cid:13) 0000 RAS, MNRAS 000, 000–000
+
+FastPM: a new scheme for fast simulations of dark matter and halos
+
+3
+
+Column
+
+Data Type Width (Bytes)
+
+x
+v
+a
+q
+s1
+s2
+
+double
+single
+single
+integer
+single
+single
+
+Total PM
+
+Total COLA
+
+24
+12
+12
+8
+12
+12
+
+56
+80
+
+Table 1. Memory for the state vector, per particle.
+
+2.2 Memory Usage
+
+FastPM implements both COLA and vanilla PM. COLA
+requires storing the two 2LPT displacement ﬁelds s1 and
+s2, inducing a memory overhead relative to vanilla PM.
+The state vector of a single particle in FastPM contains
+the position, velocity and acceleration, in addition, the
+initial position is encoded into an integer for uniquely
+identifying the particles. When COLA is employed, we
+also store the s1 and s2 terms. The position of particles is
+stored in double precision to reduce systematic evolution
+of round-oﬀ errors near the edge of the boxes, which can
+be concerning if stored in single precision.
+
+The memory usage on the state vector is summarized
+in Table 1. The memory usage per particle is 56 bytes for
+vanilla PM and 80 bytes for COLA. To account for load
+imbalance, we always over-allocate the memory storage
+for particles by a factor of A > 1. Therefore, the total
+memory usage for storing the state vector is M1 = 56AN 3
+g
+for PM, and M(cid:48)
+
+g for COLA.
+
+1 = 80AN 3
+
+To avoid repeated conversion from particles to the
+mesh, FastPM creates two copies of the force mesh. The
+memory usage for the force mesh is M2 = 2× 4(BNg)3 =
+8B3N 3
+g . Note that the buﬀer for domain decomposition
+and for creation of a snapshot is overlapped with the force
+mesh, thus do not incur further memory allocation.
+
+In summary, the total memory usage of FastPM is
+
+(cid:40)
+
+M = M1 + M2 =
+
+(56A + 8B3)N 3
+(80A + 8B3)N 3
+
+g PM,
+g COLA.
+
+(5)
+
+A is typically bound by 1 < A < 2. Therefore, the
+additional memory cost of COLA relative to vanilla PM
+to store s1 and s2 is: 37% ∼ 40% for B = 1, 20% ∼ 27%
+for B = 2, and 9% ∼ 15% for B = 3.
+
+2.3 Domain Decomposition
+
+The domain decomposition in FastPM is 2-dimensional.
+Decomposing in 2 dimensions (resulting 1-dimension
+’pencils’ or ’stencils’) is an eﬀective way to deploy large
+Fourier transforms on a massively parallel scale (see, e.g.
+Pippig 2013; Pekurovsky 2012). Some gravity solvers im-
+plement a new 2-dimensional Fourier transform library
+(e.g. Habib et al. 2013). We choose to reuse the publicly
+available implementation, PFFT by Pippig (2013) for its
+minimal design. We note that PFFT was also used to im-
+prove the scaling of P-GADGET by Feng et al. (2015).
+
+FastPM decomposes the particles into the same 2-
+dimensional spatial domains of the real space Fourier
+transform mesh. In general, there are more mesh cells
+than number of particles (when B > 1), it is therefore
+more eﬃcient to create ghost particles on the boundary
+of a domain than creating ghost cells. We do not further
+
+c(cid:13) 0000 RAS, MNRAS 000, 000–000
+
+divide the domain along the third dimension because that
+would induce further communication costs.
+
+For large scale computations, a 2-dimensional de-
+composition has two advantages over 1-dimensional de-
+composition: 1) a smaller total surface area; and 2) a
+more balanced load. The surface area is directly propor-
+tional to the amount of communication for ghost parti-
+cles. The surface area increases linearly with the num-
+ber of processes (O[P ]) for 1-dimensional decomposition;
+while for 2-dimensional decomposition, the scaling is close
+to O[P 1/2]. The unit of parallelism in 1-dimensional de-
+composition is a slab of 1 × Ng × Ng. Therefore, when
+the number of processes is greater than the number of
+slabs (P > Ng), the Fourier transform becomes extremely
+imbalanced. The unit of parallelism in 2-dimensional de-
+composition is a pencil of 1 × 1 × Ng, and the constraint
+is P > N 2
+g . For a typical mesh size of 8,192 we used, the
+limit translates to 8, 1922 = 67, 108, 864 processors for 2-
+d decomposition, a limit cannot be reached even with the
+next generation exa-scale facilities.
+
+We point out that FastPM is not the ﬁrst N-body
+solver implementing a 2-dimensional domain decompos-
+ing scheme. Previous implementations (e.g. Habib et al.
+2013; Feng et al. 2015) mostly focused on weak-scaling
+of simulations to a large number of particles. The strong
+scaling of schemes that resolves galactic scale interaction
+(gravity, hydrodynamics, and feedback) typically suﬀer
+from the heavy imbalance as the average volume of a do-
+main decreases, and requires over-decomposition of do-
+mains (Springel 2005; Menon et al. 2015). FastPM does
+not usually suﬀer from the over-decomposition since it
+does not implement any small scale interaction, as we
+will show in in the next section.
+
+2.4 Strong Scaling of FastPM
+
+We run a series of tests to demonstrate the strong scal-
+ing performance of FastPM on the Cray XC-40 system
+Cori at National Energy Research Supercomputing Cen-
+ter (NERSC). The test simulation employs 10243 (1 bil-
+lion) particles in a box of 1024h−1Mpc per side, and a
+resolution of Ns = 40/B = 3. The cosmology used is
+compatible to the WMAP 9 year data.
+
+The minimal number of computing nodes to run the
+simulation (due to memory constrains) is 4, which trans-
+lates to Np = 128 computing cores. We then scale up the
+computing scale all the way up to Np = 8, 192 (a factor of
+64) computing cores. We measure the time spent in force
+calculation, domain decomposition and the generation of
+the 2LPT initial condition. Time spent in ﬁle operations
+(IO) is not shown, since it follows closely to the status
+of the ﬁle system instead of the scaling of the code. We
+note however, that the IO backend of FastPM (bigﬁle)
+is capable of achieving the peak performance of the ﬁle
+system in the BlueTides simulation (Feng et al. 2015).
+
+We report the results of the scaling tests in Figure
+1. In the left panel, we see that the scaling of the total
+wall-clock time is close to the ideal 1/Np law. The scaling
+of 2LPT initial condition hits a plateau when more than
+4096 computing cores are used, but this is not of partic-
+ular concern since the fraction to the total only amounts
+3% percent even for the 8,192 core run.
+
+The deviation from the 1/Np law is shown in the
+right panel of Figure 1. We show the evolution of the to-
+tal CPU-hours (cost) as we increase the number of cores.
+For ideal 1/Np scaling, the line should be ﬂat. We see
+
+4
+
+Yu Feng, Man-Yat Chu, Uroˇs Seljak
+
+that the total cost increases slowly with the number of
+cores, by a factor of less than 1.45 when the number of
+cores increased by a factor of 64. The increase of total
+cost is primarily due to the imbalance of particles that
+is associated with the decrease of volume per domain.
+For example, with the 8,192 core run, the most loaded
+domain handles 3 times of the average number of par-
+ticles per domain. In a numerical scheme where small
+scale force is fully resolved (TreePM), the computing time
+increases very quickly with the growth of over-density,
+and this imbalance would have signiﬁcantly increased the
+cost. However, in an approximated particle mesh solver
+(like FastPM), the dominating cost component is Fourier
+transform, the load of which is balanced relatively well
+thank to the 2-dimensional decomposition. The increase
+in synchronization time due to particle imbalance only
+slowly increase the total computing time. We point out
+that the relatively quick increase in cost at small num-
+ber of cores (Np < 1, 024) is correlated with the crossing
+of communication boundaries of “local”/ per-cabinet net-
+work on the Cray XC 40 system Cori where the test is
+performed.
+
+OpenMP threading
+
+is usually invoked as
+
+a
+workaround for strong-scaling limitations (e.g. Feng et al.
+2015). For FastPM this particular context is no longer
+relevant. In fact, running with multiple threads is always
+slower than running with equal number of processes, due
+to the lack of thread parallelism in the transpose phase
+of the parallel Fourier transform1. Therefore we do not
+recommend enabling OpenMP threading in FastPM.
+
+2.5 Broadband Correction
+
+When the number of time steps is limited, the Kick-Drift-
+Kick integration scheme fails to produce the linear growth
+in large scale(e.g. Carlson, White & Padmanabhan 2009).
+The error in linear scale growth factor can be quantiﬁed.
+We deﬁne the recovery rate 2 as the mean of the ra-
+tio between the measured power spectrum and the linear
+theory power spectrum at large scales,
+
+2 =< P (k)/Plin(k) >k<kth −1.
+
+(6)
+
+where P (k) is the non-linear power spectrum and Plin(k)
+is the linear theory power spectrum. kth is a free pa-
+rameter that deﬁnes the scales that are “linear”. We
+typically use the lowest 4 k-values along each direction,
+or k < kth = 4 × 2π
+L . This translates to 0.018h/Mpc
+for a box of 1380h−1Mpc per side. We note that at
+kth < 0.018h/Mpc, the linear theory model introduces
+an average 0.1% systematic error in mode amplitude at
+z = 0, which is acceptable for our application (Foreman,
+Perrier & Senatore 2015; Baldauf, Mercolli & Zaldarriaga
+2015; Seljak & Vlah 2015).
+
+The error is especially severe with linear time step-
+ping, where the relative change in the growth factor can
+be as large as 100% – for example, if the ﬁrst two time
+steps are at from a = 0.1 (z = 9) and a = 0.2. Our numer-
+ical experiment shows that the error is already  ∼ 1.5%
+with a single step from a = 0.1 to a = 0.2.
+
+One way of eliminating this error without substan-
+tially increase the number of time steps is to insist the
+large scale growth follows a model. For example, the
+
+1 Refer to https://github.com/mpip/pfft/issues/6 for some
+discussions on this issue.
+
+Figure 2. Recovery of linear growth after broadband correc-
+tion. We show the recovery rate (k) at quasi-linear scales, di-
+vided by full N-body (RunPB). Red: 5 steps; Green: 10 steps;
+Blue: 40 steps. The ﬂuctuations are due to the sampling vari-
+ance errors in recovering the initial condition (see text). We
+also show the ratio of linear modes to full N-body, which show
+that linear theory deviates from the nonlinear results over most
+of the range, hence our broadband correction has to be applied
+at very low k only.
+
+COmoving-LAgrangian (COLA) particle mesh scheme
+calculates the large scale trajectory of particles with sec-
+ond order Lagrangian Perturbation theory (Tassev, Zal-
+darriaga & Eisenstein 2013), which yields the correct
+growth of the large scale modes.
+
+In FastPM we implement a simpler correction which
+we call “broadband correction” (BBC). In BBC, we in-
+troduce an additional factor κ to the Kick step
+
+K(a) → κK(a).
+
+(7)
+
+The α factor allows one additional degree of freedom scal-
+ing the magnitude of the gravitational acceleration. The
+value of κ is solved from the equation
+1 = 1 + 2(κ) =< P (k)[D (cid:12) κK (cid:12) (x, v)]/lin(k) >k<kth ,
+(8)
+
+which demands a vanishing large scale error.
+
+We use the Brent root ﬁnding algorithm in GNU Sci-
+entiﬁc Library to iteratively ﬁnd κ(Brent 1972; Gough
+2009). Typically at most 4 iterations are required for κ
+to converge to 0.1% level accuracy. Each iteration step
+requires an additional drift and kick step, as well as a
+Fourier transform to estimate the power spectrum at large
+scale. Therefore, if all particles is used, the correction
+would be very expensive. However, we use a 1/64th sub-
+sample of the particles (determined at the beginning of
+the simulation), on a coarse mesh with 4 times lower res-
+olution per side than the mean particle separation (or
+eﬀectively, B = 0.25). After the sub-sampling, each itera-
+tion step uses roughly ∼ 1/100 of the time in a step. The
+total additional cost due to BBC in CPU time is about
+5%.
+
+In Figure 2, we show the large scale power spectrum
+of FastPM divided by the full N-body simulation. We
+also show the comparison to the linear theory predic-
+tion, which deviates from nonlinear already at very low
+k. Even with as few as 5 time steps, the broadband cor-
+rection is able to match the linear theory growth at sub-
+percent level. We note that for smaller boxes kth needs
+to be increased, and the systematic error of linear the-
+
+c(cid:13) 0000 RAS, MNRAS 000, 000–000
+
+FastPM: a new scheme for fast simulations of dark matter and halos
+
+5
+
+Figure 1. Strong scaling of FastPM. We perform the test on a 1024h−1Mpc per side box on a 10243 particle grid. We run a total
+of 87 time steps (blendspace time stepping conﬁguration) with the B = 1, 2, 3 force resolution scheme. We choose the variable force
+resolution scheme because in a traditional slab based particle mesh solver, the scaling would have stopped with 1024 cores for the
+B = 1 mesh. The three components shown are 1) Force: the time spent in obtaining acceleration of particles; 2) Domain: the time
+spent in migrating particles between diﬀerent processors; 3) Init; the time spent in generating the 2LPT initial condition.
+
+ory from the non-linear growth increases to percent level
+at kth ∼ 0.05h/Mpc. We point out that it is possible to
+calibrate the correction against 1-loop SPT (with EFT
+corrections) (Seljak & Vlah 2015), or non-linear power
+spectrum measured from 2LPT, although currently these
+improvements are not implemented in FastPM.
+
+3 DARK MATTER AND HALO
+
+BENCHMARKS WITH FASTPM
+
+In this section, we investigate the accuracy of FastPM
+against computational cost, varying several of its pa-
+rameters. We focus particularly on halo formation with
+FastPM, but we also compare it against the dark mat-
+ter statistics. The particular application we have in mind
+is to ﬁnd an approximated halo formation scheme that
+can be used for a fast extraction of galaxy statistics. To
+be more speciﬁc, we would like to ﬁnd an approximation
+scheme that reduces the cost (CPU time), while also re-
+ducing the systematic error of the halo statistics to an
+acceptable level (deﬁned more precisely below).
+
+The parameters we investigate are number of time
+steps Ns and the force resolution B = Nm/Ng, the ra-
+tio between force mesh and number of particles per side.
+We also perform a comparison between COLA and the
+broadband corrected PM. The FastPM simulations used
+in this work are listed in Table 2.
+The simulations are compared against a TreePM sim-
+ulation on 20483 particles in a 1380h−1Mpc per side box
+(RunPB). For the FastPM simulations, we reconstruct
+the s1 and s2 2LPT terms from a single precision z = 75
+initial condition of RunPB, and extrapolate the initial
+displacement to z = 9.0. This ensures that the FastPM
+simulations are using the same initial modes as RunPB,
+up to the numerical errors. In all simulations, the Friend-
+of-Friend ﬁnder uses a linking length of 0.2 times the
+mean separation of particles (Davis et al. 1985).
+
+We list the total CPU time used in each run in Figure
+3. The total CPU time increases with B and Ns. The most
+expensive scheme we considered is the Ns = 40/B =
+3 scheme suggested by Izard, Crocce & Fosalba (2015),
+using 1300 CPU hours each on the reference system (70
+times of 2LPT). Reducing the number of time steps and
+
+c(cid:13) 0000 RAS, MNRAS 000, 000–000
+
+Model Number of Steps
+
+Force Resolution
+
+COLA
+
+PM
+
+COLA
+
+PM
+
+COLA
+
+PM
+
+COLA
+
+PM
+
+COLA
+
+PM
+
+5
+5
+10
+10
+10
+10
+20
+20
+40
+40
+
+Table 2. List of Simulations.
+
+3
+3
+3
+3
+2
+2
+3
+3
+3
+3
+
+Figure 3. The integrated CPU-hours. The text in each verti-
+cal bar shows the ratio to generating a 2LPT initial condition.
+COLA and PM use almost same amount of CPU-hours, thus
+are not independently shown.
+
+the force resolution can drastically reduce the computing
+time. For example, our favorite scheme Ns = 10/B = 2
+uses only 7 times of cost of 2LPT, while Ns = 5/B = 2
+reduces this to 4.
+
+6
+
+Yu Feng, Man-Yat Chu, Uroˇs Seljak
+
+3.1 Deﬁnitions of benchmarks
+
+We use the ratio of mass function φ1(M )/φ2(M ) to illus-
+trate the diﬀerence in mass function. 2 We use abundance
+matching to correct for the diﬀerence in mass function,
+but note that more complicated alternatives have been
+used by other authors as well (e.g. Sunayama et al. 2015;
+Izard, Crocce & Fosalba 2015).
+
+We deﬁne the transfer function T as the square root
+
+(9)
+
+of the ratio of the power spectra
+
+T (k, µ) =(cid:112)P1(k, µ)/P2(k, µ).
+
+The agreement is good when T is close to 1. The transfer
+function measures the relative bias between two ﬁelds. For
+halos, we always use the catalog after abundance match-
+ing. Note that transfer function is often deﬁned as the ra-
+tio of the cross-power spectrum to auto-power spectrum:
+the two deﬁnitions are the same if the cross correlation
+coeﬃcient is unity.
+
+We deﬁne the cross correlation coeﬃcient r as
+
+r(k, µ) = P1,2(k, µ)/(cid:112)P1(k, µ)P2(k, µ),
+
+(10)
+
+where P1,2 is the cross power between the approximated
+and the accurate model. For halos, we always use the cat-
+alog after abundance matching them. We do this by rank
+ordering them by assigned halo mass, and then selecting
+the same number of the most massive halos for the two
+catalogs.
+
+Figure 4. Benchmarks on matter density, varying number of
+time steps. Left: transfer function. Right: cross correlation co-
+eﬃcient. Colors:Ns = 5 (red), 10(green), and 40(blue). Solid :
+PM. Dots : COLA.
+
+From this we can deﬁne another related quantity, the
+
+dimensionless stochasticity,
+
+f (k, µ) =(cid:112)(1 − nP1(k, µ))(1 − nP2(k, µ))
+
++ (1 − nP1,2(k, µ)),
+
+(11)
+
+where n is the number density of halos, which is identical
+in two simulations due to the abundance matching. The
+stochasticity is 1 when two catalogs contains completely
+diﬀerent halos, and 0 when two catalogs are identical. So
+stochasticity f expresses the fraction of misidentiﬁed ha-
+los in the approximate simulation. Typically this happens
+because it has assigned an incorrect mass to the halo, so
+that the halo does not enter the abundance matched cat-
+alog. We could have also deﬁned stochasticity using a
+mass error instead, but we do not pursue this here. In
+addition to the possibility of FastPM completely missing
+a given halo, it can also misplace its true position. This
+will lead to a scale dependence of the stochasticity, such
+that f initially increases with k, before decreasing again
+to converge to the shot noise limit. We do not observe
+a signiﬁcant scale dependence of f at k < 0.5h/Mpc for
+halos.
+
+It is worth pointing out that stochasticity or cross-
+correlation coeﬃcient are in some sense the more impor-
+tant benchmarks than the transfer function. This is be-
+cause if the correlation coeﬃcient is unity (or stochas-
+ticity zero) one can still recover the true simulation by
+multiplying the modes of the approximate simulation by
+the transfer function. Of course this requires the transfer
+function to be known, but it is possible that it is a simple
+function of paramaters, such that one can extract it from
+a small set of simulations without a major computational
+cost. In the following we will however explore all of the
+benchmarks deﬁned here. These are summarized in table
+3 for each simulation.
+
+2 1 stands for the approximated model and 2 stands for the
+accurate model.
+
+Figure 5. Benchmark of halo mass function, varying number
+of time steps. We show the number of times steps (color: red,
+green, blue) from Ns = 5, 10 and 40. Solid: PM. Dots: COLA.
+
+3.2 Varying Number of Time Steps
+
+In this section, we discuss the eﬀects due to varying the
+number of time steps employed in the simulation Ns,
+while ﬁxing the force resolution at B = 3.
+
+The transfer function and cross correlation coeﬃcient
+of matter density relative to the RunPB simulation is
+shown Figure 4. With 5 steps, the cross correlation coef-
+ﬁcient is 93% at k = 1h/Mpc. Increasing the number of
+times does improve transfer functions and cross correla-
+tion coeﬃcients signiﬁcantly. With 40 steps, the transfer
+function is close to 98% at k = 1h/Mpc, and the cross cor-
+relation coeﬃcient is close to 99% at k = 1h/Mpc. These
+metrics indicate that if a high accuracy matter density
+ﬁeld is of interest a 40 step simulation is preferred. It is
+worth pointing out that by extracting the transfer func-
+tion, and then multiplying the modes with it, one obtains
+nearly perfect results up to k = 1h/Mpc even with 10
+steps, given that the cross correlation coeﬃcient is 99%
+or larger over this range.
+
+We also observe that with the Ns = 10 runs COLA
+gives a larger transfer function than FastPM at all scales,
+while Ns = 5 COLA gives a smaller transfer function and
+a signiﬁcantly worse cross correlation coeﬃcients at all
+scales. It is worth noting that COLA has a free parameter
+nLPT which needs to be tweaked for number of steps and
+cosmology parameters(Tassev, Zaldarriaga & Eisenstein
+2013). In our tests we ﬁnd that COLA is very sensitive to
+
+c(cid:13) 0000 RAS, MNRAS 000, 000–000
+
+FastPM: a new scheme for fast simulations of dark matter and halos
+
+7
+
+Samples
+
+Transfer Function†
+
+Cross CorrelationCoeﬃcient†
+
+Stochasticity† Mass Function
+
+Matter
+
+log h−1M/M(cid:12) ≥ 12
+log h−1M/M(cid:12) ≥ 13
+log h−1M/M(cid:12) ≥ 14
+
+Y
+Y
+Y
+Y
+
+Y
+Y
+Y
+Y
+
+N
+Y
+Y
+Y
+
+N/A
+
+Y
+Y
+Y
+
+† For these benchmarks, The halo mass in FastPM simulations are reassigned by abundance matching against halos in RunPB.
+
+Table 3. List of Benchmarks.
+
+the choice of this parameter. In contrast, the broadband
+correction in FastPM does not require tweaking of any
+parameters.
+
+We next look at the halos. Before applying abun-
+dance matching, we ﬁrst show the mass function relative
+to RunPB is shown in Figure 5. For runs with more than
+10 steps, the mass function has converged to 10% agree-
+ment with RunPB regardless of whether COLA or PM is
+used. However, if mass accuracy is required then 5 steps
+appears to be insuﬃcient, as the 5 step PM run recovers
+only 80% of the mass function (60% for COLA). This is
+not necessarily a problem, since exact mass assignment is
+not required in a galaxy survey with a given abundance,
+as long as the rank ordering is preserved. However, in
+practice lower number of steps also introduces errors in
+the mass assignment, which increase the stochasticity, as
+we show below.
+
+The rest of the benchmarks are calculated after ap-
+plying abundance matching to reassign halo masses in
+the FastPM simulations. In Figure 6, we show the bench-
+marks on the transfer function, cross correlation coeﬃ-
+cient and stochasticity of halos as the total number of
+time steps Ns is varied. Three mass threshold, M =
+10(12,13,14)h−1M(cid:12) are used. All the results are for z = 0.
+We ﬁnd the following results:
+
+1) Beyond 10 steps the improvement is very limited.
+This is very diﬀerent from the matter density ﬁeld, where
+one gains major advantage using 40 steps. The additional
+steps therefore mostly improves the proﬁle and velocity
+dispersion of halos.
+
+2) For abundance matched halos, PM out-performs
+COLA at low number of time steps. This can be most
+clearly seen in the 5 step runs, where PM is nearly a fac-
+tor of 2 closer to exact solution at all k, µ values. The
+PM advantage over COLA decreases as the number of
+time steps increases. At 40 steps, PM and COLA con-
+verges to the same result. COLA splits the displacement
+into a residual ﬁeld and a large scale component which
+may have reduced mode-coupling. It is worth noting that
+even though the 10 step COLA simulations give better
+matter transfer function than PM (as seen in Figure 4),
+the advantage in matter density seem to be consistently
+hurting the performance in halos. This could be because
+COLA performance has been optimized for the dark mat-
+ter benchmarks.
+
+3) The approximated simulation matches more mas-
+sive halos better than less massive halos. For example, for
+the 10 step runs, the stochasticity reduces from 10% at
+M > 1012h−1M(cid:12) to 7% at M > 1014h−1M(cid:12). However,
+the overall stochasticity is given by f /n, and since n is a
+lot higher for low mass halos the net stochasticity is a lot
+lower for low mass halos, despite the larger value of f . A
+10% stochasticity is likely more accurate than our current
+level understanding of the halo mass - galaxy luminosity
+relation (Behroozi, Conroy & Wechsler 2010; More et al.
+
+c(cid:13) 0000 RAS, MNRAS 000, 000–000
+
+Figure 7. Benchmarks on matter density, varying force reso-
+lution. Red: B = 2 ; Blue: B = 3; Gray: B = 1. Solid: PM;
+Dots: COLA. The number of steps is ﬁxed to 10.
+
+2009; Yang, Mo & van den Bosch 2009). For example,
+the scatter in the halo mass at a ﬁxed luminosity is 0.4
+dex for 1012h−1M(cid:12) halos (Behroozi, Conroy & Wechsler
+2010), if all uncertainties are considered, and even larger
+for the larger halo masses. As a comparison, for a scat-
+ter of 0.18 dex in halo mass, we introduce a stochasticity
+of f ∼ 0.10, 0.18, 0.22 for halos of mass 1012,13,14h−1M(cid:12).
+Hence we believe that the stochasticity levels generated
+by Ns = 10, or even Ns = 5, suﬃce given the current
+observational uncertainties in halo mass determination.
+
+4) Redshift space statistics (µ > 0 are not very diﬀer-
+ent from the real space statistics (µ = 0. Hence redshift
+space distortions do not signiﬁcantly aﬀect the conclu-
+sions above.
+
+Based on these observations one does not need more
+than 10 steps if halos at z = 0 are of interest, and indeed
+for many applications even a 5 step FastPM, corrected
+with the transfer function, suﬃces. In addition, we com-
+ment that the requirement on the number of steps are
+similar at higher redshift (we tested up to z = 1). Since
+our steps are uniform in expansion factor a, a 10 time
+step FastPM simulation that runs to z = 0 would naively
+have the eﬀective performance of 5 steps at z = 1, but
+we observe that actual performance is more in between 5
+and 10 steps.
+
+3.3 Varying Force Resolution B
+
+In this section, we discuss the eﬀects due to varying the
+resolution of the force mesh employed in the simulation
+B. As we have shown Ns = 10 is of suﬃcient accuracy for
+halos, so we will ﬁx the number of time steps at Ns = 10
+in this section.
+
+The transfer function and cross correlation coeﬃcient
+of dark matter density relative to the RunPB simulation
+is shown Figure 7. We see that going from B = 3 to
+
+8
+
+Yu Feng, Man-Yat Chu, Uroˇs Seljak
+
+Figure 6. Benchmarks on halos, varying number of time steps. Top panel: transfer function. Center panel: cross correlation
+coeﬃcient. Bottom panel: stochasticity. Colors:Ns = 5 (red), 10(green), and 40(blue). Opacity: Line of sight direction, mu = 0.1
+(transparent), 0.3, 0.5, 0.7, 0.9 (opaque). Solid : PM. Dots : COLA. S = 1/n is the shot-noise level.
+
+B = 2 the transfer function and cross correlation coeﬃ-
+cient barely changes, and the cross correlation coeﬃcient
+changes even less.
+
+As in the previous section, before applying abun-
+dance matching we investigate the mass function bench-
+mark in Figure 8. We see that regardless PM or COLA is
+employed, as long as B ≥ 2, the mass function is recov-
+ered at 90% level for M > 1012h−1M(cid:12). However, with a
+lower resolution, B = 1, only 80% of the halo mass func-
+tion is recovered at M = 1013h−1M(cid:12), and even fewer
+halos are found at lower masses. This indicates that due
+to the low resolution, the density contrast in B = 1 is
+insuﬃcient for detecting halos of M ≤ 1013h−1M(cid:12). How-
+ever, one may still be able to salvage information about
+halos in the regime where Friend-of-Friend ﬁnder fails.
+For example, it is possible to combine a stochastic sam-
+pling method (e.g. QPM White, Tinker & McBride 2014)
+
+for less massive halos, but this may increase stochasticity
+and give f ∼ 1.
+
+The rest of the benchmarks are calculated after ap-
+plying abundance matching to reassign halo masses in
+the FastPM simulations. We show the rest of the bench-
+mark suite in Figure 9, which have been calculated after
+abundance matching. The structure of the ﬁgure is sim-
+ilar to Figure 6, but now we vary the force resolution.
+We again observe some slight advantages of PM compar-
+ing to COLA (one percent level). The improvement due
+to increasing the force resolution from B = 2 to B = 3
+is very limited, typically at 1% level. The B = 2 ap-
+proximation has a slightly larger (by 2%) stochasticity
+than B = 3 approximation for the least massive threshold
+(M > 1012h−1M(cid:12)). Given that B = 2 simulation is al-
+most 3 times faster than a B = 3 simulation (See, Figure
+3), the 2% increase in stochasticity is a reasonable price
+
+c(cid:13) 0000 RAS, MNRAS 000, 000–000
+
+FastPM: a new scheme for fast simulations of dark matter and halos
+
+9
+
+Figure 9. Benchmarks on halos, varying force resolution. Top panel: transfer function. Center panel: cross correlation coeﬃcient.
+Bottom panel: stochasticity. Red: B = 2 ; Blue: B = 3; Solid: PM; Dots: COLA. Opacity: Line of sight direction, mu = 0.1
+(transparent), 0.3, 0.5, 0.7, 0.9 (opaque). Solid : PM. Dashed : COLA. S = 1/n is the shot-noise level.
+
+to pay. Overall, we ﬁnd that the Ns = 10/B = 2 approxi-
+mation uses about 10% of CPU time of a Ns = 40/B = 3
+simulation, yet the benchmarks on halos of both are al-
+most identical.
+
+4 CONCLUSIONS
+
+In this paper we introduce FastPM, a new implemen-
+tation of an approximate particle mesh N-body solver.
+FastPM includes a broadband corrected Particle Mesh
+scheme, where we enforce the correct linear growth at
+each time step on very large scales (k < 0.018h/Mpc
+in our runs). The domain decomposition in FastPM for
+parallel Fourier Transform and particle data is in 2-
+dimensions, allowing the code to scale almost linearly
+
+c(cid:13) 0000 RAS, MNRAS 000, 000–000
+
+with the number of CPUs when a large number of CPUs
+are employed.
+
+We then proceed to investigate numerical precision
+of halos identiﬁed with FoF within FastPM. Four bench-
+marks are deﬁned, measuring the performance: ratio of
+halo mass function, transfer function, cross correlation
+coeﬃcient, and stochasticity. We show that
+
+• our implementation of PM (with broadband correc-
+tion) performs slightly better than COLA in all bench-
+marks; especially when the number of time steps is low
+(5 steps).
+• the benchmarks on halos of any scheme with Ns ≥
+10/B ≥ 2 is very close to the exact solution. This makes
+the Ns = 10/B = 2 approximation very interesting,
+as it uses only 7 times of the computing time of gen-
+erating a 2LPT initial condition, and 10% of time of a
+
+10
+
+Yu Feng, Man-Yat Chu, Uroˇs Seljak
+
+Figure 8. Benchmark on halo mass function, varying force
+resolution. Red: B = 2 ; Blue: B = 3; Gray: B = 1. Solid: PM;
+Dots: COLA. The number of steps is ﬁxed to 10.
+
+Ns = 40/B = 3 approximated run. For higher redshifts,
+or for cases where large stochasticity can be tolerated, the
+Ns = 5/B = 2 can also be adequate, at only 4 times the
+computing time of a 2LPT initial condition.
+
+We see several use cases for FastPM:
+
+• As the halo catalog step of a mock factory, FastPM
+can be useful for generating a large number of mock
+catalogs. This is the same use case scenario similar
+to other recently proposed approximate N-body codes
+(Izard, Crocce & Fosalba 2015; Howlett, Manera & Per-
+cival 2015; Sunayama et al. 2015).
+• Non-linear power spectrum (and higher order statis-
+tics) emulator: compared to other codes FastPM can ef-
+ﬁciently utilize a very large amount of computing re-
+sources. In fact, the turn around time with FastPM can
+be as low as 1 minute if suﬃcient computing resources
+are reserved for real time usage. This means a large num-
+ber of models, varying both cosmological parameters and
+nuisance parameters (such as halo occupation distribu-
+tion parameters), can be explored rapidly. We plan to
+implement and expose a programming interface for vari-
+ous cosmology models in FastPM.
+• Initial conditions solver: FastPM is designed as a
+software library, making it easy to embed into another ap-
+plication. One option is the initial conditions solver Wang
+et al. (2013), which requires derivatives as a function of
+initial modes. The scheme we have proposed, B = 2,
+Ns = 10, uses 7 times more CPU time than a single 2LPT
+step, but provides realistic friend-of-friend halos. Depend-
+ing of the allowed stochasticity budget, using Ns = 5 or
+lower may also prove useful for computing the derivatives,
+given that the complexity of derivatives scales with Ns.
+
+While we have focused on the halos in this paper, FastPM
+can also be used for other applications, such as weak lens-
+ing (where dark matter is used) or Lyman alpha forest
+(where a nonlinear transformation of matter density can
+be used as an approximation to the Lyman-alpha ﬂux),
+with all three applications above being of possible inter-
+est. We plan to present some of these applications in the
+future.
+
+Acknowledgment
+acknowledge
+We
+
+support
+
+of NASA grant
+NNX15AL17G. The majority of the computing re-
+sources are provided at NERSC through the allocations
+for the Baryon Oscillation Spectroscopic Survey (BOSS)
+program and for the Berkeley Institute for Data Sci-
+
+ence (BIDS) program. We thank Dr. Jun Kuda for
+distributing the source code of cola_halo under the
+GPLv3 license, which served both as a design in-
+spiration and as a reference implementation of the
+COLA scheme. We thank Alejandro Cervantes and
+Marcel Schmittfull
+for their generous help in test-
+ing the code. We thank Martin White for providing
+the RunPB TreePM simulation and initial condition
+that formed the foundations of our benchmarks. The
+development of FastPM is hosted by github.com at
+https://github.com/rainwoodman/fastpm. The version
+of code used in this paper is based on commit 93e6dd.
+The data analysis software nbodykit is used for iden-
+tifying Friend-of-Friend halos and calculating of power
+spectra. 3 We welcome collaboration on development for
+both software packages.
+
+APPENDIX A: USER GUIDE
+
+FastPM works out of the box on many GNU/Linux and
+compatible systems. Notably the development is per-
+formed on a Cray system, a Fedora Workstation, and the
+integrated continuous integration tests are performed on
+a Ubuntu based Linux distribution. The recommended
+compiler is gcc.
+
+We ﬁrst focus on the command line interface (CLI)
+of FastPM. The C application programming interface (C-
+API) is discussed brieﬂy near the end of this section.
+
+The CLI consists of two main executable ﬁles:
+
+• src/fastpm is the main executable ﬁle of FastPM.
+• src/fastpm-lua is an interpreter that executes the
+
+main function deﬁned in a parameter ﬁle.
+
+A parameter ﬁle instructs the run of FastPM. The
+parameter ﬁle is written in the LUA programming lan-
+guage. In a parameter ﬁle, the command-line arguments
+can be accessed by the args variable. Because a parame-
+ter ﬁle is a complete program by itself, with some creativ-
+ity one can check the consistency of the parameter ﬁle or
+generate job scripts before submitting to a batch system,
+using the interpreter src/fastpm-lua. Several example
+parameter ﬁles are distributed with the software in the
+code repository. We refer the readers to the lua reference
+manual for syntax and run-time libraries of the lua pro-
+gramming language (Ierusalimschy 2013).
+
+FastPM is built with the GNU make tool. One should
+modify Makefile.local to make sure the correct compil-
+ers and paths are used; we provided several example ﬁles
+too.
+
+The software packages used by FastPM are
+
+• A MPI development environment (e.g. openmpi);
+• Version 1.15 of the GNU scientiﬁc library (GSL);
+• A LUA interpreter and the PFFT Fourier transform
+libraries are bundled as built-in dependencies to simplify
+the building process. Downloading the PFFT source code
+requires a working Internet connection.
+
+There are three types of initial conditions:
+
+(i) Particle position and velocity evolved with 2LPT
+initial condition generator. The Lagrangian position of
+the particles are assumed to be on a regular grid, and the
+
+3 https://github.com/bccp/nbodykit, separate being pre-
+pared.
+
+c(cid:13) 0000 RAS, MNRAS 000, 000–000
+
+FastPM: a new scheme for fast simulations of dark matter and halos
+
+11
+
+s1, s2 terms are recovered from velocity and displacement
+according to the cosmology speciﬁed in the parameter ﬁle.
+(ii) A random seed and a linear theory power-spectrum
+at z = 0. The Gaussian seed is sampled from the
+same random number sequence as Gadget N-GENIC.
+The initial power spectrum follows the conventions of
+CAMB(Lewis & Bridle 2002). The plain text ﬁle contains
+two columns: k and P (k) in h/Mpc units. We provide an
+example power spectrum based on the Planck 2015 cos-
+mology parameters.
+
+(iii) A white noise ﬁeld in real space and a linear theory
+power spectrum. The format of the ﬁle is expected to be
+in GRAFIC format (Bertschinger 2001). The ﬁle contains
+a set of FORTRAN 77 unformatted data blocks, one per
+each slab in z-y plane. The size of the GRAFIC mesh
+must match with the number of particles in FastPM. It
+is important to be aware that the coordinates in FastPM
+is transposed from GRAFIC, with the transformation {
+x → z, y → y, z → x }.
+
+An arbitrary list of time steps can be speciﬁed in the
+parameter ﬁle. Though we provide functions the create
+three commonly used time stepping:4
+
+• linspace(a_0,a_1,N) N + 1 steps linear in scaling
+• logspace(loga_0,loga_1,N) N + 1 steps linear in
+
+factor a ∈ [a0, a1].
+log a ∈ [lg a0, lg a1].
+
+FastPM measures and stores the dark matter power
+spectrum at each Kick step to a path speciﬁed in the
+parameter ﬁle. Note that no correction for aliasing or shot
+noise is applied.
+
+The default snapshot of FastPM is “bigﬁle”, which
+stores data in a sequence of plain binary ﬁles and meta
+data in plain text ﬁles.5 For compatibility, FastPM also
+saves snapshots in the RunPB format. The snapshots can
+be read by nbodykit via the FastPM data source plugin
+and the TPMSnapshot data source plugin.
+
+The C-API of FastPM is libfastpm, which contains
+the core FastPM numerical solver. The library is built
+as libfastpm/libfastpm.a. The public header ﬁles are
+located in api directory. We refer interested users to src/
+test2lpt.c and src/testpm.c for example uses of the C-
+API.
+
+References
+
+Bagla J. S., 2002, Journal of Astrophysics and Astron-
+
+omy, 23, 185
+
+Baldauf T., Mercolli L., Zaldarriaga M.,
+
+2015,
+
+Phys. Rev. D, 92, 123007
+
+Behroozi P. S., Conroy C., Wechsler R. H., 2010, ApJ,
+
+717, 379
+
+Bertschinger E., 2001, ApJS, 137, 1
+Brent R. P., 1972, Algorithms for Minimisation without
+
+Derivatives (Automatic Computation). Prentice Hall
+
+Carlson J., White M., Padmanabhan N., 2009,
+
+Phys. Rev. D, 80, 043531
+
+4 The names are inspired from similar functions to generate se-
+quences in numpy, but be aware of the subtle diﬀerences. Func-
+tions here always includes an additional “end” point, while
+those in numpy do not.
+5 http://github.com/rainwoodman/bigfile, a reproducible
+massively parallel IO library for hierarchical data, publication
+pending
+
+c(cid:13) 0000 RAS, MNRAS 000, 000–000
+
+Cooray A., Sheth R., 2002, Phys. Rep., 372, 1
+Davis M., Efstathiou G., Frenk C. S., White S. D. M.,
+
+1985, ApJ, 292, 371
+
+Feng Y., Di-Matteo T., Croft R. A., Bird S., Battaglia
+
+N., Wilkins S., 2015, ArXiv e-prints
+
+Foreman S., Perrier H., Senatore L., 2015, ArXiv e-prints
+Gough B., 2009, GNU Scientiﬁc Library Reference Man-
+
+ual - Third Edition, 3rd edn. Network Theory Ltd.
+
+Habib S., Morozov V., Frontiere N., Finkel H., Pope A.,
+Heitmann K., 2013, in Proceedings of the International
+Conference on High Performance Computing, Network-
+ing, Storage and Analysis, SC ’13, ACM, New York,
+NY, USA, pp. 6:1–6:10
+
+Hamming R. W., 1989, Digital Filters (3rd Ed.). Pren-
+tice Hall International (UK) Ltd., Hertfordshire, UK,
+UK
+
+Heitmann K., White M., Wagner C., Habib S., Higdon
+
+D., 2010, ApJ, 715, 104
+
+Hockney R. W., Eastwood J. W., 1988, Computer Sim-
+ulation Using Particles. Taylor & Francis, Inc., Bristol,
+PA, USA
+
+Howlett C., Manera M., Percival W. J., 2015, Astronomy
+
+and Computing, 12, 109
+
+Ierusalimschy R., 2013, Programming in Lua, Third Edi-
+
+tion, 3rd edn. Lua.Org
+
+Izard A., Crocce M., Fosalba P., 2015, ArXiv e-prints
+Jasche J., Wandelt B. D., 2013, MNRAS, 432, 894
+Khandai N., Bagla J. S., 2009, Research in Astronomy
+
+and Astrophysics, 9, 861
+
+Kitaura F.-S., Yepes G., Prada F., 2014, MNRAS, 439,
+
+L21
+
+Knebe A. et al., 2015, MNRAS, 451, 4029
+Koda J., Blake C., Beutler F., Kazin E., Marin F., 2015,
+
+ArXiv e-prints
+
+Lewis A., Bridle S., 2002, Phys. Rev., D66, 103511
+Menon H., Wesolowski L., Zheng G., Jetley P., Kale L.,
+Quinn T., Governato F., 2015, Computational Astro-
+physics and Cosmology, 2, 1
+
+Merz H., Pen U.-L., Trac H., 2005, New A, 10, 393
+Monaco P., Sefusatti E., Borgani S., Crocce M., Fosalba
+P., Sheth R. K., Theuns T., 2013, MNRAS, 433, 2389
+More S., van den Bosch F. C., Cacciato M., Mo H. J.,
+
+Yang X., Li R., 2009, MNRAS, 392, 801
+
+Pekurovsky D., 2012, SIAM Journal on Scientiﬁc Com-
+
+puting, 34, C192
+
+Pippig M., 2013, SIAM J. Sci. Comput., 35, C213
+Quinn T., Katz N., Stadel J., Lake G., 1997, ArXiv As-
+
+trophysics e-prints
+
+Seljak U., Vlah Z., 2015, Phys. Rev. D, 91, 123516
+Springel V., 2005, MNRAS, 364, 1105
+Sunayama T., Padmanabhan N., Heitmann K., Habib
+
+S., Rangel E., 2015, ArXiv e-prints
+
+Tassev S., Eisenstein D. J., Wandelt B. D., Zaldarriaga
+
+M., 2015, ArXiv e-prints
+
+Tassev S., Zaldarriaga M., Eisenstein D. J., 2013, J. Cos-
+
+mology Astropart. Phys., 6, 36
+
+Wang H., Mo H. J., Yang X., van den Bosch F. C., 2013,
+
+ApJ, 772, 63
+
+White M., Pope A., Carlson J., Heitmann K., Habib S.,
+
+Fasel P., Daniel D., Lukic Z., 2010, ApJ, 713, 383
+
+White M., Tinker J. L., McBride C. K., 2014, MNRAS,
+
+437, 2594
+
+Yang X., Mo H. J., van den Bosch F. C., 2009, ApJ, 695,
+
+900
+
+

@@ -1,0 +1,2343 @@
+Fast Optical Flow using Dense Inverse Search
+
+Till Kroeger1
+
+Radu Timofte1
+
+Dengxin Dai1
+
+Luc Van Gool1,2
+
+1Computer Vision Laboratory, D-ITET, ETH Zurich
+
+2VISICS / iMinds, ESAT, K.U. Leuven
+
+{kroegert, timofter, dai, vangool}@vision.ee.ethz.ch
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+1
+1
+
+ 
+ 
+]
+
+V
+C
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+0
+9
+5
+3
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Abstract
+
+Most recent works in optical ﬂow extraction focus on the
+accuracy and neglect the time complexity. However, in real-
+life visual applications, such as tracking, activity detection
+and recognition, the time complexity is critical.
+
+We propose a solution with very low time complexity
+and competitive accuracy for the computation of dense op-
+tical ﬂow. It consists of three parts: 1) inverse search for
+patch correspondences; 2) dense displacement ﬁeld cre-
+ation through patch aggregation along multiple scales; 3)
+variational reﬁnement. At the core of our Dense Inverse
+Search-based method (DIS) is the efﬁcient search of cor-
+respondences inspired by the inverse compositional image
+alignment proposed by Baker and Matthews [3, 1] in 2001.
+DIS is competitive on standard optical ﬂow benchmarks
+with large displacements. DIS runs at 300Hz up to 600Hz
+on a single CPU core1, reaching the temporal resolution
+of human’s biological vision system [8]. It is order(s) of
+magnitude faster than state-of-the-art methods in the same
+range of accuracy, making DIS ideal for visual applications.
+
+1. Introduction
+
+Optical ﬂow estimation is under constant pressure to in-
+crease both its quality and speed. Such progress allows for
+new applications. A higher speed enables its inclusion into
+larger systems with extensive subsequent processing (e.g.
+reliable features for motion segmentation, tracking or ac-
+tion/activity recognition) and its deployment in computa-
+tionally constrained scenarios (e.g. embedded system, au-
+tonomous robots, large-scale data processing).
+
+A robust optical ﬂow algorithm should cope with dis-
+continuities (outliers, occlusions, motion discontinuities),
+appearance changes (illumination, chromacity, blur, defor-
+mations), and large displacements. Decades after the pio-
+neering research of Horn and Schunck [27] and Lucas and
+Kanade [35] we have solutions for the ﬁrst two issues [9, 38]
+11024×436 resolution. 42Hz / 46Hz when including preprocessing:
+disk access, image re-scaling gradient computation. More details in § 3.1
+
+(1) DIS @ 600Hz
+
+(2) DIS @ 300Hz
+
+(3) DIS @ 10Hz
+
+Ground Truth
+
+Figure 1: Our DIS method runs at 10Hz up to 600Hz on a single
+core CPU for an average end-point pixel error smaller or similar to
+top optical ﬂow methods at comparable speed. This plot excludes
+preprocessing time for all methods. Details in § 3.1,3.3.
+
+and recent endeavors lead to signiﬁcant progress in han-
+dling large displacements [45, 13, 11, 31, 49, 28, 36, 41,
+2, 51, 53, 54, 55, 18]. This came at the cost of high run-
+times usually not acceptable in computationally constrained
+scenarios such as real-time applications. Recently, only
+very few works aimed at balancing accuracy and run-time
+in favor of efﬁciency [17, 48, 54], or employed massively
+parallelized dedicated hardware to achieve acceptable run-
+times [4, 40, 18]. In contrast to this, recently it has been
+noted for several computer vision tasks [24, 44, 8, 6], that
+it is often desirable to trade-off powerful but complex algo-
+rithms for simple and efﬁcients methods, and rely on high
+frame-rates and smaller search spaces for good accuracy.
+
+In this paper we focus on improving the speed of op-
+tical ﬂow in general, non-domain-speciﬁc scenarios, while
+remaining close to the state-of-the-art ﬂow quality. We pro-
+pose two novel components with low time complexity, one
+using inverse search for fast patch correspondences, and one
+based on multi-scale aggregation for fast dense ﬂow estima-
+tion. Additionally, a fast variational reﬁnement step further
+improves the solution of our dense inverse search-based
+method. Altogether, we obtain speed-ups of 1-2 orders of
+magnitude over state-of-the-art methods at comparable ﬂow
+quality operating points (Fig. 1). The run-times are in the
+range of 10-600 Hz on 1024×436 resolution images by us-
+
+1
+
+1000 Hz100 Hz10 Hz1 Hz4.555.566.577.588.599.5 Run−time (Hz) Avg. end−point error (px)     1   2   3  93 × speed−up Our MethodFarnebackPCA−FlowSparseFlowDeepFlow Avg. EPE: 1.89, Our Method, 600 Hz Avg. EPE: 1.52, Our Method, 300 Hz Avg. EPE: 0.66, Our Method, 10 Hz Ground Truth Flowing a single CPU core on a common desktop PC, reaching
+the temporal resolution of human’s biological vision sys-
+tem [8]. To the best of our knowledge, this is the ﬁrst time
+that optical ﬂow at several hundred frames-per-second has
+been reached with such high ﬂow quality on any hardware.
+
+1.1. Related work
+
+Providing an exhaustive overview [20] of optical ﬂow
+estimation is beyond the scope of this paper. Most of the
+work on improving the time complexity (without trading-
+off quality) combines some of the following ideas:
+
+While, initially, the feature descriptors of choice were
+extracted sparsely, invariant under scaling or afﬁne trans-
+formations [37], the recent trend in optical ﬂow estimation
+is to densely extract rigid (square) descriptors from local
+frames [50, 13, 33]. HOG [15], SIFT [34], and SURF [7]
+are among the most popular square patch support descrip-
+tors.
+In the context of scene correspondence, the SIFT-
+ﬂow [33] and PatchMatch [5] algorithms use descriptors or
+small patches. The descriptors are invariant only to similar-
+ities which may be insufﬁcient especially for large displace-
+ments and challenging deformations [13].
+
+The feature matching usually employs a (reciprocal)
+nearest neighbor operation [34, 5, 13].
+Important excep-
+tions are the recent works of Weinzaepfel et al. [51] (non-
+rigid matching inspired by deep convolutional nets), of
+Leordeanu et al. [31] (enforcing afﬁne constraints), and of
+Timofte et al. [49] (robust matching inspired by compressed
+sensing). They follow Brox and Malik [13] and guide a
+variational optical ﬂow estimation through (sparse) corre-
+spondences from the descriptor matcher and can thus han-
+dle arbitrarily large displacements. Xu et al. [55] combine
+SIFT [34] and PatchMatch [5] matching for reﬁned ﬂow
+level initialization at the expense of computational costs.
+
+An optimization problem is often at the core of the ﬂow
+extraction methods. The ﬂow is estimated by minimizing an
+energy that sums up matching errors and smoothness con-
+straints. While Horn and Schunck [27] proposed a vari-
+ational approach to globally optimize the ﬂow, Lucas and
+Kanade [35] solve the correspondence problem for each im-
+age patch locally and independently. The local [35, 48, 43]
+methods are usually faster but less accurate than the global
+ones. Given location and smoothness priors over the image,
+MRF formulations have been proposed [25, 47].
+
+Parallel computation is a natural way of improving the
+run-time of the optical ﬂow methods by (re)designing them
+for parallelization. The industry historically favored spe-
+cialized hardware such as FPGAs [39], while the recent
+years brought the advance of GPUs [40, 4, 18, 58]. Yet,
+multi-core design on the same machine is the most common
+parallelization. However, many complex ﬂow methods are
+difﬁcult to adapt for parallel processing.
+
+Learning. Most of the optical ﬂow methods exploit
+
+training images for parameter tuning. However, this is
+only a rough embedding of prior knowledge. Only re-
+cently methods were proposed that successfully learn spe-
+ciﬁc models from such training material. Wulff et al. [54]
+assume that any optical ﬂow ﬁeld can be approximated by
+a decomposition over a small learned basis of ﬂow ﬁelds.
+Fischer et al. [18] construct Convolutional Neural Networks
+(CNNs) capable to solve the optical ﬂow estimation.
+
+Coarse-to-ﬁne optimizations have been applied fre-
+quently to ﬂow estimation [16, 13] to avoid poor local min-
+ima, especially for large motions, and thus to improve the
+performance and to speed up the convergence.
+
+Branch and bound and Priority queues have been used
+to ﬁnd smart strategies to ﬁrst explore the ﬂow in the most
+favorable image regions and gradually reﬁne it for the more
+ambiguous regions. This often leads to a reduction in com-
+putational costs. The PatchMatch method of Barnes et
+al. [5] follows a branch and bound strategy, gradually ﬁxing
+the most promising correspondences. Bao et al. [4] propose
+the EPPM method based on PatchMatch.
+
+Dynamic Vision Sensors [32], asynchronously captur-
+ing illumination changes at microsecond latency, have re-
+cently been used to compute optical ﬂow. Benosman [8]
+and Barranco [6] note that realistic motion estimation tasks,
+even with large displacements, become simple when cap-
+turing image evidence with speed in the kilohertz-range.
+
+1.2. Contributions
+
+We present a novel optical ﬂow method based on dense
+inverse search (DIS), which we demonstrate to provide
+high quality ﬂow estimation at 10-600 Hz on a single CPU
+core. This method is 1-2 orders of magnitude times faster
+than previous results [51, 49, 54] on the Sintel [14] and
+KITTI [21] datasets when considering all methods at com-
+parable ﬂow quality operating points. At the same time it is
+signiﬁcantly more accurate compared to existing methods
+running at equal speed [17, 35]. This result is based on two
+main contributions:
+
+Fast inverse search for correspondences.
+
+Inspired
+by the inverse compositional image alignment of Baker and
+Matthews [3, 1] we devise our inverse search procedure (ex-
+plained in § 2.1) for fast mining of a grid of patch-based
+correspondences between two input images. While usually
+less robust than exhaustive feature matching, we can extract
+a uniform grid of correspondences in microseconds.
+
+Fast optical ﬂow with multi-scale reasoning. Many
+methods assume sparse and outlier-free correspondences,
+and rely heavily on variational reﬁnement to extract pixel-
+wise ﬂow [51, 49]. This helps to smooth-out small er-
+rors, and cover regions with ﬂat and ambigious textures,
+where exhaustive feature matching often fails. Other meth-
+ods rely directly on pixel-wise reﬁnement [40, 4]. We chose
+a middle ground and propose a very fast and robust patch-
+
+averaging-scheme, performed only once per scale, after
+grid-based correspondences have been extracted. This step
+gains robustness against outlier correspondences, and ini-
+tializes a pixel-wise variational reﬁnement, performed once
+per scale. We reach an optimal trade-off between accuracy
+and speed at 300Hz on a single CPU core, and reach 600Hz
+without variational reﬁnement at the cost of accuracy. Both
+operating points are marked as (2) and (1) in Fig. 1, 4, 5.
+
+Related to our approach is [40]. Here, the inverse image
+warping idea [1] is used on all the pixels, while our method
+optimizes patches independently. In contrast to our densiﬁ-
+cation done once per scale, they rely on frequent ﬂow inter-
+polations, which requires a high-powered GPU, and still is
+signiﬁcantly slower than our CPU-only approach.
+The structure of the paper is as follows: In § 2 we intro-
+duce our DIS method. In § 3 we describe the experiments,
+separately evaluate the patch-based correspondence search,
+and analyse the complete DIS algorithm with and without
+the variational reﬁnement. In § 4 we conclude the paper.
+
+2. Proposed method
+
+In the following, we introduce our dense inverse search-
+based method (DIS) by describing: how we extract single
+point correspondences between two images in § 2.1, how
+we merge a set of noisy point correspondences on each level
+s of a scale-pyramid into a dense ﬂow ﬁeld Us in § 2.2, and
+how we reﬁne Us using variational reﬁnement in § 2.3.
+2.1. Fast inverse search for correspondences
+
+The core component in our method to achieve high per-
+formance is the efﬁcient search for patch correspondences.
+In the following we will detail how we extract one single
+point correspondence between two frames.
+For a given template patch T in the reference image It,
+with a size of θps × θps pixels, centered on location x =
+(x, y)T , we ﬁnd the best-matching sub-window of θps× θps
+pixels in the query image It+1 using gradient descent. We
+are interested in ﬁnding a warping vector u = (u, v) such
+that we minimize the sum of squared differences over the
+sub-window between template and query location:
+[It+1(x + u(cid:48)) − T (x)]2 .
+
+(cid:88)
+
+u = argminu(cid:48)
+
+(1)
+
+x
+
+Minimizing this quantity is non-linear and is optimized it-
+eratively using the inverse Lukas-Kanade algorithm as pro-
+posed in [1]. For this method two steps are alternated for
+a number of iterations or until the quantity (1) converges.
+For the ﬁrst step, the quantity (2) is minimized around the
+current estimate u for an update vector ∆u such that
+
+∆u = argmin∆u(cid:48)
+
+[It+1(x + u + ∆u(cid:48)) − T (x)]2 (2)
+
+(cid:88)
+
+x
+
+Algorithm 1 Dense Inverse Search (DIS)
+1: Set initial ﬂow ﬁeld Uθss+1 ← 0
+2: for s = θss to θsf do
+3:
+4:
+5:
+6:
+7:
+8:
+
+(1.) Create uniform grid of Ns patches
+(2.) Initialize displacements from Us+1
+for i = 1 to Ns do
+
+(3.) Inverse search for patch i
+
+(4.) Densiﬁcation: Compute dense ﬂow ﬁeld Us
+(5.) Variational reﬁnement of Us
+
+tive function(cid:80)
+
+The ﬁrst step requires extraction and bilinear interpolation
+of a sub-window It+1(x + u) for sub-pixel accurate warp
+updates. The second step updates the warping u ← u+∆u.
+The original Lukas-Kanade algorithm [35] required ex-
+pensive re-evaluation of the Hessian of the image warp
+at every iteration. As proposed in [1] the inverse objec-
+x [T (x − ∆u) − It+1(x + u)]2 can be op-
+timized instead of (2), removing the need to extract the im-
+age gradients for It+1(x + u) and to re-compute the Jaco-
+bian and Hessian at every iteration. Due to the large speed-
+up this inversion has successfully been used for point track-
+ing in SLAM [29], camera pose estimation [19], and is cov-
+ered in detail in [1] and our supplementary material.
+
+In order to gain some robustness against absolute illumi-
+
+nation changes, we mean-normalize each patch.
+
+One challenge of ﬁnding sparse correspondences with
+this approach is that the true displacements cannot be larger
+than the patch size θps, since the gradient descent is de-
+pendent on similar image context in both patches. Often a
+coarse-to-ﬁne approach with ﬁxed window-size but chang-
+ing image size is used [29, 19], ﬁrstly, to incorporate larger
+smoothed contexts at coarser scales and thereby lessen the
+problem of falling into local optima, secondly, to ﬁnd larger
+displacements, and, thirdly, to ensure fast convergence.
+2.2. Fast optical ﬂow with multi-scale reasoning
+
+We follow this multi-scale approach, but, instead of op-
+timizing patches independently, we compute an intermedi-
+ate dense ﬂow ﬁeld and re-initialize patches at each level.
+This is because of two reasons: 1) the intermediate dense
+ﬂow ﬁeld smooths displacements and provides robustness,
+effectively ﬁltering outliers and 2) it reduces the number
+of patches on coarser scales, thereby providing a speed-up.
+We operate in a coarse-to-ﬁne fashion from a ﬁrst (coarsest)
+level θss in a scale pyramid with a downscaling quotient of
+θsd to the last (ﬁnest) level θsf . On each level our method
+consists of ﬁve steps, summarized in algorithm 1, yielding
+a dense ﬂow ﬁeld Us in each iteration s.
+
+(1.) Creation of a grid: We initialize patches in a uni-
+form grid over the image domain. The grid density and
+number of patches Ns is implicitly determined by the pa-
+rameter θov ∈ [0, 1) which speciﬁes the overlap of adjacent
+
+Ns(cid:88)
+
+i
+
+patches and is always ﬂoored to an integer overlap in pixels.
+A value of θov = 0 denotes a patch adjacency with no over-
+lap and θov = 1 −  results in a dense grid with one patch
+centered on each pixel in the reference image.
+
+(2.) Initialization: For the ﬁrst iteration (s = θss) we
+initialize all patches with the trivial zero ﬂow. On each sub-
+sequent scale s we initialize the displacement of each patch
+i ∈ Ns at its location x with the ﬂow from the previous
+(coarser) scale: ui,init = Us+1(x/θsd) · θsd.
+puted independently for all patches as detailed in § 2.1.
+
+(3.) Inverse search: Optimal displacements are com-
+
+(4.) Densiﬁcation: After step three we have updated
+displacement vectors ui. For more robustness against out-
+liers, we reset all patches to their initial ﬂow ui,init for which
+the displacement update (cid:107)ui,init − ui(cid:107)2 exceeds the patch
+size θps. We create a dense ﬂow ﬁeld Us in each pixel x
+by applying weighted averaging to displacement estimates
+of all patches overlapping at x in the reference image:
+
+Us(x) =
+
+1
+Z
+
+λi,x
+
+max(1,(cid:107)di(x)(cid:107)2)
+
+· ui
+
+,
+
+(3)
+
+where the indicator λi,x = 1 iff patch i overlaps with
+location x in the reference image, di(x) = It+1(x +
+ui) − T (x) denotes the intensity difference between tem-
+plate patch and warped image at this pixel, ui denotes
+the estimated displacement of patch i, and normalization
+
+i λi,x/ max(1,(cid:107)di(x)(cid:107)2).
+
+Z =(cid:80)
+
+(5.) Variational Reﬁnement: The ﬂow ﬁeld Us is re-
+
+ﬁned using energy minimization as detailed in § 2.3.
+2.3. Fast Variational reﬁnement
+
+We use a simpliﬁed variant of the variational reﬁnement
+of [51] without a feature matching term and intensity im-
+ages only. We reﬁne only on the current scale. The energy
+is a weighted sum of intensity and gradient data terms (EI,
+EG) and a smoothness term (ES) over the image domain Ω:
+
+(cid:90)
+
+E(U) =
+
+σ Ψ(EI ) + γ Ψ(EG) + α Ψ(ES) dx
+
+(4)
+
+Ω
+
+√
+We use a robust penalizer Ψ(a2) =
+0.001 for all terms as proposed in [46].
+
+We use a separate penalization of intensity and gra-
+dient constancy assumption, with normalization as pro-
+posed in [59]: With the brightness constancy assumption
+3 I)u = 0, where ∇3 = (∂x, ∂y, ∂z)T denotes the
+(∇T
+spatio-temporal gradient, we can model the intensity data
+term as EI = uT ¯J0 u. We use the normalized tensor
+¯J0 = β0 (∇3I)(∇T
+3 I) to enforce brightness constancy, with
+normalization β0 = ((cid:107)∇2I(cid:107)2 + 0.01)−1 by the spatial
+derivatives and a term to avoid division by zero as in [59].
+constancy:
+EG = uT ¯Jxy u with ¯Jxy = βx(∇3Idx)(∇T
+3 Idx) +
+
+Similarly, EG penalizes
+
+the gradient
+
+βy(∇3Idy)(∇T
+((cid:107)∇2Idx(cid:107)2 + 0.01)−1 and βy = ((cid:107)∇2Idy(cid:107)2 + 0.01)−1.
+
+normalizations
+
+3 Idy),
+
+and
+
+βx
+
+=
+
+The smoothness term is a penalization over the norm of
+
+the gradient of displacements: ES = (cid:107)∇u(cid:107)2 + (cid:107)∇v(cid:107)2.
+
+The non-convex energy E(U) is minimized iteratively
+with θvo ﬁxed point iterations and θvi iterations of Succes-
+sive Over Relaxation (SOR) for the linear system, as in [12].
+
+2.4. Extensions
+
+Our method lends itself to ﬁve extensions as follows:
+
+i. Parallelization of all time-sensitive parts of our
+method (step 3, 5 in § 2.2) is trivially achievable, since
+patch optimization operates independently, and in the vari-
+ational reﬁnement the linear systems per pixel are inde-
+pendent as well. We parallelized our implementation with
+OpenMP and received an almost linear speed-up with num-
+ber of cores. However, since for fast run-times the overhead
+of thread creation is signiﬁcant, we used only a single core
+in our experiments. Parallelization will be useful in online-
+scenarios where thread creation is handled once at the start.
+ii. Using RGB color images, instead of intensity only,
+boosts the score in most top-performing optical ﬂow meth-
+ods. In our experiments, we found that using color is not
+worth the observed increase of the run-time.
+
+iii. Enforcing forward-backward consistency of ﬂow
+can boost accuracy. Similarly to using color, we found that
+the boost is not worth the observed doubling of the run-time.
+iv. Robust error norms, such as L1 and the Huber-
+norm[52], can be used instead of the L2-norm, implicit in
+the optimization of (1). Experimentally, we found that the
+gained robustness is not worth the slower convergence.
+
+v. Using DIS for stereo depth, requires the estimation
+of the horizontal displacement of each pixel. Removing the
+vertical degree of freedom from our method is trivial.
+
+See the supplementary material for experiments on i.-v.
+
+In order to evaluate the performance of our method, we
+present three sets of experiments. Firstly, we conduct an
+analysis of our parameter selection in § 3.1. Here, we also
+study the impact of variational reﬁnement in our method.
+Secondly, we evaluate the inverse search (step 3 in algo-
+rithm 1) in § 3.2 without densiﬁcation (step 4). The com-
+plete pipeline for optical ﬂow is evaluated in § 3.3, and
+3.4. Thirdly, since the problem of recovering large displace-
+ments can also be handled by higher frame-rates combined
+with lower run-time per frame-pair, we conduct an experi-
+ment in § 3.5 to analyse the beneﬁt of higher frame-rates.
+
+a2 + 2, with  =
+
+3. Experiments
+
+ﬁnest scale in multi-scale pyramide
+
+number of gradient descent iterations per patch
+
+Parameter
+
+θsf
+θit
+θps
+θov
+θsd
+θss
+
+Function
+
+rectangular patch size in (pixel)
+
+patch overlap on each scale (percent)
+downscaling quotient in scale pyramid
+coarsest scale in multi-scale pyramid
+
+θvo, θvi
+δ, γ, α intensity, gradient and smoothness weights for variational reﬁnement
+
+number of outer and inner iterations for variational reﬁnement
+
+Table 1: Parameters of our method. Parameters in bold have a
+signiﬁcant impact on performance and are cross-validated in § 3.1.
+
+NN
+DIS w/o Densiﬁcation
+DIS
+DeepMatching [51]
+
+EPE all
+32.06
+7.76
+4.16
+3.60
+
+s0-10
+13.64
+2.16
+0.84
+1.27
+
+s10-40
+53.77
+8.65
+4.98
+3.91
+
+s40+
+101.00
+37.94
+23.09
+16.49
+
+Table 2: Error of sparse correspondences (pixels). Columns left to
+right: i) average end-point error over complete ﬂow ﬁeld, ii) error
+in displacement range < 10 px., iii) 10 − 40 px., iv) > 40 px.
+
+θsf ), more patch iterations (higher θit), higher patch den-
+sity (higher θov) generally lowers the error, but, depending
+on the time budget, may not be worth it. Secondly, the patch
+size θps has a clear optimum at 8 and 12 pixels. This also
+did not change when varying θps at lower θsf or higher θit.
+Thirdly, using variational reﬁnement always signiﬁcantly
+reduced the error for a moderate increase in run-time.
+
+More implementation details and timings of all parts of
+
+algorithm 1 can be found in the supplementary material.
+
+In addition we have several parameters of lower impor-
+tance, which are ﬁxed for all experiments. We set θsd = 2,
+i.e. we use a standard image pyramid, where the resolu-
+tion is halved with each downscaling. We set the coars-
+est image scale θss = 5 for § 3.3 and θss = 6 for § 3.4
+due to higher image resolutions. For different patch sizes
+and image pyramids the coarsest scale can be selected as
+(2 · width)/(f · θps) and raised to the near-
+θss = logθsd
+est integer, to capture motions of at least 1/f of the image
+width. For the variational reﬁnement we ﬁx intensity, gra-
+dient and smoothness weights as δ = 5, γ = 10, α = 10
+and keep iteration numbers ﬁxed at θvo = 1· (s + 1), where
+s denotes the current scale and θvi = 5. In contrast to our
+comparison baselines [51, 49, 54], we do not ﬁne-tune our
+method for a speciﬁc dataset in our experiments. We use a
+20 percent subset of Sintel training to develop our method,
+and only the remaining training material is used for evalua-
+tion. All parameters are summarized in Table 1.
+
+If the ﬂow is not computed up to ﬁnest scale (θsf = 0),
+we scale-up the result (linearly interpolated) to full resolu-
+tion for comparison for all methods.
+3.2. Evaluation of Inverse Search
+
+In this section we evaluate the sparse point correspon-
+dences created by inverse search on the Sintel training
+
+Figure 2: Optical Flow result on Sintel with changing parameters.
+We set θsf = 2, θit = 8, θps = 8, θov = 0.3, marked with a
+black circle in all plots. From the top left to bottom right we vary
+the parameters θsf , θit, θps, and θov independently in each plot.
+
+3.1. Implementation and Parameter Selection
+
+We implemented2 our method in C++ and run all exper-
+iments and baselines on a Core i7 CPU using a single core,
+and a GTX780 GPU for the EPPM [4] baseline. For all
+experiments on the Sintel and KITTI training datasets we
+report timings from which we exclude all operations which,
+in a typical robotics vision application, would be unnec-
+essary, performed only once, or shared between multiple
+tasks: Disk access, creation of an image pyramid includ-
+ing image gradients with a downsampling quotient of 2, all
+initializations of the ﬂow algorithms. We do this for our
+method and all baselines within their provided code. For
+EPPM, where only an executable was available, we sub-
+tracted the average overhead time of our method for fair
+comparison. Please see the supplementary material for vari-
+ants of these experiments where preprocessing times are in-
+cluded for all methods. Our method requires 20 ms of pre-
+processing, spent on disk access (11 ms), image scaling and
+gradients (9 ms). For experiments on the Sintel and KITTI
+test datasets we include the preprocessing time to be com-
+parable with reported timings in the online benchmarks.
+
+Parameter selection. Our method has four main param-
+eters which affect speed and performance as explained in
+§ 2: θps size of each rectangular patch, θov patch overlap,
+θit number of iterations for the inverse search, θsf ﬁnest
+and ﬁnal scale on which to compute the ﬂow. We plot the
+change in the average end-point error versus run-time on
+the Sintel (training, ﬁnal) dataset [14] in Fig. 2. We draw
+three conclusions: Firstly, operating on ﬁner scales (lower
+
+2The code will be publicly available on the main author’s website.
+
+1001011024.555.566.577.588.59Log. run−time (ms)Avg. EPE  θsf= 3↓θsf= 3↓2↓2↓1↓1↓0↓0↓DeepFlowSparseFlowPCA−FlowEppm (GPU)Our Method + Ref.Our Method − Ref.1001011024.555.566.577.588.59θit= 4↓θit= 4↓8↓8↓16↓16↓32↓32↓64↓64↓128↓128↓Log. run−time (ms)Avg. EPE1001011024.555.566.577.588.59← θps= 4θps= 4↓← 88↓← 1212↓← 1616↓← 2020↓Log. run−time (ms)Avg. EPE1001011024.555.566.577.588.59θov= 0.1↓θov= 0.1↓0.3↓0.3↓0.5↓0.5↓0.7↓0.7↓0.9↓0.9↓Log. run−time (ms)Avg. EPE(1) θsf = 3, θit = 016, θps = 08, θov = 0.30, at 600 Hz,
+(2) θsf = 3, θit = 012, θps = 08, θov = 0.40, at 300 Hz,
+(3) θsf = 1, θit = 016, θps = 12, θov = 0.75, at 10 Hz,
+(4) θsf = 0, θit = 256, θps = 12, θov = 0.75, at 0.5 Hz.
+All operating points except (1) use variational reﬁnement.
+We compare our method against a set of recently pub-
+lished baselines running on a single CPU core: Deep-
+Flow [51], SparseFlow [49], PCA-Flow [54]; two older
+established methods: Pyramidal Lukas-Kanade Flow [10,
+35], Farneback’s method [17]; and one recent GPU-based
+method: EPPM [4]. Since run-times for optical ﬂow meth-
+ods are strongly linked to image resolution, we incremen-
+tally speed-up all baselines by downscaling the input im-
+ages by factor of 2n, where n starting at n = 0 is increased
+in increments of 0.5. We chose this non-intrusive parameter
+of image resolution to analyse each method’s trade-off be-
+tween run-time and ﬂow error. We bilinearly interpolate the
+resulting ﬂow ﬁeld to the original resolution for evaluation.
+We run all baselines and our method for all operating
+points on the Sintel [14] ﬁnal training (Fig. 4) and testing
+(Table 3) benchmark. As noted in § 3.1, run-times for all
+methods are reported without preprocessing for the training
+dataset to facilitate comparison of ﬂow algorithms running
+in the same environment at high speed, and with prepro-
+cessing for the online testing benchmark to allow compari-
+son with self-reported times. From the experiments on the
+testing and training dataset, we draw several conclusions:
+Operating point (2) points to the best trade-off between
+run-time and ﬂow error. For the average end-point error
+of around 6 pixels, our method is approximately two orders
+of magnitude faster than the fastest CPU baseline (PCA-
+Flow [54]) a still more than one order of magnitude faster
+than the fastest GPU baseline (EPPM [4]). Our method can
+be further sped-up by removing the variational reﬁnement
+at operating point (1) while maintaining reasonable ﬂow
+quality (see Fig. 6). Operating point (3) is comparable with
+the performance of EPPM, but slightly better for small dis-
+placements and worse for large displacements. If we use all
+available scales, and increase the number of iterations, we
+obtain operating point (4). At the run-time of several sec-
+onds per frame pair, more complex methods, such as Deep-
+Flow, perform better, in particular for large displacements.
+In the supplementary material we show variants of Fig. 4,
+and 5 where all preprocessing times are included. Further-
+more, we provide ﬂow error maps on Sintel, where typical
+failure cases of our method at motion discontinuities, large
+displacements, and frame boundaries are observable.
+3.4. KITTI optical ﬂow results
+
+Complementary to the experiment on the synthetic Sin-
+tel dataset, we ran our method on the KITTI Optical Flow
+benchmark [21] for realistic driving scenarios. The result is
+
+Figure 3: Percent of sparse correspondences above error threshold.
+
+FlowFields [2]
+DeepFlow [51]
+SparseFlow [49]
+EPPM [4]
+PCA-Flow [54]
+LDOF [13]
+Classic+NL-fast [46]
+DIS-Fast
+SimpleFlow [48]
+
+EPE all
+5.81
+7.21
+7.85
+8.38
+8.65
+9.12
+10.09
+10.13
+13.36
+
+s0-10 s10-40
+3.74
+1.16
+4.11
+1.28
+1.07
+3.77
+1.83
+4.96
+4.52
+1.96
+4.84
+1.49
+4.67
+1.09
+5.93
+2.17
+1.48
+9.58
+
+s40+ time (s)
+CPU GPU
+(cid:88)
+33.89 0018000 †
+(cid:88)
+44.12 0055
+(cid:88)
+51.35 0016
+49.08 0000.31
+(cid:88)
+51.84 0000.37
+57.30 0060000 † ‡ (cid:88)
+67.81 0120000 † ‡ (cid:88)
+(cid:88)
+59.70 0000.023
+81.35 0001.600 † ‡
+
+(cid:88)
+
+(cid:88)
+
+Table 3: Sintel test errors in pixels (http://sintel.is.
+tue.mpg.de/results), retrieved on 31st Oct. 2015 for ﬁnal
+subset. Run-times are measured by us, except: †self-reported, and
+‡on other datasets with same or smaller resolution.
+
+dataset. For each frame pair we initialized a sparse grid
+(given by Deep Matching [51]) in the ﬁrst image and com-
+puted point correspondences in the second image. The cor-
+respondences are computed by i) exhaustive Nearest Neigh-
+bor search on normalized cross-correlation (NCC), ii) our
+method where we skip the densiﬁcation step between each
+scale change (DIS w/o Densiﬁcation), iii) our method in-
+cluding the densiﬁcation step (DIS), and using iv) Deep-
+Matching [51]. The results are shown in Fig. 3 and Table 2.
+We have four observations: i) Nearest Neighbor search
+has a low number of incorrect matches and precise corre-
+spondences, but is very prone to outliers. ii) DeepMatching
+has a high percentage of erroneous correspondences (with
+small errors), but are very good at large displacements. iii)
+In contrast to this, our method (DIS w/o Densiﬁcation) gen-
+erally produces fewer correspondences with small errors,
+but is strongly affected by outliers. This is due to the fact
+that the implicit SSD (sum of squared differences) error
+minimization is not invariant to changes in orientation, con-
+trast, and deformations.
+iv) Averaging all patches in each
+scale (DIS), taking into account their photometric error as
+described in eq. (3), introduces robustness towards these
+outliers. It also decreases the error for approximately cor-
+rect matches. Furthermore, it enables reducing the number
+of patches at coarser scales, leading to lower run-time.
+
+3.3. MPI Sintel optical ﬂow results
+
+Based on our observations on parameter selection in
+§ 3.1, we selected four operating points, corresponding to
+
+00.5124816326400.20.40.60.81Error threshold (px)Percent of matches with error > X  Nearest Neighbor (NCC)DIS w/o DensificationDISDeepMatchingEPE, full range.
+
+EPE for < 10 px.
+
+EPE for 10 − 40 px.
+
+EPE for > 40 px.
+
+Figure 4: Sintel (training) ﬂow result. Average end-point error (pixel) versus run-time (millisecond) on various displacement ranges.
+
+EPE, full range.
+
+EPE for < 10 px.
+
+Figure 5: KITTI (training) result. Average end-point error (px)
+versus run-time (ms) for average (left) and small displacements
+(right). See supplementary material for large displacement errors.
+
+Out-Noc Out-All Avg-Noc Avg-All
+2.9 px
+5.76 % 10.57 % 1.3 px
+PH-Flow [57]
+5.8 px
+7.22 % 17.79 % 1.5 px
+DeepFlow [51]
+7.6 px
+9.09 % 19.32 % 2.6 px
+SparseFlow [49]
+9.2 px
+12.75 % 23.55 % 2.5 px
+EPPM [4]
+6.2 px
+15.67 % 24.59 % 2.7 px
+PCA-Flow [54]
+19.31 % 28.79 % 5.2 px
+10.9 px
+eFolki [40]
+12.4 px
+LDOF [13]
+21.93 % 31.39 % 5.6 px
+9.1 px
+FlowNetS+ft [18] 37.05 % 44.49 % 5.0 px
+DIS-Fast
+14.4 px
+38.58 % 46.21 % 7.8 px
+38.60 % 46.13 % 8.7 px
+16.5 px
+RLOF [43]
+
+time (s)
+CPU GPU
+(cid:88)
+0800
+(cid:88)
+0017
+(cid:88)
+0010
+0000.25
+0000.19 (cid:88)
+0000.026
+(cid:88)
+0060
+0000.08
+0000.024 (cid:88)
+0000.488
+
+(cid:88)
+(cid:88)
+(cid:88)
+(cid:88)
+
+Table 4: KITTI test results (http://www.cvlibs.net/
+datasets/kitti/eval_flow.php), retrieved on 31st Oct.
+2015, for all pixels, at 3px threshold.
+
+presented in ﬁg. 5, 7 (training) and Table 4 (testing). We use
+the same four operating points as in § 3.3. Our conclusions
+from the Sintel dataset in § 3.3 also apply for this dataset,
+suggesting a stable performance of our method, since we
+did not optimize any parameters for this dataset. On the on-
+line test benchmark we are on par with RLOF [43] and the
+recently published FlowNet [18]. Even though both take
+advantage of a GPU, we are still faster by one order of mag-
+nitude at comparable performance.
+
+We include a plot of more operating points on the train-
+ing set of Sintel and KITTI in the supplementary material.
+3.5. High frame-rate optical ﬂow
+
+Often, a simpler and faster algorithm, combined with a
+higher temporal resolution in the data, can yield better ac-
+curacy than a more powerful algorithm, on lower tempo-
+ral resolutions. This has been analysed in detail in [24]
+for the task of visual odometry. As noted in [8, 6] this is
+also the case for optical ﬂow, where large displacements,
+
+Figure 8: Flow result on Sintel with low temporal resolution. Ac-
+curacy of DeepFlow on large displacements versus DIS on small
+displacements, tracked through all intermediate frames. As base-
+line we included the accuracy of DeepFlow for tracking small dis-
+placements. Note: While we use the same frame pairs to compute
+each vertical set of points, frame pairs differ over stepsizes.
+
+Figure 9: Optical ﬂow on Sintel with lower temporal resolution. In
+each block of 3x4: Rows, top to bottom, correspond to step sizes
+1 (original frame-rate), 6, 10 frames. Columns, left to right, corre-
+spond to new ground truth, DeepFlow result, DIS result (through
+all intermediate frames), original images. Large displacements are
+signiﬁcantly better preserved by DIS through higher frame-rates.
+
+due to low-frame rate or strong motions are signiﬁcantly
+more difﬁcult to estimate than small displacements. In con-
+trast to the recent focus on handling ever larger displace-
+ments [13, 55, 51, 49, 36], we want to analyse how decreas-
+ing the run-time while increasing the frame-rate affects our
+algorithm. For this experiment we selected a random subset
+of the Sintel training dataset, and synthesized new ground
+
+1001011021031041053456789101112Log. run−time (ms)Avg. EPE    1  2  3  4DeepFlowSparseFlowPCA−FlowEPPM (GPU)FarnebackLK FlowOur Method10010110210310410500.511.522.533.54  1  2  3  4Log. run−time (ms)Avg. EPE − D101001011021031041054681012141618  1  2  3  4Log. run−time (ms)Avg. EPE − D10−4010010110210310410525303540455055606570  1  2  3  4Log. run−time (ms)Avg. EPE − D4010010110210310410502468101214Log. run−time (ms)Avg. EPE   1 2 3 4DeepFlowSparseFlowPCA−FlowEPPM (GPU)FarnebackLK FlowOur Method10010110210310410500.511.522.533.54 1 2 3 4Log. run−time (ms)Avg. EPE − D10124681005101520253035 Step size to next frame Average. EPE  DeepFlow − skipped frames, 0.5 Hz, EPE s40+DeepFlow − all frames, 0.5 Hz, EPE s40+DIS − all frames, 10 Hz, EPE s40+DeepFlow − skipped frames, 0.5 Hz, EPE s0−10DeepFlow − all frames, 0.5 Hz, EPE s0−10DIS − all frames, 10 Hz, EPE s0−10DeepFlow − skipped frames, 0.5 Hz, EPE allDeepFlow − all frames, 0.5 Hz, EPE allDIS − all frames, 10 Hz, EPE all600 Hz
+
+300 Hz
+
+10 Hz
+
+0.5 Hz
+
+Ground truth
+
+Figure 6: Examplary results on Sintel (training). In each block of 2 × 6 images. Top row, left to right: Our method for operating points
+(1)-(4), Ground Truth. Bottom row: Farneback 600Hz, Farneback 300Hz, PCA-Flow 10Hz, DeepFlow 0.5Hz, Original Image.
+
+600 Hz
+
+300 Hz
+
+10 Hz
+
+0.5 Hz
+
+Ground truth
+
+Figure 7: Examplary results on KITTI (training). In each block of 2 × 6 images. Top row, left to right: Our method for operating points
+(1)-(4), Ground Truth. Bottom row: Farneback, 600 Hz, Pyramidal LK 300Hz, PCA-Flow 10Hz, DeepFlow 0.5Hz, Original Image.
+
+truth ﬂow for lower frame-rates from the one provided in
+the dataset. We create new ground truth for 1/2 to 1/10 of
+the source frame-rate from the original ground truth and the
+additionally provided segmentation masks to invalidate oc-
+cluded regions. We compare DeepFlow at a speed of 0.5Hz
+on this lower temporal resolution against our method (op-
+erating point (3), 10 Hz), running through all intermediate
+frames at the original, higher frame-rate. Thus, while Deep-
+Flow has to handle larger displacements in one frame pair,
+our method has to handle smaller displacements, tracked
+through multiple frames and accumulates error drift.
+
+We observe (Fig. 8) that DIS starts to outperform Deep-
+Flow when running at twice the original frame-rate, notably
+for large displacements, while still being 10 times faster.
+Fig. 9 shows examples of the new ground truth, results of
+DeepFlow and DIS. We conclude, that it is advantageous
+to choose our method over DeepFlow, aimed at recovering
+large displacements, when the combination of video frame-
+rate and run-time per frame can be chosen freely.
+
+4. Conclusions
+
+In this paper we presented a novel and simple way of
+computing dense optical ﬂow. The presented approach
+trades off a lower ﬂow estimation error for large decreases
+in run-time: For the same level of error, the presented
+method is two orders of magnitude faster than current state-
+of-the-art approaches, as shown in experiments on synthetic
+(Sintel) and realistic (KITTI) optical ﬂow benchmarks.
+
+In the future we will address some open problems with
+our method: Due to the coarse-to-ﬁne approach small and
+fast motions can sometimes get lost beyond recovery. A
+sampling-based approach to recover over-smoothed object
+motions at ﬁner scales may alleviate this problem. The im-
+plicit minimization of the L2 matching error in our method
+is not invariant to many modes of change, such as in con-
+trast, deformations, and occlusions. More robust error met-
+rics may be helpful here. Furthermore, a GPU implementa-
+tion may yield another signiﬁcant speed-up.
+
+Acknowledgments: This work was supported by the
+European Research Council project VarCity (#273940). We
+thank Richard Hartley for his pertinent input on this work.
+
+ Avg. EPE: 8.36, Our Method, 600 Hz Avg. EPE: 5.37, Our Method, 300 Hz Avg. EPE: 4.50, Our Method, 10 Hz Avg. EPE: 4.22, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 12.96, Farneback, 600 Hz Avg. EPE: 10.23, Farneback, 300 Hz Avg. EPE: 9.16, PCA−Flow, 10 Hz Avg. EPE: 3.26, DeepFlow, 0.5 Hz Avg. EPE: 24.03, Our Method, 1000 Hz Avg. EPE: 18.08, Our Method, 300 Hz Avg. EPE: 14.88, Our Method, 10 Hz Avg. EPE: 15.56, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 29.26, Farneback, 600 Hz Avg. EPE: 32.18, Farneback, 300 Hz Avg. EPE: 27.40, PCA−Flow, 10 Hz Avg. EPE: 11.73, DeepFlow, 0.5 Hz Avg. EPE: 3.81, Our Method, 600 Hz Avg. EPE: 3.52, Our Method, 300 Hz Avg. EPE: 1.57, Our Method, 10 Hz Avg. EPE: 1.21, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 7.09, Farneback, 600 Hz Avg. EPE: 7.33, Pyramidal LK, 300 Hz Avg. EPE: 7.56, PCA−Flow, 10 Hz Avg. EPE: 1.02, DeepFlow, 0.5 Hz Avg. EPE: 10.44, Our Method, 600 Hz Avg. EPE: 13.73, Our Method, 300 Hz Avg. EPE: 10.87, Our Method, 10 Hz Avg. EPE: 9.11, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 19.39, Farneback, 600 Hz Avg. EPE: 19.26, Pyramidal LK, 300 Hz Avg. EPE: 15.44, PCA−Flow, 10 Hz Avg. EPE: 4.53, DeepFlow, 0.5 HzReferences
+[1] Lucas-kanade 20 years on: A unifying framework.
+
+Computer Vision, 56(3):221–255, 2004. 1, 2, 3, 10
+
+International Journal of
+
+[2] C. Bailer, B. Taetz, and D. Stricker. Flow ﬁelds:dense correspondence ﬁelds for
+highly accurate large displacement optical ﬂow estimation. In ICCV, 2015. 1,
+6
+
+[3] S. Baker and I. Matthews. Equivalence and efﬁciency of image alignment al-
+
+gorithms. In CVPR, 2001. 1, 2, 10
+
+[4] L. Bao, Q. Yang, and H. Jin. Fast edge-preserving patchmatch for large dis-
+placement optical ﬂow. Image Processing, IEEE Transactions on, 23(12):4996–
+5006, Dec 2014. 1, 2, 5, 6, 7
+
+[5] C. Barnes, E. Shechtman, D. B. Goldman, and A. Finkelstein. The generalized
+
+PatchMatch correspondence algorithm. In ECCV, 2010. 2
+
+[6] F. Barranco, C. Fermuller, and Y. Aloimonos. Contour motion estimation for
+asynchronous event-driven cameras. Proceedings of the IEEE, 102(10):1537–
+1556, 2014. 1, 2, 7
+
+[7] H. Baya, A. Essa, T. Tuytelaarsb, and L. Van Gool. Speeded-up robust features
+
+(surf). CVIU, 110(3):346–359, 2008. 2
+
+[8] R. Benosman, C. Clercq, X. Lagorce, S.-H. Ieng, and C. Bartolozzi. Event-
+based visual ﬂow. Neural Networks and Learning Systems, IEEE Transactions
+on, 25(2):407–417, 2014. 1, 2, 7
+
+[9] M. J. Black and P. Anandan. The robust estimation of multiple motions: para-
+
+metric and piecewise-smooth ﬂow ﬁelds. CVIU, 1996. 1
+
+[10] J.-Y. Bouguet. Pyramidal implementation of the afﬁne lucas kanade feature
+
+tracker description of the algorithm. Intel Corporation, 5:1–10, 2001. 6
+
+[11] J. Braux-Zin, R. Dupont, and A. Bartoli. A general dense image matching
+
+framework combining direct and feature-based costs. In ICCV, 2013. 1
+
+[12] T. Brox, A. Bruhn, N. Papenberg, and J. Weickert. High accuracy optical ﬂow
+
+estimation based on a theory for warping. In ECCV, 2004. 4
+
+[13] T. Brox and J. Malik. Large displacement optical ﬂow: descriptor matching in
+
+variational motion estimation. IEEE Trans. PAMI, 2011. 1, 2, 6, 7
+
+[14] D. J. Butler, J. Wulff, G. B. Stanley, and M. J. Black. A naturalistic open source
+
+movie for optical ﬂow evaluation. In ECCV, 2012. 2, 5, 6, 13
+
+[15] N. Dalal and B. Triggs. Histograms of oriented gradients for human detection.
+
+In CVPR, 2005. 2
+
+[16] W. Enkelmann.
+
+Investigations of multigrid algorithms for the estimation of
+optical ﬂow ﬁelds in image sequences. Computer Vision, Graphics, and Image
+Processing, 43:150–177, 1988. 2
+
+[17] G. Farneb¨ack. Two-frame motion estimation based on polynomial expansion.
+In Image Analysis, volume 2749 of Lecture Notes in Computer Science, pages
+363–370. 2003. 1, 2, 6
+
+[18] P. Fischer, A. Dosovitskiy, E. Ilg, P. H¨ausser, C. Hazırbas¸, V. Golkov, P. van der
+Smagt, D. Cremers, and T. Brox. Flownet: Learning optical ﬂow with convo-
+lutional networks. In ICCV, 2015. 1, 2, 7
+
+[19] C. Forster, M. Pizzoli, and D. Scaramuzza. SVO: Fast semi-direct monocular
+
+visual odometry. ICRA, pages 15–22, may 2014. 3
+
+[20] D. Fortun, P. Bouthemy, and C. Kervrann. Optical ﬂow modeling and computa-
+tion: A survey. Computer Vision and Image Understanding, 134:1 – 21, 2015.
+Image Understanding for Real-world Distributed Video Networks. 2
+
+[21] A. Geiger, P. Lenz, C. Stiller, and R. Urtasun. Vision meets robotics: The
+
+KITTI dataset. IJRR, 2013. 2, 6, 13
+
+[22] A. Geiger, M. Roser, and R. Urtasun. Efﬁcient large-scale stereo matching. In
+
+ACCV, ACCV, 2011. 13
+
+[23] G. D. Hager and P. N. Belhumeur. Efﬁcient region tracking with parametric
+
+models of geometry and illumination. TPAMI, 20(10):1025–1039, 1998. 10
+
+[24] A. Handa, R. A. Newcombe, A. Angeli, and A. J. Davison. Real-time camera
+tracking: When is high frame-rate best? In ECCV, pages 222–235. 2012. 1, 7
+[25] F. Heitz and P. Bouthemy. Multimodal estimation of discontinuous optical ﬂow
+
+using markov random ﬁelds. TPAMI, 15(12):1217–1232, Dec 1993. 2
+
+[26] H. Hirschm¨uller. Stereo processing by semiglobal matching and mutual infor-
+
+mation. TPAMI, 30(2):328–341, 2008. 13
+
+[30] K. Konolige. Small vision systems: Hardware and implementation. In Robotics
+
+Research, pages 203–212. Springer London, 1998. 13
+
+matching for motion and occlusion estimation. In ICCV, 2013. 1, 2
+
+[31] M. Leordeanu, A. Zanﬁr, and C. Sminchisescu. Locally afﬁne sparse-to-dense
+[32] P. Lichtsteiner, C. Posch, and T. Delbruck. A 128× 128 120 db 15 µs latency
+asynchronous temporal contrast vision sensor. Solid-State Circuits, IEEE Jour-
+nal of, 43(2):566–576, 2008. 2
+
+[33] C. Liu, J. Yuen, and A. Torralba. SIFT ﬂow: Dense correspondence across
+
+scenes and its applications. TPAMI, 2011. 2
+
+[34] D. Lowe. Distinctive image features from scale-invariant keypoints.
+
+60(2):91–110, 2004. 2
+
+IJCV,
+
+[35] B. D. Lucas and T. Kanade. An iterative image registration technique with an
+application to stereo vision. In IJCAI, volume 81, pages 674–679, 1981. 1, 2,
+3, 6
+
+[36] M. Menze, C. Heipke, and A. Geiger. In Pattern Recognition, volume 9358 of
+
+Lecture Notes in Computer Science, pages 16–28. 2015. 1, 7
+
+[37] K. Mikolajczyk, T. Tuytelaars, C. Schmid, A. Zisserman, J. Matas, F. Schaf-
+falitzky, T. Kadir, and L. Van Gool. A comparison of afﬁne region detectors.
+IJCV, 2005. 2
+
+[38] N. Papenberg, A. Bruhn, T. Brox, S. Didas, and J. Weickert. Highly accurate
+
+optic ﬂow computation with theoretically justiﬁed warping. IJCV, 2006. 1
+
+[39] K. Pauwels, M. Tomasi, J. Diaz Alonso, E. Ros, and M. Van Hulle. A compar-
+ison of fpga and gpu for real-time phase-based optical ﬂow, stereo, and local
+image features. Computers, IEEE Transactions on, 61(7):999–1012, 2012. 2
+
+[40] A. Plyer, G. Le Besnerais, and F. Champagnat. Massively parallel lucas kanade
+optical ﬂow for real-time video processing applications. Journal of Real-Time
+Image Processing, pages 1–18, 2014. 1, 2, 3, 7
+
+[41] J. Revaud, P. Weinzaepfel, Z. Harchaoui, and C. Schmid. EpicFlow:Edge-
+Preserving Interpolation of Correspondences for Optical Flow. In CVPR, 2015.
+1
+
+[42] D. Scharstein, H. Hirschm¨uller, Y. Kitajima, G. Krathwohl, N. Neˇsi´c, X. Wang,
+and P. Westling. High-resolution stereo datasets with subpixel-accurate ground
+truth. In GCPR. 2014. 13
+
+[43] T. Senst, V. Eiselein, and T. Sikora. Robust local optical ﬂow for feature
+tracking. Circuits and Systems for Video Technology, IEEE Transactions on,
+22(9):1377–1387, 2012. 2, 7
+
+[44] N. Srinivasan, R. Roberts, and F. Dellaert. High frame rate egomotion estima-
+
+tion. In ICVS, ICVS’13, pages 183–192, 2013. 1
+
+[45] F. Steinbrucker, T. Pock, and D. Cremers. Large displacement optical ﬂow
+
+computation without warping. In ICCV, 2009. 1
+
+[46] D. Sun, S. Roth, and M. J. Black. Secrets of optical ﬂow estimation and their
+
+principles. In CVPR, 2010. 4, 6
+
+[47] R. Szeliski, R. Zabih, D. Scharstein, O. Veksler, V. Kolmogorov, A. Agar-
+wala, M. Tappen, and C. Rother. A comparative study of energy minimiza-
+tion methods for markov random ﬁelds with smoothness-based priors. TPAMI,
+30(6):1068–1080, June 2008. 2
+
+[48] M. Tao, J. Bai, P. Kohli, and S. Paris. Simpleﬂow: A non-iterative, sublinear
+optical ﬂow algorithm. In Computer Graphics Forum, volume 31, pages 345–
+353. Wiley Online Library, 2012. 1, 2, 6
+
+[49] R. Timofte and L. Van Gool. Sparseﬂow: Sparse matching for small to large
+displacement optical ﬂow. In WACV, pages 1100–1106, Jan 2015. 1, 2, 5, 6, 7
+[50] E. Tola, V. Lepetit, and P. Fua. A fast local descriptor for dense matching. In
+
+CVPR, 2008. 2
+
+[51] P. Weinzaepfel, J. Revaud, Z. Harchaoui, and C. Schmid. Deepﬂow:large dis-
+placement optical ﬂow with deep matching. In ICCV, 2013. 1, 2, 4, 5, 6, 7,
+11
+
+[52] M. Werlberger, W. Trobin, T. Pock, A. Wedel, D. Cremers, and H. Bischof.
+
+Anisotropic Huber-L1 optical ﬂow. In BMVC, 2009. 4
+
+[53] J. Wills, S. Agarwal, and S. Belongie. A feature-based approach for dense
+
+segmentation and estimation of large disparity motion. IJCV, 2006. 1
+
+[54] J. Wulff and M. J. Black. Efﬁcient sparse-to-dense optical ﬂow estimation using
+
+a learned basis and layers. In CVPR, pages 120–130, 2015. 1, 2, 5, 6, 7
+
+[55] L. Xu, J. Jia, and Y. Matsushita. Motion detail preserving optical ﬂow estima-
+
+tion. IEEE Trans. PAMI, 2012. 1, 2, 7
+
+[27] B. K. Horn and B. G. Schunck. Determining optical ﬂow. Proc. SPIE 0281,
+
+Techniques and Applications of Image Understanding, 1981. 1, 2
+
+[56] K. Yamaguchi, D. McAllester, and R. Urtasun. Efﬁcient joint segmentation,
+
+occlusion labeling, stereo and ﬂow estimation. In ECCV. 2014. 13
+
+[28] R. Kennedy and C. Taylor. Optical ﬂow with geometric occlusion estimation
+and fusion of multiple frames. In Energy Minimization Methods in Computer
+Vision and Pattern Recognition, volume 8932 of Lecture Notes in Computer
+Science, pages 364–377. 2015. 1
+
+[57] J. Yang and H. Li. Dense, accurate optical ﬂow estimation with piecewise
+
+parametric model. In CVPR, pages 1019–1027, 2015. 7
+
+[58] C. Zach, T. Pock, and H. Bischof. A duality based approach for realtime tv-l1
+
+optical ﬂow. In In Ann. Symp. German Association Patt. Recogn, 2007. 2
+
+[29] G. Klein and D. Murray.
+
+Workspaces. ISMAR, 2007. 3
+
+Parallel Tracking and Mapping for Small AR
+
+[59] H. Zimmer, A. Bruhn, and J. Weickert. Optic ﬂow in harmony. IJCV, 2011. 4
+
+Supplementary Material
+A. Derivation of the fast inverse search in § 2.1 of the
+
+paper
+
+B. Extensions: Color,
+
+forward-backward consis-
+
+tency, robust error norms
+
+C. Implementation details, parallelization and mem-
+
+ory consumption
+
+D. Plots for more operating points on the KITTI and
+
+Sintel benchmarks
+
+E. Plots for experiments § 3.3 and § 3.4 including pre-
+
+processing time
+
+F. More exemplary results for KITTI and Sintel
+
+(training)
+
+G. Error maps on Sintel-training
+
+H. More exemplary results for the high frame-rate
+
+experiment on Sintel-training in § 3.5
+
+10
+
+11
+
+12
+
+13
+
+13
+
+13
+
+13
+
+13
+
+I. Depth from Stereo with DIS
+13
+A. Derivation of the fast inverse search in § 2.1
+
+of the paper
+
+We adopt the terminology of [3, 1] and closely fol-
+low their derivation. We consider W(x; u) a warp,
+parametrized by u = (u, v)T , on pixel x such that
+W(x; u) = (x + u, y + v). The following derivation holds
+for other warps as well: See [1] for a discussion on the lim-
+its of its applicability. The objective function for the inverse
+search, eq. (1) in the paper, then becomes
+
+[It+1(W(x; u)) − T (x)]2 .
+
+(5)
+
+The warp parameter u is found by iteratively minimizing
+
+[It+1(W(x; u + ∆u)) − T (x)]2
+
+(6)
+
+(cid:20)
+
+(cid:88)
+
+x
+
+and updating the warp parameters as u ← u + ∆u.
+
+A Gauss-Newton gradient descent minimization is used
+in the following. We use a ﬁrst-order Taylor expansion of
+eq. (6) on It+1(W(x; u + ∆u)):
+
+It+1(W(x; u)) + ∇It+1
+
+∆u − T (x)
+
+∂W
+∂u
+
+(7)
+
+where ∇It+1 is the image gradient at W(x; u). ∂W
+∂u de-
+notes the Jacobian of the warp. Writing the partial deriva-
+tives in ∂W
+∂u with respect to a column vector as row vectors,
+
+(cid:21)2
+
+(cid:88)
+(cid:88)
+
+x
+
+x
+
+this simply becomes the 2 × 2 identity matrix for the case
+of optical ﬂow.
+
+There is a closed-form solution for parameter update ∆u
+using a least-squares formulation. Setting to zero the partial
+derivative of eq. (7) with respect to ∆u
+
+(cid:20)
+
+x
+
+ST ·
+
+(cid:88)
+where S =(cid:2)∇It+1
+∆u = H−1(cid:88)
+where H = (cid:80)
+
+x
+
+∂W
+∂u
+
+Hessian matrix.
+
+It+1(W(x; u)) + ∇It+1
+
+∆u − T (x)
+
+∂W
+∂u
+
+(cid:3), lets us solve for ∆u as
+
+ST · [T (x) − It+1(W(x; u))]
+
+(9)
+
+x ST S is the n × n approximation to the
+
+(cid:21)
+
+!= 0 ,
+
+(8)
+
+Since S depends on the image gradient of image It+1
+at the displacement u, S and the Hessian H have to be re-
+evaluated at each iteration. In order to avoid this costly re-
+evaluation it was proposed [3, 1, 23] to invert to roles of
+image and template. As a result, the objective function be-
+
+[T (W(x; ∆u)) − It+1(W(x; u))]2 .
+
+(10)
+
+comes (cid:88)
+
+x
+
+(cid:20)
+
+(cid:88)
+
+x
+
+The new warp is now composed using the inverse updated
+−1. In the case of
+warp W(x; u) ← W(x; u) ◦ W(x; ∆u)
+optical ﬂow, this simply becomes: u ← u − ∆u.
+The ﬁrst order Taylor expansion of (10) gives
+
+T (W(x; 0)) + ∇T
+
+∆u − It+1(W(x; u)
+
+∂W
+∂u
+
+(cid:21)2
+
+(11)
+
+where W (x; 0) is the identity warp. Analogously to eq. (9)
+we can solve (11) as a least squares problem.
+
+S(cid:48)T · [It+1(W(x; u)) − T (x)]
+
+(12)
+
+∆u = H(cid:48)−1(cid:88)
+where S(cid:48) = (cid:2)∇T ∂W
+
+x
+
+(cid:3) and H(cid:48) = (cid:80)
+
+∂u
+
+x S(cid:48)T S(cid:48). The Jaco-
+∂u is evaluated at (x; 0). Since neither S(cid:48), nor H(cid:48)
+bian ∂W
+depend in u, they can be pre-computed. This also means
+that image gradients do not have to be updated in each iter-
+ation. In each iteration we only need, ﬁrstly, to compute the
+sum in (12), which includes the image difference, multipli-
+cation with the image gradients, and summation, secondly,
+to solve the linear system for ∆u, and, thirdly, update the
+warp parameter u.
+
+B. Extensions: Color, forward-backward con-
+
+sistency, robust error norms
+
+We examined the beneﬁt of, ﬁrstly, using RGB color
+images instead of intensity images, secondly, enforcing
+forward-backward consistency of optical ﬂow, and, thirdly,
+using robust error norms.
+
+(i) Using RGB color images. Instead of using a patch
+matching error over intensity images, we can use a multi-
+channel image for the dense inverse search and the varia-
+tional reﬁnement. The objective function for dense the in-
+verse search, eq. (1) in the paper, becomes
+
+(cid:88)
+
+(cid:88)
+
+(cid:2)I c
+t+1(x + u) − T c(x)(cid:3)2
+
+.
+
+(13)
+
+c∈[R,G,B]
+
+x
+
+where c iterates over all color channels. Similarly, we can
+extend the variational reﬁnement to operate on all color
+channels jointly, as detailed in [51].
+
+(ii) Enforcing forward-backward consistency. In or-
+der to enforce forward-backward consistency, we run our
+algorithm in parallel from both directions: It → It+1 and
+It+1 → It. With the exception of the densiﬁcation (step
+4), all steps of the algorithm run independently for forward
+and backward ﬂow computation. In step 4 we merge both
+directions and create a dense forward ﬂow ﬁeld Uf
+s in each
+pixel x by applying weighted averaging to displacement es-
+timates of all patches from the forward and backward in-
+verse search overlapping at location x in the reference im-
+age It:
+
+Uf
+
+s (x) =
+
+1
+Z
+
+(cid:20) N f
+s(cid:88)
+s(cid:88)
+
+i
+N b
+
+j
+
+λf
+i,x
+max(1,(cid:107)df
+
+i (x)(cid:107)2)
+
+λb
+max(1,(cid:107)db
+
+j,x
+
+j(x)(cid:107)2)
+
+i −
+· uf
+(cid:21)
+
+· ub
+
+j
+
+(14)
+
+(15)
+
+where the indicator λf
+
+i,x = 1 iff patch i for the forward
+displacement estimate overlaps with location x in the refer-
+j,x = 1 iff patch j for the backward displace-
+ence image, λb
+ment estimate overlaps with location x in the reference im-
+age after the displacement uf
+i (x) =
+i ) − T (x) and db
+It+1(x + uf
+j) de-
+note the forward and backward warp intensity differences
+between template patches and warped images, uf
+i and ub
+j
+denote the estimated forward and backward displacements
+
+j was applied to it, df
+j(x) = It(x) − T (x − ub
+
+of patches, and normalization
+
+Z =
+
+N f
+
+s(cid:88)
+s(cid:88)
+
+i
+N b
+
+i,x/ max(1,(cid:107)df
+λf
+
+i (x)(cid:107)2)+
+
+j,x/ max(1,(cid:107)db
+λb
+
+j(x)(cid:107)2).
+
+(16)
+
+(17)
+
+j
+
+Since displacement estimate ub
+
+j is generally not inte-
+ger, we employ bilinear interpolation for the second term
+in equation (15).
+
+The densiﬁcation for the dense backward ﬂow ﬁeld Ub
+s
+is computed analogously. After the densiﬁcation step on
+each scale, the variational reﬁnement is again performed
+independently for each direction.
+
+(iii) Robust error norms. Equation (1) in the paper
+minimizes an L2 norm which is strongly affected by out-
+liers. Since the L1 and the Huber norm are known to be
+more robust towards outliers, we examined their effect on
+our algorithm. However, the objective function (1) can-
+not easily be changed to directly minimize a different error
+norm. However, in each iteration we can transform the error
+ε = It+1(x + u) − T (x) for each pixel, such that, implic-
+itly after squaring the transformed error, eq. (1) minimizes
+a different norm. We transform the error ε on each pixel at
+location x as follows:
+
+• L1-Norm:
+
+• Huber-Norm:
+
+ε ←
+
+ε ← sign(ε) ·(cid:112)|ε|
+(cid:26)ε
+sign(ε) ·(cid:112)2b|ε|−b2
+
+, if ε < b
+, otherwise
+
+After the transformed error ε is squared in the objection
+function the corresponding L1 or Huber norm is minimized
+in each iteration.
+
+We plotted the result for all three extensions in Fig. 10,
+where we compare all extensions on the Sintel training
+benchmark against our method without these extensions. As
+baseline we start from operating point (3), as described in
+the paper, and evaluate all extensions separately. The six
+numbered operating points correspond to: (1) Baseline, (2)
+baseline with color images, (3) baseline enforcing forward-
+backward consistency, (4) baseline using the L1 norm as
+objective function, (5) baseline using the Huber norm as ob-
+jective function, (6) baseline using color images, enforcing
+forward-backward consistency and using the Huber norm as
+objective function.
+
+We conclude that while all extensions decrease the re-
+sulting optical ﬂow error, overall, the obtained error reduc-
+tion remains too low to justify inclusion of these extensions
+in the method.
+
+DIS (1)
+Sintel
+1.65 / 606
+VGA 0.93 / 1075
+Table 5: Sintel (1024×436), VGA (640×480) run-times in
+(ms/Hz).
+
+DIS (3)
+97.8 / 10.2
+70.3 / 14.2
+
+DIS (2)
+3.32 / 301
+2.35 / 426
+
+DIS (4)
+1925 / 0.52
+1280 / 0.78
+
+Total run-time (3.32 ms) ms % of total run-time
+Memory allocation
+Processing scale θs = 5
+Processing scale θs = 4
+Processing scale θs = 3
+
+0.17
+0.23
+0.65
+2.26
+
+5.27
+6.91
+19.6
+68.1
+
+Figure 10: Evaluation of extensions.
+(1) Baseline, (2) baseline
+with color images, (3) baseline enforcing forward-backward con-
+sistency, (4) baseline using the L1 norm as objective function, (5)
+baseline using the Huber norm as objective function, (6) baseline
+using color images, enforcing forward-backward consistency and
+using the Huber norm as objective function.
+
+C. Implementation details, parallelization and
+
+memory consumption
+
+Our method is implemented in C++ and all run-times
+where computed on a Intel Core i7 3770K CPU at 3.50GHz.
+In this chapter we provide more engineering details and ex-
+act timings of the most important components, details on
+possible parallelization using OpenMP and overall memory
+consumption.
+Implementation details
+
+For our method no special data structures are needed.
+What enables the high speed is a combination of a very fast
+ﬂow initialization of DIS with a slow variational reﬁnement
+per scale. Initialization and variational reﬁnement consti-
+tute 32 % and 57 %, respectively, of the total run-time on
+each scale. Care was taken to allocate all memory at once,
+use SSE instructions and inplace-operations whenever pos-
+sible, and terminate iterations early for small residuals. Bot-
+tlenecks for further speed-ups are repeated (bilinearly inter-
+polated) patch extraction (step 3 in Alg. 1 of the paper) and
+pixel-wise reﬁnements (step 5).
+
+In Table 5 we show a direct run-time comparison on
+Sintel- and VGA-resolution images. The run-time scales
+linearly with the image area.
+
+We will break down the run-time of 3.32 ms for DIS (2)
+on Sintel-resolution images, running over 3 scales, for all
+components in table 6.
+
+Run-time grows approximately by a factor of 4 for each
+ﬁner scale, and is spend similarly on each scale. Repre-
+
+Table 6: Break down of DIS (2) total run-time on Sintel images
+
+sentatively for the last scale (θs = 3), corresponding to a
+downscaling factor of 8 and 448 uniformly distributed 8x8
+patches, the time of 2.26 ms spend on this layer breaks down
+following Alg. 1 in table 7.
+
+Run-time on scale θs = 3 (2.26 ms) ms % of run-time
+Patch initialization, steps (1./2.)
+Inverse Search, step (3.)
+Densiﬁcation, (4.)
+Variational reﬁnement, (5.)
+
+4.1
+32.8
+5.9
+57.1
+
+0.09
+0.74
+0.14
+1.29
+
+Table 7: Break down of DIS (2) run-time on one scale
+
+Step (3.) and (5.) are most time-consuming. Step (3.)
+breaks down in 1.66 µs for each of 448 patches. This breaks
+down into 0.08 µs for initialization (gradient/intensity ex-
+traction in reference image, computation of Hessian) and
+0.13 µs for each of 12 optimization iterations (template in-
+tensity extraction, parameter update). Step (5.) breaks down
+for each of θvo = 4 iterations into 0.12 ms for computation
+of the data and smoothness terms and 0.2 ms for solving of
+the linear systems and updating the ﬂow ﬁeld per pixel.
+
+Parallelization
+
+We examined the potential speed-up by parallelization
+using OpenMP on 4 cores. We parallelized step 3 and 5 of
+our implementation, to operate independently on each patch
+and pixel, respectively. The run-times for all for operating
+points are tabulated in Table 8. Since thread creation and
+management leads to an overhead of a few milliseconds,
+the speed-up of 4 cores only becomes signiﬁcant for longer
+run-times. For longer sequences, where threads are created
+only once, this overhead would be negligible. Since each
+tread executes the same instructions and there is no need
+to communicate, a massive parallelization on a GPU will
+potentially yield an even larger speed-up.
+
+10210344.555.566.577.58Log. run−time (ms)Avg. EPERun−time (ms) vs Avg. EPE   1 2 3 4 5 6DeepFlowSparseFlowPCA−FlowEppm (GPU)Our MethodPeak Mem. (MB)
+
+Speed (ms)
+Speed (Hz)
+
+DIS (1.) DIS (2.) DIS (3.) DIS (4.)
+311.9
+35.52
+1925
+1.65
+606
+0.52
+
+35.56
+3.32
+301
+
+100.1
+97.8
+10.2
+
+Farneback
+
+PCAFlow DeepFlow
+
+43.31
+26.27
+38.06
+
+1216
+419.1
+2.38
+
+6851
+55752
+0.018
+
+Table 9: Peak memory consumption (MB) on Sintel-resolution images for all four operating points chosen in the paper and for the baselines:
+Farneback method, PCAFlow and DeepFlow at full resolutions.
+
+DIS operating point
+
+Speed-up (x)
+
+(1.)
+1.29
+
+(2.)
+1.75
+
+(3.)
+2.15
+
+(4.)
+3.70
+
+Table 8: Speed-up factor from parallelization (OpenMP, 4 cores)
+for all four operating points chosen in the paper
+
+Memory Consumption
+
+We also examined the peak memory consumption of our
+algorithm on images from the Sintel benchmark. We tab-
+ulated the result in Table 9. Roughly 15 MB are used by
+image data, and the rest by all patches and associated data,
+which is pre-allocated during initialization. If paralleliza-
+tion is not used, and memory is a bottleneck, the mem-
+ory footprint can be reduced by not pre-allocating all patch
+memory.
+
+D. Plots for more operating points on the
+
+KITTI and Sintel benchmarks
+
+We plot the optical ﬂow result on the Sintel and KITTI
+training benchmarks in Fig. 11. Besides the four operat-
+ing points chosen in the paper, we plot a variety of operat-
+ing points for different parameter settings with and without
+variational reﬁnement. In addition to the observations de-
+tailed in the paper, we note that the variational reﬁnement
+brings the strongest advantage in the small displacement
+range, whereas large displacement errors cannot be recov-
+ered easily by this reﬁnement.
+E. Plots for experiments § 3.3 and § 3.4 includ-
+
+ing preprocessing time
+
+In our evaluation we excluded preprocessing (disk ac-
+cess, image rescaling, gradient computation) for all meth-
+ods, by carefully timing time spend on these tasks within
+their provided code. For EPPM, where only binaries where
+provided, we subtracted the average preprocessing overhead
+of our method, since we were unable to measure overhead-
+time directly within their code.
+
+The exclusion of the preprocessing time enables us to
+compare the actual time spend on ﬂow computation, with-
+out evaluating the constant preprocessing overheads. This
+is particularly important when this preprocessing is shared
+between tasks or even unnecessary in robotics streaming ap-
+plications, or when it heavily dominates the run-time and
+
+would therefore clutter the analysis.
+
+This is illustrated in Fig. 12, which shows the end-point
+error on the training sets of Sintel and Kitti (Figures 4 and
+5 in the paper in § 3.3, 3.4) versus total run-time of each
+method including preprocessing. It is easy to observe, that
+in the range of several tens or hundreds of Hertz preprocess-
+ing dominates and makes an analysis diffult.
+
+F. More exemplary results for KITTI and Sin-
+
+tel (training)
+More exemplary optical ﬂow results on the training sub-
+sets of the Sintel [14] and KITTI [21] benchmarks are
+shown in Fig. 13, 14, 15, and 16. Error maps for Figs. 13
+and 14 are plotted in Figs. 17 and 18.
+
+G. Error maps on Sintel-training
+
+Optical ﬂow error maps on the training subset of the
+Sintel [14] are shown in Fig. 17 and Fig. 18. More error
+maps on the test sets of Sintel and KITTI can be found on-
+line through their test websites. Typical error modes of our
+method are observable at motion discontinuities (Fig. 17,
+ﬁrst block), large displacements (Fig. 17, third block) and
+at frame boundaries for fast motions (e.g. Fig. 18, second
+block)
+
+H. More exemplary results for the high frame-
+rate experiment on Sintel-training in § 3.5
+More exemplary results for our high frame-rate experi-
+
+ment (§ 3.5) are shown in Fig. 19 and 20.
+
+I. Depth from Stereo with DIS
+
+We can also apply our algorithm to the problem of com-
+puting depth from a stereo pair of images.
+If the image
+planes of both cameras are parallel and aligned in depth,
+the epipoles are at inﬁnity, and the depth computation task
+becomes the problem of pixel-wise estimation of horizon-
+tal displacements. We remove the vertical degree of free-
+dom from our method, and evaluate on the Middlebury
+dataset for depth from stereo [42]. We evaluate against
+four methods: Semi-Global Matching (SGM) [26], Block
+Matching (BM) [30], Efﬁcient Large-scale Stereo Match-
+ing (ELAS) [22] and Slanted-Plane Stereo (SPS) [56]. We
+
+use the same 4 operating points as in the paper, with one
+change: iteration numbers are halved, θit ← θit/2.
+
+The result is displayed in Fig. 21. We have two obser-
+vations. Firstly, while operating point (1) and (2) are still
+much faster than all baseline methods for the same error,
+the speed-beneﬁt is smaller than in the optical ﬂow experi-
+ments. Secondly, for all baseline methods the optimal per-
+formance is achieved with a downscaled input image pair
+instead of the ﬁnest resolution. This suggests that these
+methods were ﬁne-tuned for images with smaller resolu-
+tions than those provided in the recently published Middle-
+bury benchmark. In consequence, for these methods several
+tuning parameters have to be adapted to deal with large in-
+put resolutions. We observe that our method is more robust
+to those changes.
+
+Figure 11: Sintel (top 2 × 2 block) and KITTI (bottom 2 × 2 block) ﬂow result. In each block of 2 × 2, top to bottom, left to right:
+Average end-point error over image full domain, average end-point error over pixels with ground truth displacement over < 10 pixels,
+average end-point error over pixels with ground truth displacement between 10 and 40 pixels, average end-point error over pixels with
+ground truth displacement over < 40 pixels. The four operating points used in the paper are marked with 1-4 in the plots.
+
+1001011021031041053456789101112Log. run−time (ms)Avg. EPE   1 2 3 4DeepFlowSparseFlowPCA−FlowEPPM (GPU)FarnebackLK FlowOur Method + Ref.Our Method − Ref.10010110210310410500.511.522.533.54 1 2 3 4Log. run−time (ms)Avg. EPE − D101001011021031041054681012141618 1 2 3 4Log. run−time (ms)Avg. EPE − D10−4010010110210310410525303540455055606570 1 2 3 4Log. run−time (ms)Avg. EPE − D4010010110210310410502468101214Log. run−time (ms)Avg. EPE   1 2 3 4DeepFlowSparseFlowPCA−FlowEPPM (GPU)FarnebackLK FlowOur Method + Ref.Our Method − Ref.10010110210310410500.511.522.533.54 1 2 3 4Log. run−time (ms)Avg. EPE − D10100101102103104105012345678910 1 2 3 4Log. run−time (ms)Avg. EPE − D10−4010010110210310410505101520253035 1 2 3 4Log. run−time (ms)Avg. EPE − D40Figure 12: Sintel (top 2 × 2 block) and KITTI (bottom 2 × 2 block) ﬂow result. Same plots as Figure 4 and 5 in the paper, but including
+preprocessing time for all methods. The horizontal bars for each method indicate portion of total run-time spend in preprocessing (disk
+access, image rescaling, gradient computation).
+
+1001011021031041053456789101112Log. run−time (ms)Avg. EPE    1  2  3  4DeepFlowSparseFlowPCA−FlowEPPM (GPU)FarnebackLK FlowOur Method10010110210310410500.511.522.533.54  1  2  3  4Log. run−time (ms)Avg. EPE − D101001011021031041054681012141618  1  2  3  4Log. run−time (ms)Avg. EPE − D10−4010010110210310410525303540455055606570  1  2  3  4Log. run−time (ms)Avg. EPE − D4010010110210310410502468101214Log. run−time (ms)Avg. EPE   1 2 3 4DeepFlowSparseFlowPCA−FlowEPPM (GPU)FarnebackLK FlowOur Method10010110210310410500.511.522.533.54 1 2 3 4Log. run−time (ms)Avg. EPE − D10100101102103104105012345678910 1 2 3 4Log. run−time (ms)Avg. EPE − D10−4010010110210310410505101520253035 1 2 3 4Log. run−time (ms)Avg. EPE − D40600Hz
+
+300Hz
+
+10Hz
+
+0.5Hz
+
+Ground Truth
+
+Figure 13: Exemplary results on Sintel (training). In each block of 2 × 6 images. Top row, left to right: Our method for operating points
+(1)-(4), Ground Truth. Bottom row: Farneback 600Hz, Farneback 300Hz, PCA-Flow 10Hz, DeepFlow 0.5Hz, Original Image. See Fig.
+17 for error maps.
+
+ Avg. EPE: 1.12, Our Method, 600 Hz Avg. EPE: 0.85, Our Method, 300 Hz Avg. EPE: 0.30, Our Method, 10 Hz Avg. EPE: 0.27, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 1.52, Farneback, 600 Hz Avg. EPE: 1.10, Farneback, 300 Hz Avg. EPE: 3.00, PCA−Flow, 10 Hz Avg. EPE: 0.35, DeepFlow, 0.5 Hz Avg. EPE: 2.94, Our Method, 600 Hz Avg. EPE: 0.89, Our Method, 300 Hz Avg. EPE: 0.37, Our Method, 10 Hz Avg. EPE: 0.30, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 1.69, Farneback, 600 Hz Avg. EPE: 1.30, Farneback, 300 Hz Avg. EPE: 3.32, PCA−Flow, 10 Hz Avg. EPE: 0.38, DeepFlow, 0.5 Hz Avg. EPE: 8.08, Our Method, 600 Hz Avg. EPE: 7.06, Our Method, 300 Hz Avg. EPE: 7.00, Our Method, 10 Hz Avg. EPE: 6.98, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 7.78, Farneback, 600 Hz Avg. EPE: 7.24, Farneback, 300 Hz Avg. EPE: 8.22, PCA−Flow, 10 Hz Avg. EPE: 6.31, DeepFlow, 0.5 Hz Avg. EPE: 31.26, Our Method, 600 Hz Avg. EPE: 21.32, Our Method, 300 Hz Avg. EPE: 18.34, Our Method, 10 Hz Avg. EPE: 19.97, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 34.79, Farneback, 600 Hz Avg. EPE: 34.75, Farneback, 300 Hz Avg. EPE: 24.59, PCA−Flow, 10 Hz Avg. EPE: 14.87, DeepFlow, 0.5 Hz Avg. EPE: 1.12, Our Method, 600 Hz Avg. EPE: 0.93, Our Method, 300 Hz Avg. EPE: 0.52, Our Method, 10 Hz Avg. EPE: 0.41, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 1.35, Farneback, 600 Hz Avg. EPE: 1.10, Farneback, 300 Hz Avg. EPE: 2.14, PCA−Flow, 10 Hz Avg. EPE: 0.58, DeepFlow, 0.5 Hz Avg. EPE: 0.66, Our Method, 1000 Hz Avg. EPE: 0.45, Our Method, 300 Hz Avg. EPE: 0.32, Our Method, 10 Hz Avg. EPE: 0.29, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 0.65, Farneback, 600 Hz Avg. EPE: 0.62, Farneback, 300 Hz Avg. EPE: 0.76, PCA−Flow, 10 Hz Avg. EPE: 0.35, DeepFlow, 0.5 Hz Avg. EPE: 3.19, Our Method, 600 Hz Avg. EPE: 2.06, Our Method, 300 Hz Avg. EPE: 1.35, Our Method, 10 Hz Avg. EPE: 1.29, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 5.00, Farneback, 600 Hz Avg. EPE: 3.40, Farneback, 300 Hz Avg. EPE: 5.87, PCA−Flow, 10 Hz Avg. EPE: 1.28, DeepFlow, 0.5 Hz600Hz
+
+300Hz
+
+10Hz
+
+0.5Hz
+
+Ground Truth
+
+Figure 14: Exemplary results on Sintel (training). In each block of 2 × 6 images. Top row, left to right: Our method for operating points
+(1)-(4), Ground Truth. Bottom row: Farneback 600Hz, Farneback 300Hz, PCA-Flow 10Hz, DeepFlow 0.5Hz, Original Image. See Fig.
+18 for error maps.
+
+ Avg. EPE: 35.11, Our Method, 600 Hz Avg. EPE: 32.48, Our Method, 300 Hz Avg. EPE: 30.72, Our Method, 10 Hz Avg. EPE: 31.86, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 39.21, Farneback, 600 Hz Avg. EPE: 36.07, Farneback, 300 Hz Avg. EPE: 37.02, PCA−Flow, 10 Hz Avg. EPE: 27.31, DeepFlow, 0.5 Hz Avg. EPE: 15.65, Our Method, 600 Hz Avg. EPE: 16.16, Our Method, 300 Hz Avg. EPE: 15.32, Our Method, 10 Hz Avg. EPE: 14.06, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 21.91, Farneback, 600 Hz Avg. EPE: 20.44, Farneback, 300 Hz Avg. EPE: 19.62, PCA−Flow, 10 Hz Avg. EPE: 7.22, DeepFlow, 0.5 Hz Avg. EPE: 1.94, Our Method, 600 Hz Avg. EPE: 1.57, Our Method, 300 Hz Avg. EPE: 1.27, Our Method, 10 Hz Avg. EPE: 1.30, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 2.64, Farneback, 600 Hz Avg. EPE: 2.11, Farneback, 300 Hz Avg. EPE: 5.33, PCA−Flow, 10 Hz Avg. EPE: 0.82, DeepFlow, 0.5 Hz Avg. EPE: 1.10, Our Method, 600 Hz Avg. EPE: 0.65, Our Method, 300 Hz Avg. EPE: 0.47, Our Method, 10 Hz Avg. EPE: 0.53, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 0.87, Farneback, 600 Hz Avg. EPE: 0.70, Farneback, 300 Hz Avg. EPE: 1.87, PCA−Flow, 10 Hz Avg. EPE: 0.34, DeepFlow, 0.5 Hz Avg. EPE: 3.59, Our Method, 600 Hz Avg. EPE: 1.95, Our Method, 300 Hz Avg. EPE: 1.44, Our Method, 10 Hz Avg. EPE: 1.43, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 5.22, Farneback, 600 Hz Avg. EPE: 2.74, Farneback, 300 Hz Avg. EPE: 4.04, PCA−Flow, 10 Hz Avg. EPE: 0.74, DeepFlow, 0.5 Hz Avg. EPE: 3.28, Our Method, 600 Hz Avg. EPE: 1.80, Our Method, 300 Hz Avg. EPE: 1.35, Our Method, 10 Hz Avg. EPE: 1.49, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 7.38, Farneback, 600 Hz Avg. EPE: 7.13, Farneback, 300 Hz Avg. EPE: 3.54, PCA−Flow, 10 Hz Avg. EPE: 0.81, DeepFlow, 0.5 Hz Avg. EPE: 37.24, Our Method, 600 Hz Avg. EPE: 26.23, Our Method, 300 Hz Avg. EPE: 24.37, Our Method, 10 Hz Avg. EPE: 24.31, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 36.92, Farneback, 600 Hz Avg. EPE: 38.13, Farneback, 300 Hz Avg. EPE: 37.02, PCA−Flow, 10 Hz Avg. EPE: 16.67, DeepFlow, 0.5 Hz600Hz
+
+300Hz
+
+10Hz
+
+0.5Hz
+
+Ground Truth
+
+Figure 15: Exemplary results on KITTI (training). In each block of 2 × 6 images. Top row, left to right: Our method for operating points
+(1)-(4), Ground Truth. Bottom row: Farneback 600Hz, Pyramidal LK 300Hz, PCA-Flow 10Hz, DeepFlow 0.5Hz, Original Image.
+
+ Avg. EPE: 11.22, Our Method, 600 Hz Avg. EPE: 10.73, Our Method, 300 Hz Avg. EPE: 8.29, Our Method, 10 Hz Avg. EPE: 7.59, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 15.43, Farneback, 600 Hz Avg. EPE: 17.75, Pyramidal LK, 300 Hz Avg. EPE: 16.54, PCA−Flow, 10 Hz Avg. EPE: 2.54, DeepFlow, 0.5 Hz Avg. EPE: 18.78, Our Method, 600 Hz Avg. EPE: 19.55, Our Method, 300 Hz Avg. EPE: 15.45, Our Method, 10 Hz Avg. EPE: 14.98, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 23.54, Farneback, 600 Hz Avg. EPE: 22.10, Pyramidal LK, 300 Hz Avg. EPE: 10.78, PCA−Flow, 10 Hz Avg. EPE: 4.86, DeepFlow, 0.5 Hz Avg. EPE: 10.20, Our Method, 600 Hz Avg. EPE: 7.03, Our Method, 300 Hz Avg. EPE: 4.99, Our Method, 10 Hz Avg. EPE: 3.70, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 19.10, Farneback, 600 Hz Avg. EPE: 16.92, Pyramidal LK, 300 Hz Avg. EPE: 8.82, PCA−Flow, 10 Hz Avg. EPE: 1.28, DeepFlow, 0.5 Hz Avg. EPE: 6.15, Our Method, 600 Hz Avg. EPE: 4.93, Our Method, 300 Hz Avg. EPE: 4.29, Our Method, 10 Hz Avg. EPE: 4.40, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 10.32, Farneback, 600 Hz Avg. EPE: 10.72, Pyramidal LK, 300 Hz Avg. EPE: 7.01, PCA−Flow, 10 Hz Avg. EPE: 1.04, DeepFlow, 0.5 Hz Avg. EPE: 4.39, Our Method, 600 Hz Avg. EPE: 2.23, Our Method, 300 Hz Avg. EPE: 0.99, Our Method, 10 Hz Avg. EPE: 0.90, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 4.51, Farneback, 600 Hz Avg. EPE: 4.60, Pyramidal LK, 300 Hz Avg. EPE: 4.03, PCA−Flow, 10 Hz Avg. EPE: 0.78, DeepFlow, 0.5 Hz Avg. EPE: 8.84, Our Method, 600 Hz Avg. EPE: 15.01, Our Method, 300 Hz Avg. EPE: 11.64, Our Method, 10 Hz Avg. EPE: 5.29, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 20.48, Farneback, 600 Hz Avg. EPE: 23.89, Pyramidal LK, 300 Hz Avg. EPE: 4.70, PCA−Flow, 10 Hz Avg. EPE: 1.31, DeepFlow, 0.5 Hz Avg. EPE: 18.43, Our Method, 600 Hz Avg. EPE: 13.44, Our Method, 300 Hz Avg. EPE: 9.53, Our Method, 10 Hz Avg. EPE: 7.68, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 16.88, Farneback, 600 Hz Avg. EPE: 18.69, Pyramidal LK, 300 Hz Avg. EPE: 11.69, PCA−Flow, 10 Hz Avg. EPE: 1.57, DeepFlow, 0.5 Hz600Hz
+
+300Hz
+
+10Hz
+
+0.5Hz
+
+Ground Truth
+
+Figure 16: Exemplary results on KITTI (training). In each block of 2 × 6 images. Top row, left to right: Our method for operating points
+(1)-(4), Ground Truth. Bottom row: Farneback 600Hz, Pyramidal LK 300Hz, PCA-Flow 10Hz, DeepFlow 0.5Hz, Original Image.
+
+ Avg. EPE: 2.10, Our Method, 600 Hz Avg. EPE: 1.15, Our Method, 300 Hz Avg. EPE: 0.56, Our Method, 10 Hz Avg. EPE: 0.45, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 3.12, Farneback, 600 Hz Avg. EPE: 2.75, Pyramidal LK, 300 Hz Avg. EPE: 3.04, PCA−Flow, 10 Hz Avg. EPE: 0.55, DeepFlow, 0.5 Hz Avg. EPE: 10.44, Our Method, 600 Hz Avg. EPE: 13.73, Our Method, 300 Hz Avg. EPE: 10.87, Our Method, 10 Hz Avg. EPE: 9.11, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 19.39, Farneback, 600 Hz Avg. EPE: 19.26, Pyramidal LK, 300 Hz Avg. EPE: 15.44, PCA−Flow, 10 Hz Avg. EPE: 4.53, DeepFlow, 0.5 Hz Avg. EPE: 20.11, Our Method, 600 Hz Avg. EPE: 20.79, Our Method, 300 Hz Avg. EPE: 17.47, Our Method, 10 Hz Avg. EPE: 14.83, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 24.81, Farneback, 600 Hz Avg. EPE: 20.26, Pyramidal LK, 300 Hz Avg. EPE: 9.01, PCA−Flow, 10 Hz Avg. EPE: 0.72, DeepFlow, 0.5 Hz Avg. EPE: 14.51, Our Method, 600 Hz Avg. EPE: 17.91, Our Method, 300 Hz Avg. EPE: 18.42, Our Method, 10 Hz Avg. EPE: 15.77, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 16.23, Farneback, 600 Hz Avg. EPE: 19.16, Pyramidal LK, 300 Hz Avg. EPE: 10.09, PCA−Flow, 10 Hz Avg. EPE: 7.02, DeepFlow, 0.5 Hz Avg. EPE: 15.02, Our Method, 600 Hz Avg. EPE: 10.18, Our Method, 300 Hz Avg. EPE: 8.49, Our Method, 10 Hz Avg. EPE: 6.89, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 12.82, Farneback, 600 Hz Avg. EPE: 14.86, Pyramidal LK, 300 Hz Avg. EPE: 6.55, PCA−Flow, 10 Hz Avg. EPE: 2.25, DeepFlow, 0.5 Hz Avg. EPE: 6.87, Our Method, 600 Hz Avg. EPE: 4.56, Our Method, 300 Hz Avg. EPE: 2.66, Our Method, 10 Hz Avg. EPE: 2.14, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 9.48, Farneback, 600 Hz Avg. EPE: 11.89, Pyramidal LK, 300 Hz Avg. EPE: 8.93, PCA−Flow, 10 Hz Avg. EPE: 1.70, DeepFlow, 0.5 Hz Avg. EPE: 3.81, Our Method, 600 Hz Avg. EPE: 3.52, Our Method, 300 Hz Avg. EPE: 1.57, Our Method, 10 Hz Avg. EPE: 1.21, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 7.09, Farneback, 600 Hz Avg. EPE: 7.33, Pyramidal LK, 300 Hz Avg. EPE: 7.56, PCA−Flow, 10 Hz Avg. EPE: 1.02, DeepFlow, 0.5 Hz600Hz
+
+300Hz
+
+10Hz
+
+0.5Hz
+
+Ground Truth
+
+Figure 17: Exemplary results on Sintel (training) and error maps. In each block of 2 × 6 images. Top row, left to right: Our method
+for operating points (1)-(4), Ground Truth. Bottom row: Error heat maps scaled from blue (no error) to red (maximum ground truth ﬂow
+magnitude), Original Image.
+
+ Avg. EPE: 1.12, Our Method, 600 Hz Avg. EPE: 0.85, Our Method, 300 Hz Avg. EPE: 0.30, Our Method, 10 Hz Avg. EPE: 0.27, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 2.94, Our Method, 600 Hz Avg. EPE: 0.89, Our Method, 300 Hz Avg. EPE: 0.37, Our Method, 10 Hz Avg. EPE: 0.30, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 8.08, Our Method, 600 Hz Avg. EPE: 7.06, Our Method, 300 Hz Avg. EPE: 7.00, Our Method, 10 Hz Avg. EPE: 6.98, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 31.26, Our Method, 600 Hz Avg. EPE: 21.32, Our Method, 300 Hz Avg. EPE: 18.34, Our Method, 10 Hz Avg. EPE: 19.97, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 1.12, Our Method, 600 Hz Avg. EPE: 0.93, Our Method, 300 Hz Avg. EPE: 0.52, Our Method, 10 Hz Avg. EPE: 0.41, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 0.66, Our Method, 1000 Hz Avg. EPE: 0.45, Our Method, 300 Hz Avg. EPE: 0.32, Our Method, 10 Hz Avg. EPE: 0.29, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 3.19, Our Method, 600 Hz Avg. EPE: 2.06, Our Method, 300 Hz Avg. EPE: 1.35, Our Method, 10 Hz Avg. EPE: 1.29, Our Method, 0.5 Hz Ground Truth Flow600Hz
+
+300Hz
+
+10Hz
+
+0.5Hz
+
+Ground Truth
+
+Figure 18: Exemplary results on Sintel (training) and error maps. In each block of 2 × 6 images. Top row, left to right: Our method
+for operating points (1)-(4), Ground Truth. Bottom row: Error heat maps scaled from blue (no error) to red (maximum ground truth ﬂow
+magnitude), Original Image.
+
+ Avg. EPE: 35.11, Our Method, 600 Hz Avg. EPE: 32.48, Our Method, 300 Hz Avg. EPE: 30.72, Our Method, 10 Hz Avg. EPE: 31.86, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 15.65, Our Method, 600 Hz Avg. EPE: 16.16, Our Method, 300 Hz Avg. EPE: 15.32, Our Method, 10 Hz Avg. EPE: 14.06, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 1.94, Our Method, 600 Hz Avg. EPE: 1.57, Our Method, 300 Hz Avg. EPE: 1.27, Our Method, 10 Hz Avg. EPE: 1.30, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 1.10, Our Method, 600 Hz Avg. EPE: 0.65, Our Method, 300 Hz Avg. EPE: 0.47, Our Method, 10 Hz Avg. EPE: 0.53, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 3.59, Our Method, 600 Hz Avg. EPE: 1.95, Our Method, 300 Hz Avg. EPE: 1.44, Our Method, 10 Hz Avg. EPE: 1.43, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 3.28, Our Method, 600 Hz Avg. EPE: 1.80, Our Method, 300 Hz Avg. EPE: 1.35, Our Method, 10 Hz Avg. EPE: 1.49, Our Method, 0.5 Hz Ground Truth Flow Avg. EPE: 37.24, Our Method, 600 Hz Avg. EPE: 26.23, Our Method, 300 Hz Avg. EPE: 24.37, Our Method, 10 Hz Avg. EPE: 24.31, Our Method, 0.5 Hz Ground Truth FlowGround Truth
+
+DeepFlow
+
+DIS (all frames)
+
+difference image
+
+e
+m
+a
+r
+f
+
+1
+
+s
+e
+m
+a
+r
+f
+
+2
+
+s
+e
+m
+a
+r
+f
+4
+
+s
+e
+m
+a
+r
+f
+
+6
+
+s
+e
+m
+a
+r
+f
+
+8
+
+s
+e
+m
+a
+r
+f
+
+0
+1
+
+e
+m
+a
+r
+f
+
+1
+
+s
+e
+m
+a
+r
+f
+
+2
+
+s
+e
+m
+a
+r
+f
+
+4
+
+s
+e
+m
+a
+r
+f
+
+6
+
+s
+e
+m
+a
+r
+f
+
+8
+
+s
+e
+m
+a
+r
+f
+
+0
+1
+
+Figure 19: Optical ﬂow on Sintel with lower temporal resolution. In each block of 6x4: Rows, top to bottom, correspond to step sizes 1
+(original frame-rate), 2, 4, 6, 8, 10 frames. Columns, left to right, correspond to new ground truth, DeepFlow result, DIS result (through
+all intermediate frames), original images. Large displacements are signiﬁcantly better preserved by DIS through higher frame-rates.
+
+Ground Truth
+
+DeepFlow
+
+DIS (all frames)
+
+difference image
+
+e
+m
+a
+r
+f
+
+1
+
+s
+e
+m
+a
+r
+f
+
+2
+
+s
+e
+m
+a
+r
+f
+4
+
+s
+e
+m
+a
+r
+f
+
+6
+
+s
+e
+m
+a
+r
+f
+
+8
+
+s
+e
+m
+a
+r
+f
+
+0
+1
+
+e
+m
+a
+r
+f
+
+1
+
+s
+e
+m
+a
+r
+f
+
+2
+
+s
+e
+m
+a
+r
+f
+
+4
+
+s
+e
+m
+a
+r
+f
+
+6
+
+s
+e
+m
+a
+r
+f
+
+8
+
+s
+e
+m
+a
+r
+f
+
+0
+1
+
+Figure 20: Optical ﬂow on Sintel with lower temporal resolution. In each block of 6x4: Rows, top to bottom, correspond to step sizes 1
+(original frame-rate), 2, 4, 6, 8, 10 frames. Columns, left to right, correspond to new ground truth, DeepFlow result, DIS result (through
+all intermediate frames), original images. Large displacements are signiﬁcantly better preserved by DIS through higher frame-rates.
+
+Figure 21: Middlebury depth from stereo results (training dataset). Top Left: Average end-point error (pixel) versus run-time (millisecond),
+Top Right, Bottom: Percentage of pixels with error below 2, 4 and 10 pixels.
+
+Log. run-time (ms)100101102103104105Average end-point error (px)5101520253035  1  2  3  4SPSELASSGMBMOur MethodLog. run-time (ms)100101102103104105Percentage of Pixels with error < 2203040506070  1  2  3  4SPSELASSGMBMOur MethodLog. run-time (ms)100101102103104105Percentage of Pixels with error < 410203040506070  1  2  3  4SPSELASSGMBMOur MethodLog. run-time (ms)100101102103104105Percentage of Pixels with error < 10510152025303540  1  2  3  4SPSELASSGMBMOur Method

@@ -1,0 +1,2221 @@
+Session Types in a Linearly Typed Multi-Threaded
+
+Lambda-Calculus
+
+Hongwei Xi
+
+Zhiqiang Ren
+
+Hanwen Wu William Blair
+
+Boston University
+
+{hwxi,aren,hwwu,wdblair}@cs.bu.edu
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+1
+1
+
+ 
+ 
+]
+L
+P
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+7
+2
+7
+3
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Abstract
+We present a formalization of session types in a multi-threaded
+lambda-calculus (MTLC) equipped with a linear type system,
+establishing for the MTLC both type preservation and global
+progress. The latter (global progress) implies that the evaluation
+of a well-typed program in the MTLC can never reach a deadlock.
+As this formulated MTLC can be readily embedded into ATS,
+a full-ﬂedged language with a functional programming core that
+supports both dependent types (of DML-style) and linear types, we
+obtain a direct implementation of session types in ATS. In addition,
+we gain immediate support for a form of dependent session types
+based on this embedding into ATS. Compared to various existing
+formalizations of session types, we see the one given in this paper
+is unique in its closeness to concrete implementation. In particu-
+lar, we report such an implementation ready for practical use that
+generates Erlang code from well-typed ATS source (making use
+of session types), thus taking great advantage of the infrastructural
+support for distributed computing in Erlang.
+
+Introduction
+
+1.
+In broad terms, a (dyadic) session is an interaction between two
+concurrently running programs, and a session type is a form of type
+for specifying (or classifying) sessions. As an example, let us as-
+sume that two programs P and Q are connected with a bidirectional
+channel. From the perspective of P, the channel may be speciﬁed
+by a term sequence of the following form:
+
+snd(int) :: snd(int) :: rcv(bool) :: nil
+
+which means that an integer is to be sent, another integer is to be
+sent, a boolean is to be received, and ﬁnally the channel is to be
+closed. Clearly, from the perspective of Q, the channel should be
+speciﬁed by the following term sequence:
+
+rcv(int) :: rcv(int) :: snd(bool) :: nil
+
+which means precisely the dual of what the previous term sequence
+does. We may think of P as a client who sends two integers to the
+server Q and then receives from Q either true or false depending on
+whether or not the ﬁrst sent integer is less than the second one.
+
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed
+for proﬁt or commercial advantage and that copies bear this notice and the full citation
+on the ﬁrst page. Copyrights for components of this work owned by others than ACM
+must be honored. Abstracting with credit is permitted. To copy otherwise, or republish,
+to post on servers or to redistribute to lists, requires prior speciﬁc permission and/or a
+fee. Request permissions from permissions@acm.org.
+,
+Copyright c(cid:13) 2015 ACM 978-1-nnnn-nnnn-n/yy/mm. . . $15.00.
+http://dx.doi.org/10.1145/nnnnnnn.nnnnnnn
+
+.
+
+fun P() = let
+
+val () = channel_send (CH, I1)
+val () = channel_send (CH, I2)
+val b0 = channel_recv (CH)
+val () = channel_close (CH)
+
+in b0 end (* end of [P] *)
+
+fun Q() = let
+
+val i1 = channel_recv (CH)
+val i2 = channel_recv (CH)
+val () = channel_send (CH, i1 < i2)
+val () = channel_close (CH)
+
+in () end (* end of [Q] *)
+
+Figure 1. Some pseudo code in ML-like syntax
+
+The session between P and Q is bounded in the sense that it con-
+tains only a bounded number of sends and receives. By introducing
+recursively deﬁned session types, we can specify unbounded ses-
+sions containing indeﬁnite numbers of sends and receives.
+
+In Figure 1, we present some pseudo code showing a plausible
+way to implement the programs P and Q. Please note that the
+functions P and Q, though written together here, can be written
+in separate contexts. We use CH to refer to a channel available in
+the surrounding context of the code and I1 and I2 for two integers;
+the functions channel send and channel recv are for sending
+and receiving data via a given channel, and channel close for
+closing a given channel. Let us now sketch a way to make the
+above pseudo code typecheck. We can assign the following type
+to channel send:
+
+(!chan(snd(T ) :: S ) ≫ chan(S ), T ) → 1
+
+where T stands for a type and S for a session type. Basically, this
+type means that calling channel send on a channel of the type
+chan(snd(T ) :: S ) and a value of the type T returns a unit while
+changing the type of the channel to chan(S ). Clearly, chan must be
+a linear type constructor for this to make sense. As can be expected,
+the type assigned to channel recv should be of the following
+form:
+
+(!chan(rcv(T ) :: S ) ≫ chan(S )) → T
+
+which means that calling channel recv on a channel of the type
+chan(rcv(T ) :: S ) returns a value of the type T while changing
+the type of the channel to chan(S ). As for channel close, it is
+assigned the following type:
+
+(chan(nil)) → 1
+
+indicating that calling channel close on a channel consumes the
+channel (so that the channel is no longer available for use).
+
+ATS [4, 27] is a full-ﬂedged language with a functional pro-
+gramming core based on ML that supports both dependent types
+
+(of DML-style [28, 30]) and linear types. Its highly expressive type
+system makes it largely straightforward to implement session types
+in ATS (e.g., based on the outline given above) if our concern is
+primarily about type-correctness, that is, ﬁnding a way to assign
+proper types to various primitive (or built-in) session-type functions
+such as channel send and channel recv so that type-errors can
+be issued if communication protocols speciﬁed by session types are
+not correctly followed. For instance, there have already been im-
+plementations of session types in Haskell (e.g., [16, 17]) and else-
+where that oﬀer type-correctness. However, mere type-correctness
+is clearly inadequate. We are to present a concrete example show-
+ing that deadlocking can be easily introduced if certain primitive
+session-typed functions are supported inadvertently. We want to go
+beyond type-correctness. In particular, we are interested in proving
+formally the property that concurrency based on session types (as
+those implemented in ATS) can never result in deadlocking, which
+is often referred to as global progress. So we need to formalize ses-
+sion types. Furthermore, we expect to have a formalization for ses-
+sion types that can greatly facilitate the determination of deadlock-
+freeness of certain speciﬁc primitive session-typed functions.
+
+There have been many formalizations of session types in the lit-
+erature (e.g., [3, 6, 9, 10, 23, 24, 26]). Often the dynamics formu-
+lated in a formalization of session types is based on π-calculus [15]
+or its variants/likes. In our attempt to implement session types in
+ATS [29], we found that a formalization of session types based on
+multi-threaded λ-calculus (MTLC) can be of great value due to its
+closeness to the underlying implementation language (that is, ATS
+in our case). Such a formalization [18] is less abstract and more
+operational and is also amenable to extension. For instance, multi-
+party sessions [11] can be directly introduced into a MTLC-based
+formalization of session types. On the other hand, supporting multi-
+party sessions in a logic-based formalization of session-types is yet
+a great challenge.
+
+Before moving on with formal development, we would now like
+to use the moment to slightly modify the example presented above
+so as to make it easier for the reader to access the formalization of
+session types to be presented. As is pointed out above, each session
+type has its own dual and the dual of its dual equals itself. However,
+we do not plan to make use of the notion of dual of a session
+type explicitly in this paper. Instead, we are to introduce two kinds
+of channels: positive channels and negative channels. The type
+for a positive channel speciﬁed by a session type is considered
+the dual of the type for a negative channel speciﬁed by the same
+session type and vice versa. More formally, we use chpos(S ) and
+chneg(S ) for a positive channel and a negative channel speciﬁed
+by S , respectively. One may think of chpos(S ) and chneg(dual(S ))
+being equal and chpos(dual(S )) and chneg(S ) being equal, where
+dual(S ) refers to the dual of S . The function channel send splits
+into a positive version chanpos send of the following type:
+
+expr.
+
+e
+
+::=
+
+x | f | rc | c(~e) |
+hi | he1, e2i | fst(e) | snd(e) |
+let hx1, x2i = e1 in e2 end |
+lam x. e | app(e1, e2) | fix f. v
+x | rc | cc(~v) | hi | hv1, v2i | lam x. e
+
+::=
+values
+v
+::= α | δ | 1 | T1 ∗ T2 | ˆT1 →i ˆT2
+types
+T
+ˆα | ˆδ | T | ˆT1 ⊗ ˆT2 | ˆT1 →l ˆT2
+ˆT
+::=
+viewtypes
+int. expr. ctx. Γ
+::= ∅ | Γ, xf : T
+lin. expr. ctx. ∆ ::= ∅ | ∆, x : ˆT
+
+Figure 2. Some syntax for MTLC0
+
+and a negative version channeg send of the following type:
+
+(!chneg(snd( ˆT ) :: S ) ≫ chneg(S )) → ˆT
+
+In the actual formalization, we use the following equivalent type
+for chanpos recv:
+
+(chpos(rcv( ˆT ) :: S )) → chpos(S ) ⊗ ˆT
+
+and a similar one for channeg recv, where ⊗ forms a linear tu-
+ple type. For channel close, the positive version and negative
+version are named chanpos close and channeg close, respec-
+tively.1 When reading the pseudo code in Figure 1, please note that
+the CH in the body of P refers to a negative channel (due to the as-
+sumption that P is a client) and the CH in the body of Q a positive
+channel.
+
+The rest of the paper is organized as follows. In Section 2,
+we formulate a multi-threaded λ-calculus MTLC0 equipped with a
+simple linear type system, setting up the basic machinery for further
+development. We then extend MTLC0 to MTLCch in Section 3 with
+support for session types and establish both type preservation and
+global progress for MTLCch. We give interpretation to some linear
+logic connectives in Section 5 to facilitate understanding of session
+types, and brieﬂy mention some issues on implementing session
+types. We next present a couple of interesting examples in Section 6
+to illustrate programming with session types. Lastly, we discuss
+some closely related work in Section 8 and then conclude.
+
+The primary contribution of the paper consists of a novel for-
+malization of session-types. Compared to various existing formal-
+izations of session types(e.g., [3, 6, 9, 10, 23, 24, 26]), we see this
+one being unique in its closeness to concrete implementation. In-
+deed, we report an implementation of session types ready for prac-
+tical use that generates Erlang code from well-typed ATS source.
+The primary technical contribution of the paper lies in a simple
+and general approach to showing that concurrency based on session
+types is deadlock-free. For this, a novel notion of DF-reducibility
+(where DF stands for deadlock-freeness) is introduced.
+
+(!chpos(snd( ˆT ) :: S ) ≫ chpos(S ), ˆT ) → 1
+
+and a negative version channeg recv of the following type:
+
+(!chneg(rcv( ˆT ) :: S ) ≫ chneg(S ), ˆT ) → 1
+
+where ˆT ranges over linear types (which include non-linear types
+as a special case). In the actual formalization, we use the following
+equivalent type for chanpos send:
+
+(chpos(snd( ˆT ) :: S ), ˆT ) → chpos(S )
+
+and a similar one for channeg recv so as to simplify the presen-
+tation. Similarly, the function channel recv splits into a positive
+version chanpos recv of the following type
+
+(!chpos(rcv( ˆT ) :: S ) ≫ chpos(S )) → ˆT
+
+2. MTLC0 with Linear Types
+We ﬁrst present a multi-threaded lambda-calculus MTLC0 equipped
+with a simple linear type system, setting up the basic machinery for
+further development. The dynamic semantics of MTLC0 can essen-
+tially be seen as an abstract form of evaluation of multi-threaded
+programs.
+
+Some syntax of MTLC0 is given in Figure 2. We use x for
+a lam-variable and f for a ﬁx-variable, and xf for either a lam-
+variable or a ﬁx-variable. Note that a lam-variable is considered
+a value but a ﬁx-variable is not. We use rc for constant resources
+and c for constants, which include both constant functions cf and
+constant constructors cc. We treat resources in MTLC0 abstractly
+and will later introduce communication channels as a concrete form
+
+1 Overloading in ATS can allow the programmer to still use the unsplit
+function names and thus avoid clutter in coding.
+
+of resources. The meaning of various standard forms of expressions
+in MTLC0 should be intuitively clear. We may refer to a closed
+expression (that is, an expression containing no free variables) as a
+program.
+
+We use T and ˆT for (non-linear) types and (linear) viewtypes,
+respectively, and refer ˆT to as a true viewtype if it is a viewtype
+but not a type. We use δ and ˆδ for base types and base viewtypes,
+respectively. For instance, bool is the base type for booleans and int
+for integers. For a simpliﬁed presentation, we do not introduce any
+concrete base viewtypes in MTLC0. We assume a signature SIG for
+assigning a viewtype to each constant resource rc and a constant
+type (c-type) of the form ( ˆT1, . . . , ˆTn) ⇒ ˆT to each constant.
+We use α and ˆα for variables ranging over types and viewtypes,
+respectively, but we do not support explicit quantiﬁcation over
+these variables until Section 4.
+
+Note that a type is always considered a viewtype. Let ˆT1 and ˆT2
+be two viewtypes. The type constructor ⊗ is based on multiplicative
+conjunction in linear logic. Intuitively, if a resource is assigned the
+viewtype ˆT1⊗ ˆT2, then the resource is a conjunction of two resources
+of viewtypes ˆT1 and ˆT2. The type constructor →l is essentially
+based on linear implication ⊸ in linear logic. Given a function of
+the viewtype ˆT1 →l ˆT2 and a value of the viewtype ˆT1, applying the
+function to the value yields a result of the viewtype ˆT2 while the
+function itself is consumed. If the function is of the type ˆT1 →i ˆT2,
+then applying the function does not consume it. The subscript i in
+→i is often dropped, that is, → is assumed to be →i by default.
+The meaning of various forms of types and viewtypes is to be
+made clear and precise when the rules are presented for assigning
+viewtypes to expressions in MTLC0.
+
+There is no type constructor in MTLC0 based on additive dis-
+junction in linear logic denoted by ⊕ (but such a type constructor is
+fully supported in ATS), and this omission is entirely for the sake
+of a simpliﬁed presentation. There are also multiplicative disjunc-
+tion (M) and additive conjunction (&) in linear logic [7]. If we see
+viewtypes negatively in the sense that they are for classifying ca-
+pabilities (spaces) of consuming (storing) resources, then ˆT1 M ˆT2
+essentially means the capability (space) that joins two classiﬁed by
+ˆT1 and ˆT2. We can interpret ˆT1& ˆT2 as a choice to obtain any capa-
+bility (space) that can be classiﬁed by either ˆT1 or ˆT2. There is no
+type constructor corresponding to M in ATS. As for ˆT1& ˆT2, we can
+use the following dependent type in ATS to replace it:
+∀b : bool. bool(b) →l choose( ˆT1, ˆT2, b)
+
+where bool(b) is a singleton type for the only boolean value equal
+to b and choose( ˆT1, ˆT2, b) equals ˆT1 or ˆT2 depending whether b is
+true or false, respectively.
+
+There is a special constant function thread create in MTLC0 for
+thread creation, which is assigned the following rather interesting
+c-type:
+
+thread create
+
+:
+
+(1 →l 1) ⇒ 1
+
+A function of the type 1 →l 1 is a procedure that takes no argu-
+ments and returns no result (when its evaluation terminates). Given
+that 1 →l 1 is a true viewtype, a procedure of this type may contain
+resources and thus must be called exactly once. The operational
+semantics of thread create is to be formally deﬁned later.
+
+A variety of mappings, ﬁnite or inﬁnite, are to be introduced in
+the rest of the presentation. We use [] for the empty mapping and
+[i1, . . . , in 7→ o1, . . . , on] for the ﬁnite mapping that maps ik to ok for
+1 ≤ k ≤ n. Given a mapping m, we write dom(m) for the domain of
+m. If i < dom(m), we use m[i 7→ o] for the mapping that extends m
+with a link from i to o. If i ∈ dom(m), we use m\i for the mapping
+obtained from removing the link from i to m(i) in m, and m[i := o]
+for (m\i)[i 7→ o], that is, the mapping obtained from replacing the
+link from i to m(i) in m with another link from i to o.
+
+ρ(c(e1, . . . , en)) = ρ(e1) ⊎ · · · ⊎ ρ(en)
+
+ρ(rc) = {rc}
+
+ρ(xf) = ∅
+ρ(hi) = ∅
+
+ρ(he1, e2i) = ρ(e1) ⊎ ρ(e2)
+ρ(fst(e)) = ρ(e)
+ρ(snd(e)) = ρ(e)
+
+ρ(if(e0, e1, e2)) = ρ(e0) ⊎ ρ(e1)
+ρ(let hx1, x2i = e1 in e2 end) = ρ(e1) ⊎ ρ(e2)
+
+ρ(lam x. e) = ρ(e)
+
+ρ(app(e1, e2)) = ρ(e1) ⊎ ρ(e2)
+
+ρ(fix f . v) = ρ(v)
+
+Figure 3. The deﬁnition of ρ(·)
+
+We deﬁne a function ρ(·) in Figure 3 to compute the multiset
+(that is, bag) of constant resources in a given expression. Note that
+⊎ denotes the multiset union. In the type system of MTLC0, it is to
+be guaranteed that ρ(e1) equals ρ(e2) whenever an expression of the
+form if(e0, e1, e2) is constructed, and this justiﬁes ρ(if(e0, e1, e2))
+being deﬁned as ρ(e0) ⊎ ρ(e1).
+
+We use R to range over ﬁnite multisets of resources. Therefore,
+R can also be regarded as a mapping from resources to natural
+numbers: R(rc) = n means that there are n occurrences of rc in
+R. It is clear that we may not combine resources arbitrarily. For
+instance, we may want to exclude the combination of one resource
+stating integer 0 at a location L and another one stating integer 1
+at the same location. We ﬁx an abstract collection RES of ﬁnite
+multisets of resources and assume the following:
+
+• ∅ ∈ RES.
+• For any R1 and R2, R2 ∈ RES if R1 ∈ RES and R2 ⊆ R1, where
+
+⊆ is the subset relation on multisets.
+
+We say that R is a valid multiset of resources if R ∈ RES holds.
+
+In order to formalize threads, we introduce a notion of pools.
+Conceptually, a pool is just a collection of programs (that is, closed
+expressions). We use Π for pools, which are formally deﬁned as
+ﬁnite mappings from thread ids (represented as natural numbers) to
+(closed) expressions in MTLC0 such that 0 is always in the domain
+of such mappings. Given a pool Π and tid ∈ dom(Π), we refer to
+Π(tid) as a thread in Π whose id equals tid. In particular, we refer
+to Π(0) as the main thread in Π. The deﬁnition of ρ(·) is extended
+as follows to compute the multiset of resources in a given pool:
+
+ρ(Π) = Utid∈dom(Π) ρ(Π(tid))
+
+We are to deﬁne a relation on pools in Section 2.2 to simulate multi-
+threaded program execution.
+
+2.1 Static Semantics
+We present typing rules for MTLC0 in this section. It is required
+that each variable occur at most once in an intuitionistic (linear)
+expression context Γ (∆), and thus Γ (∆) can be regarded as a ﬁnite
+mapping. Given Γ1 and Γ2 such that dom(Γ1) ∩ dom(Γ2) = ∅, we
+write (Γ1, Γ2) for the union of Γ1 and Γ2. The same notation also
+applies to linear expression contexts (∆). Given an intuitionistic
+expression context Γ and a linear expression context ∆, we can form
+a combined expression context (Γ; ∆) if dom(Γ) ∩ dom(∆) = ∅.
+Given (Γ; ∆), we may write (Γ; ∆), x : ˆT for either (Γ; ∆, x : ˆT ) or
+(Γ, x : ˆT ; ∆) (if ˆT is actually a type).
+
+We use Θ for a substitution on type and viewtype variables:
+
+Θ ::= [] | Θ[α 7→ T ] | Θ[ ˆα 7→ ˆT ]
+
+SIG |= rc : ˆδ
+Γ; ∅ ⊢ rc : ˆδ
+
+(ty-res)
+
+SIG |= c : ( ˆT1, . . . , ˆTn) ⇒ ˆT
+Γ; ∆i ⊢ ei : ˆTi for 1 ≤ i ≤ n
+
+Γ; ∆1, . . . , ∆n ⊢ c(e1, . . . , en) : ˆT
+
+(ty-cst)
+
+(ty-var-i)
+
+(ty-var-l)
+
+(Γ, xf : T ; ∅) ⊢ xf : T
+
+(Γ; ∅, x : ˆT ) ⊢ x : ˆT
+Γ; ∆0 ⊢ e0 : bool
+
+Γ; ∆ ⊢ e1 : ˆT Γ; ∆ ⊢ e2 : ˆT ρ(e1) = ρ(e2)
+
+(ty-if)
+
+Γ; ∆0, ∆ ⊢ if(e0, e1, e2) : ˆT
+(ty-unit)
+
+Γ; ∅ ⊢ hi : 1
+
+Γ; ∆1 ⊢ e1 : T1 Γ; ∆2 ⊢ e2 : T2
+
+Γ; ∆1, ∆2 ⊢ he1, e2i : T1 ∗ T2
+
+(ty-tup-i)
+
+Γ; ∆ ⊢ e : T1 ∗ T2
+Γ; ∆ ⊢ fst(e) : T1
+
+(ty-fst)
+
+Γ; ∆ ⊢ e : T1 ∗ T2
+Γ; ∆ ⊢ snd(e) : T2
+
+(ty-snd)
+
+By inspecting the rules in Figure 4, we can readily see that a
+closed value cannot contain any resources if the value itself can be
+assigned a type (rather than a linear type). More formally, we have
+the following proposition:
+Proposition 2.1. Assume that (∅; ∅) ⊢ v : T is derivable. Then
+ρ(v) = ∅.
+This proposition plays a fundamental role in the design of MTLC0
+as the rules in Figure 4 are actually so formulated in order to make
+it hold.
+
+The following lemma, which is often referred to as Lemma of
+
+Canonical Forms, relates the form of a value to its type:
+Lemma 2.2. Assume that (∅; ∅) ⊢ v : ˆT is derivable.
+• If ˆT = δ, then v is of the form cc(v1, . . . , vn).
+• If ˆT = ˆδ, then v is of the form rc or cc(v1, . . . , vn).
+• If ˆT = 1, then v is hi.
+• If ˆT = T1 ∗ T2 or ˆT = ˆT1 ⊗ ˆT2, then v is of the form hv1, v2i.
+• If ˆT = ˆT1 →i ˆT2 or ˆT = ˆT1 →l ˆT2, then v is of the form lam x. e.
+
+Proof By an inspection of the rules in Figure 4.
+
+(ty-tup-l)
+
+We use θ for substitution on variables xf:
+
+θ
+
+::= [] | θ[x 7→ v] | θ[ f 7→ e]
+
+For each θ, we deﬁne the multiset ρ(θ) of resources in θ as follows:
+
+ρ(θ) = ⊎xf∈dom(θ)ρ(θ(xf))
+
+Given an expression e, we use e[θ] for the result of applying θ to
+e, which is deﬁned in a standard manner. We write (Γ1; ∆1) ⊢ θ :
+(Γ2; ∆2) to mean that
+
+• dom(θ) = dom(Γ2) ∪ dom(∆2), and
+• (Γ1; ∅) ⊢ θ(xf) : Γ2(xf) is derivable for each xf ∈ Γ2, and
+• there exists a linear expression context ∆1,x for each x ∈
+
+dom(∆2) such that (Γ1; ∆1,x) ⊢ θ(x) : ∆2(x) is derivable, and
+
+• ∆1 = ∪x∈dom(∆2)∆1,x
+The following lemma, which is often referred to as Substitution
+Lemma, is needed to establish the soundness of the type system of
+MTLC0:
+Lemma 2.3. (Substitution) Assume (Γ1; ∆1) ⊢ θ :
+(Γ2; ∆2) ⊢ e :
+ρ(e[θ]) = ρ(e) ⊎ ρ(θ).
+
+(Γ2; ∆2) and
+ˆT is derivable and
+
+ˆT . Then (Γ1; ∆1) ⊢ e[θ] :
+
+Proof By induction on the derivation of (Γ2; ∆2) ⊢ e : ˆT .
+
+2.2 Dynamic Semantics
+We present evaluation rules for MTLC0 in this section. The evalu-
+ation contexts in MTLC0 are deﬁned below:
+
+eval. ctx. E ::=
+
+[] | c(~v, E, ~e) | if(E, e1, e2) |
+hE, ei | hv, Ei | let hx1, x2i = E in e end |
+fst(E) | snd(E) | app(E, e) | app(v, E)
+
+Given an evaluation context E and an expression e, we use E[e] for
+the expression obtained from replacing the only hole [] in E with e.
+
+Definition 2.4. We deﬁne pure redexes and their reducts as follows.
+
+• if(true, e1, e2) is a pure redex whose reduct is e1.
+• if(false, e1, e2) is a pure redex whose reduct is e2.
+• let hx1, x2i = hv1, v2i in e end is a pure redex whose reduct is
+
+e[x1, x2 7→ v1, v2].
+
+• fst(hv1, v2i) is a pure redex whose reduct is v1.
+
+Γ; ∆1 ⊢ e1 : ˆT1 Γ; ∆2 ⊢ e2 : ˆT2
+Γ; ∆1, ∆2 ⊢ he1, e2i : ˆT1 ⊗ ˆT2
+Γ; ∆1 ⊢ e1 : ˆT1 ⊗ ˆT2
+
+Γ; ∆2, x1 : ˆT1, x2 : ˆT2 ⊢ e2 : ˆT
+
+Γ; ∆1, ∆2 ⊢ let hx1, x2i = e1 in e2 end : ˆT
+
+(ty-tup-l-elim)
+
+(Γ; ∆), x : ˆT1 ⊢ e : ˆT2
+
+Γ; ∆ ⊢ lam x. e : ˆT1 →l ˆT2
+
+(ty-lam-l)
+
+Γ; ∆1 ⊢ e1 : ˆT1 →l ˆT2 Γ; ∆2 ⊢ e2 : ˆT1
+
+(ty-app-l)
+
+Γ; ∆1, ∆2 ⊢ app(e1, e2) : ˆT2
+
+(Γ; ∅), x : ˆT1 ⊢ e : ˆT2
+
+ρ(e) = ∅
+
+Γ; ∅ ⊢ lam x. e : ˆT1 →i ˆT2
+
+(ty-lam-i)
+
+Γ; ∆1 ⊢ e1 : ˆT1 →i ˆT2 Γ; ∆2 ⊢ e2 : ˆT1
+
+Γ; ∆1, ∆2 ⊢ app(e1, e2) : ˆT2
+
+(ty-app-i)
+
+Γ, f : T ; ∅ ⊢ v : T
+Γ; ∅ ⊢ fix f. v : T
+(∅; ∅) ⊢ Π(0) : ˆT
+
+(ty-ﬁx)
+
+(∅; ∅) ⊢ Π(tid) : 1 for each 0 < tid ∈ dom(Π)
+
+⊢ Π : ˆT
+
+(ty-pool)
+
+Figure 4. The typing rules for MTLC0
+
+Given a viewtype ˆT , we write ˆT [Θ] for the result of applying Θ to
+ˆT , which is deﬁned in a standard manner. Given a constant resource
+rc, we write SIG |= rc : ˆδ to mean that rc is assigned the viewtype
+ˆδ in the signature SIG. Given a constant c, we use the following
+judgment:
+
+SIG |= c : ( ˆT 0
+
+1 , . . . , ˆT 0
+
+n ) ⇒ ˆT 0
+
+to mean that c is assigned a c-type of the form ( ˆT1, . . . , ˆTn) ⇒ ˆT
+i = ˆTi[Θ] for
+(in the signature SIG) and there exists Θ such that ˆT 0
+1 ≤ i ≤ n and ˆT 0 = ˆT [Θ]. In other words, ( ˆT 0
+1 , . . . , ˆT 0
+n ) ⇒ ˆT 0
+is an instance of ( ˆT1, . . . , ˆTn) ⇒ ˆT . In the case where ˆT 0
+is a true
+i
+viewtype for some i, ˆT 0 is required to also be a true viewtype if the
+c-type is assigned to a constructor (rather than a function).
+
+A typing judgment in MTLC0 is of the form (Γ; ∆) ⊢ e :
+
+ˆT ,
+meaning that e can be assigned the viewtype ˆT under (Γ; ∆). The
+typing rules for MTLC0 are listed in Figure 4.
+
+• snd(hv1, v2i) is a pure redex whose reduct is v2.
+• app(lam x. e, v) is a pure redex whose reduct is e[x 7→ v].
+• fix f . v is a pure redex whose reduct is v[ f 7→ fix f . v].
+
+Evaluating calls to constant functions is of particular impor-
+tance in MTLC0. Assume that cf is a constant function of arity
+n. The expression cf(v1, . . . , vn) is an ad-hoc redex if cf is de-
+ﬁned at v1, . . . , vn, and any value of cf(v1, . . . , vn) is a reduct of
+cf(v1, . . . , vn). For instance, 1 + 1 is an ad hoc redex and 2 is its sole
+reduct. In contrast, 1 + true is not a redex as it is undeﬁned. We can
+even have non-deterministic constant functions. For instance, we
+may assume that the ad-hoc redex randbit() can evaluate to both 0
+and 1.
+
+Let e be a well-typed expression of the form cf(v1, . . . , vn) and
+ρ(e) ⊆ R holds for some valid R (that is, R ∈ RES). We always
+assume that there exists a reduct v in MTLC0 for cf(v1, . . . , vn) such
+that (R\ρ(e)) ⊎ ρ(v) ∈ RES. By doing so, we are able to give a
+presentation with much less clutter.
+
+Definition 2.5. Given expressions e1 and e2, we write e1 → e2 if
+e1 = E[e] and e2 = E[e′] for some E, e and e′ such that e′ is
+a reduct of e, and we may say that e1 evaluates or reduces to e2
+purely if e is a pure redex.
+
+Note that resources may be generated as well as consumed
+when ad-hoc reductions occur. This is an essential issue of great
+importance in any linear type system designed to support practical
+programming.
+
+Definition 2.6. Given pools Π1 and Π2, the relation Π1 → Π2 is
+deﬁned according to the following rules:
+
+e1 → e2
+
+Π[tid 7→ e1] → Π[tid 7→ e2]
+
+(PR0)
+
+Π(tid0) = E[thread create(lam x. e)]
+
+Π → Π[tid0 := E[hi]][tid 7→ app(lam x. e, hi)]
+
+(PR1)
+
+tid > 0
+
+Π[tid 7→ hi] → Π
+
+(PR2)
+
+If a pool Π1 evaluates to another pool Π2 by the rule (PR0), then
+one program in Π1 evaluates to its counterpart in Π2 and the rest
+stay the same; if by the rule (PR1), then a fresh program is created;
+if by the rule (PR2), then a program (that is not the main program)
+is eliminated.
+
+From this point on, we always (implicitly) assume that ρ(Π) ∈
+RES holds whenever Π is well-typed. The soundness of the type
+system of MTLC0 rests upon the following two theorems:
+Theorem 2.7. (Subject Reduction on Pools) Assume that ⊢ Π1 : ˆT is
+derivable and Π1 → Π2 holds for some Π2 satisfying ρ(Π2) ∈ RES.
+Then ⊢ Π2 : ˆT is also derivable.
+
+Proof By structural induction on the derivation of ⊢ Π1 : ˆT . Note
+that Lemma 2.3 is needed.
+Theorem 2.8. (Progress Property on Pools) Assume that ⊢ Π1 : ˆT
+is derivable. Then we have the following possibilities:
+• Π1 is a singleton mapping [0 7→ v] for some v, or
+• Π1 → Π2 holds for some Π2 such that ρ(Π2) ∈ RES.
+
+Proof By structural induction on the derivation of ⊢ Π1 : ˆT . Note
+that Lemma 2.2 is needed. Essentially, we can readily show that
+Π1(tid) for any tid ∈ dom(Π1) is either a value or of the form E[e]
+for some evaluation context E and redex e. If Π1(tid) is a value for
+some tid > 0, then this value must be hi. So the rule (PR2) can be
+
+used to reduce Π1. If Π1(tid) is of the form E[e] for some redex e,
+then the rule (PR0) can be used to reduce Π1.
+
+By combining Theorem 2.7 and Theorem 2.8, we immediately
+conclude that the evaluation of a well-typed pool either leads to a
+pool that itself is a singleton mapping of the form [0 7→ v] for some
+value v, or it goes on forever. In other words, MTLC0 is type-sound.
+
+3. Extending MTLC0 with Channels
+There is no support for communication between threads in MTLC0,
+making MTLC0 uninteresting as a multi-threaded language. We ex-
+tend MTLC0 to MTLCch with support for synchronous communi-
+cation channels in this section. Supporting asynchronous commu-
+nication channels is certainly possible but would result in a more
+involved theoretical development. We do support both synchronous
+and asynchronous session-typed communication channels in prac-
+tice, though. In order to assign types to channels, we introduce ses-
+sion types as follows:
+
+S
+
+::= nil | snd( ˆT ) :: S | rcv( ˆT ) :: S
+
+An empty session is speciﬁed by nil. When used to specify a
+positive channel, snd( ˆT ) :: S means to send onto the channel a
+value of the viewtype ˆT and rcv( ˆT ) :: S means to receive from the
+channel a value of the viewtype ˆT . Dually, when used to specify a
+negative channel, snd( ˆT ) :: S means to receive from the channel
+a value of the viewtype ˆT and rcv( ˆT ) :: S means to send onto the
+channel a value of the viewtype ˆT . After either sending or receiving
+is done, the channel is speciﬁed by S .
+
+Formally, the dual of a session type is deﬁned as follows:
+
+dual(nil) = nil
+
+dual(snd( ˆT ) :: S ) = rcv( ˆT ) :: dual(S )
+dual(rcv( ˆT ) :: S ) = snd( ˆT ) :: dual(S )
+
+where nil is another constant session type denoting the dual of
+nil. Traditionally, nil and nil are treated as the same constant
+in the study on session types. In our implementation, a positive
+channel speciﬁed by nil awaits a message to close itself while
+a negative channel speciﬁed by nil (that is, a positive channel
+speciﬁed by nil) sends out such a message before closing itself.
+
+Formally, we use chpos(S ) and chneg(S ) for a positive and
+negative channel speciﬁed by S , respectively. Though it is clear that
+chpos(S ) and chneg(dual(S )) equal chneg(S ) and chpos(dual(S )),
+respectively, we do not attempt for now to make use of this fact in
+our formalization of session types. In particular, there is currently
+no support for turning a positive channel into a negative channel or
+vice versa.
+
+We use σ as a variable ranging over session types. The func-
+tion chneg create for creating a negative channel is assigned the
+following c-type:
+
+chneg create
+
+:
+
+(chpos(σ) →l 1) ⇒ chneg(σ)
+
+Given a linear function of the type chpos(S ) →l 1 for some S ,
+chneg create essentially creates a positive channel and a negative
+channel that are properly connected, and then starts a thread for
+evaluating the call that applies the function to the positive channel,
+and then returns the negative channel. The newly created positive
+channel and negative channel share the same id.
+
+The send and receive functions for positive channels are given
+
+the following c-types:
+
+send
+recv
+
+:
+:
+
+(chpos(snd( ˆα) :: σ), ˆα) ⇒ chpos(σ)
+(chpos(rcv( ˆα) :: σ)) ⇒ chpos(σ) ⊗ ˆα
+
+Note that send and recv correspond to the functions chanpos send
+and chanpos recv, respectively.
+
+Dually, the send and receive functions for negative channels are
+
+given the following c-types:
+
+recv
+send
+
+:
+:
+
+(chneg(rcv( ˆα) :: σ), ˆα) ⇒ chneg(σ)
+(chneg(snd( ˆα) :: σ)) ⇒ chneg(σ) ⊗ ˆα
+
+Note that send and recv correspond to the functions channeg send
+and channeg recv, respectively.
+
+The functions close and close for closing positive and negative
+
+channels, respectively, are given the following c-types:
+
+close :
+
+(chpos(nil)) ⇒ 1
+
+close :
+
+(chneg(nil)) ⇒ 1
+
+Note that close and close can also be referred to as chanpos close
+and channeg close, respectively.
+
+In MTLCch, there are resource constants chi and chi for positive
+and negative channels, respectively, where i ranges over natural
+numbers. For each i, chi and chi are dual to each other and their
+channel ids are i. We use ch and ch to range over chi and chi,
+respectively, referring one as the dual of the other.
+
+There are no new typing rules in MTLCch over MTLC0. Given
+a session type S , we say that the type chpos(S ) matches the type
+chneg(S ) and vice versa. In any type derivation of Π : ˆT satisfying
+ρ(Π) ∈ RES, the type assigned to a positive channel ch is always
+required to match the one assigned to the corresponding negative
+channel ch of the same channel id. For evaluating pools in MTLC0,
+we have the following additional rules in MTLCch:
+
+Π(tid0) = E[chneg create(lam x. e)]
+
+Π → Π[tid0 := E[ch]][tid 7→ app(lam x. e, ch)]
+
+(PR3)
+
+Π(tid1) = E1[close(ch)]
+
+Π(tid2) = E2[close(ch)]
+
+Π → Π[tid1 := E1[hi]][tid2 := E2[hi]]
+
+Π(tid1) = E1[send(ch, v)]
+
+Π(tid2) = E2[send(ch)]
+
+Π → Π[tid1 := E1[ch]][tid2 := E2[(ch, v)]]
+
+Π(tid1) = E1[recv(ch, v)]
+
+Π(tid2) = E2[recv(ch)]
+
+Π → Π[tid1 := E1[ch]][tid2 := E2[(ch, v)]]
+
+(PR4-clos)
+
+(PR4-send)
+
+(PR4-recv)
+
+For instance, the rule PR4-send states: If a program in a pool is
+of the form E1[send(ch, v)] and another of the form E2[send(ch)],
+then this pool can be reduced to another pool by replacing these
+two programs with E1[ch] and E2[(ch, v)], respectively.
+
+While Theorem 2.7 (Subject Reduction) can be readily estab-
+lished for MTLCch, Theorem 2.8 (Progress) requires some special
+treatment due to the presence of session-typed primitive functions
+chneg create, close, close, send, recv, send, and recv.
+
+A partial (ad-hoc) redex in MTLCch is of one of the follow-
+ing forms: close(ch), close(ch), send(ch, v), recv(ch), send(ch), and
+recv(ch, v). Clearly, either a positive channel ch or a negative chan-
+nel ch is involved in each partial redex. We say that close(ch) and
+close(ch) match, and send(ch, v) and send(ch) match, and recv(ch)
+and recv(ch, v) match. We can immediately prove in MTLCch that
+each well-typed program is either a value or of the form E[e] for
+some evaluation context E and expression e that is either a redex
+or a partial redex. We refer to an expression as a blocked one if it
+is of the form E[e] for some partial redex e. We say two blocked
+expressions E1[e1] and E2[e2] match if e1 and e2 are matching par-
+tial redexes. Clearly, a pool containing two matching blocked ex-
+pressions can be reduced according to one of the rules PR4-clos,
+PR4-send, and PR4-recv.
+
+Intuitively, a pool Π is deadlocked if Π(tid) for tid ∈ dom(Π)
+are all blocked expressions but there are no matching ones among
+them, or if Π(0) is a value and Π(tid) for positive tid ∈ dom(Π) are
+
+all blocked expressions but there are no matching ones among
+them. The following lemma states that a well-typed pool
+in
+MTLCch can never be deadlocked:
+
+Lemma 3.1. (Deadlock-Freedom) Let Π be a well-typed pool in
+MTLCch such that Π(0) is either a value containing no channels or
+a blocked expression and Π(tid) for each positive tid ∈ dom(Π) is a
+blocked expression. If Π is obtained from evaluating an initial pool
+containing no channels, then there exist two thread ids tid1 and tid2
+such that Π(tid1) and Π(tid2) are matching blocked expressions.
+
+Note that it is entirely possible to encounter a scenario where the
+main thread in a pool returns a value containing a channel while
+another thread is waiting for something to be sent on the channel.
+Technically, we do not classify this scenario as a deadlocked one.
+There are many forms of values that contain channels. For instance,
+such a value can be a channel itself, or a closure-function contain-
+ing a channel in its environment, or a compound value like a tuple
+that contains a channel as one part of it, etc. Clearly, any value con-
+taining a channel can only be assigned a true viewtype.
+
+The primary technical contribution of the paper lies in the fol-
+lowing presented approach to establishing Lemma 3.1. Let us use
+M for sets of (positive and negative) channels and M for a ﬁnite
+non-empty collection (that is, multiset) of such sets. We say that
+M is regular if the sets in M are pairwise disjoint and each pair of
+channels ch and ch are either both included in the multiset union
+U(M) of all the sets in M or both excluded from it. Of course,
+U(M) is the same as the set union S(M) as the sets in M are pair-
+wise disjoint.
+
+Let M be a regular collection of channel sets. We say that M
+DF-reduces to M′ via ch if there exist M1 and M2 in M such that
+ch ∈ M1 and ch ∈ M2 and M′ = (M\{M1, M2}) ∪ {M12}, where
+M12 = (M1 ∪ M2)\{ch, ch}. We say that M DF-reduces to M′ if M
+DF-reduces to M′ via some ch. We may write M { M′ to mean
+that M DF-reduces to M. We say that M is DF-normal if there is
+no M′ such that M { M′ holds.
+
+Proposition 3.2. Let M be a regular collection of channel sets.
+If M is DF-normal, then each set in M consists of an indeﬁnite
+number of channel pairs ch and ch. In other words, for each M in
+a DF-normal M, a channel ch is in M if and only if its dual ch is
+also in M.
+
+Proof The proposition immediately follows from the deﬁnition of
+DF-reduction {.
+
+Definition 3.3. A regular collection M of channel sets is DF-
+reducible if either (1) each set in M is empty or (2) M is not
+DF-normal and M′ is DF-reducible whenever M { M′ holds.
+
+We say that a channel set M is self-looping if it contains both ch
+and ch for some ch. Obviously, a regular collection M of channel
+sets is not DF-reducible if there is a self-looping M in M.
+
+Proposition 3.4. Let M be a regular collection of channel sets.
+If M is DF-reducible and M′ = M\{∅}, then M′ is also DF-
+reducible.
+
+Proof Straightforwardly.
+
+Proposition 3.5. Let M be a regular collection of channel sets. If
+M { M′ and M′ is DF-reducible, then M is also DF-reducible.
+
+Proof Clearly, M { M′ via some ch. Assume M { M1
+via ch1 for some M1 and ch1. If ch and ch1 are the same, then
+M1 is DF-reducible as it is the same as M′. Otherwise, it can be
+
+1 via ch
+readily veriﬁed that there exists M′
+1 being DF-
+and M′ { M′
+reducible. Note that the size of M1 is strictly less than that of M.
+By induction hypothesis on M1, we have M1 being DF-reducible.
+By deﬁnition, M is DF-reducible.
+
+1 via ch1. Clearly, the latter implies M′
+
+1 such that M1 { M′
+
+Proposition 3.6. Let M be a regular collection of channel sets that
+is DF-reducible. If M1 and M2 in M contain ch and ch, respectively,
+then M′ = (M\{M1, M2}) ∪ {M′
+2} is also DF-reducible, where
+M′
+
+1 = M1\{ch} and M′
+
+1, M′
+
+2 = M2\{ch}.
+
+Proof The proposition follows from a straightforward induction
+on the size of the set union S(M).
+
+Lemma 3.7. Let M be a regular collection of n channel sets
+M1, . . . , Mn for some n ≥ 1. If the union S(M) = M1 ∪ . . . ∪ Mn
+contains at least n channel pairs (ch1, ch1), . . . , (chn, chn), then M
+is not DF-reducible.
+
+Proof By induction on n. If n = 1, then M is not DF-reducible
+as M1 is self-looping. Assume n > 1. If either M1 or M2 is self-
+looping, then M is not DF-reducible. Otherwise, we may assume
+that ch1 ∈ M1 and ch1 ∈ M2 without loss of generality. Then M
+DF-reduces to M′ via ch1 for some M′ containing n − 1 chan-
+nel sets. Note that S(M′) contains at least n − 1 channel pairs
+(ch2, ch2), . . . , (chn, chn). By induction hypothesis, M′ is not DF-
+reducible. So M is not DF-reducible, either.
+
+Given an expression e in MTLCch, we use ρCH(e) for the set of
+channels contained in e. Given a pool Π in MTLCch, we use RCH(Π)
+for the collection of ρCH(Π(tid)), where tid ranges over dom(Π).
+Lemma 3.8. If RCH(Π) is DF-reducible and Π evaluates to Π′, then
+RCH(Π′) is also DF-reducible.
+
+Proof Note that RCH(Π) and RCH(Π′) are the same unless Π eval-
+uates to Π′ according to one of the rules PR3, PR4-clos, PR4-send,
+and PR4-recv.
+
+• For the rule PR3: We have RCH(Π′) { RCH(Π) via the newly
+introduced channel ch. By Proposition 3.5, RCH(Π′) is DF-
+reducible.
+
+• For the rule PR4-clos: We have that RCH(Π′) is DF-reducible
+
+by Proposition 3.6.
+
+• For the rule PR4-send: Let ch be the channel on which a value
+is sent when Π evaluates to Π′. Note that this value can itself
+be a channel or contain a channel. We have RCH(Π) { M via
+ch for some M. So M is DF-reducible by deﬁnition. Clearly,
+RCH(Π′) { M via ch as well. By Proposition 3.6, RCH(Π′) is
+DF-reducible.
+
+• For the rule PR4-recv: This case is similar to the previous one.
+
+We are now ready to give a proof for Lemma3.1:
+
+Proof Note that any channel, either positive or negative, can appear
+at most once in RCH(Π), and a channel ch appears in RCH(Π) if and
+only if its dual ch also appears in RCH(Π). In addition, any positive
+channel ch being assigned a type of the form chpos(S ) in the type
+derivation of Π for some session type S mandates that its dual ch
+be assigned the type of the form chneg(S ).
+
+Assume that Π(tid) is a blocked expression for each tid ∈
+dom(Π). If the partial redex in Π(tid1) involves a positive chan-
+nel ch while the partial redex in Π(tid2) involves its dual ch, then
+
+these two partial redexes must match. This is due to Π being well-
+typed. In other words, the ids of the channels involved in the partial
+redexes of Π(tid) for tid ∈ dom(Π) are all distinct. This simply im-
+plies that there are n channel pairs (ch, ch) in S(RCH(Π)) for some n
+greater than or equal to the size of Π. By Lemma 3.7, RCH(Π) is not
+reducible. On the other hand, RCH(Π) is reducible by Lemma 3.8
+as Π0 evaluates to Π (in many step) and RCH(Π0) (containing only
+sets that are empty) is reducible. This contradiction indicates that
+there exist tid1 and tid2 such that Π(tid1) and Π(tid2) are matching
+blocked expressions. Therefore Π evaluates to Π′ for some pool Π′
+according to one of the rules PR4-clos, PR4-send, and PR4-recv.
+
+With Proposition 3.4, the case can be handled similarly where
+Π(0) is a value containing no channels and Π(tid) is a blocked
+expression for each positive tid ∈ dom(Π).
+
+Please assume for the moment that we would like to add into
+
+MTLCch a function chneg create2 of the following type:
+
+((chpos(σ1), chpos(σ2)) →l 1) ⇒ (chneg(σ1), chneg(σ2))
+
+One may think of chneg create2 as a slight generalization of
+chneg create that creates in a single call two channels instead of
+one. Unfortunately, adding chneg create2 into MTLCch can po-
+tentially cause a deadlock. For instance, we can easily imagine
+a scenario where the ﬁrst of the two channels (ch1, ch2) returned
+from a call to chneg create2 is used to send the second to the newly
+created thread by the call, making it possible for that thread to
+cause a deadlock by waiting for a value to be sent on ch2. Clearly,
+Lemma 3.8 is invalidated if chneg create2 is added.
+
+The soundness of the type system of MTLCch rests upon the fol-
+lowing two theorems (corresponding to Theorem 2.7 and Theo-
+rem 2.8):
+Theorem 3.9. (Subject Reduction on Pools) Assume that ⊢ Π1 : ˆT
+is derivable and Π1 → Π2 such that ρ(Π2) ∈ RES. Then ⊢ Π2 : ˆT
+is derivable.
+
+Proof The proof is essentially the same as the one for Theo-
+rem 2.7. The only additional part is for checking that the rules PR3,
+PR4-clos, PR4-send, and PR4-recv are all consistent with respect
+to the typing rules listed in Figure 4.
+
+Theorem 3.10. (Progress Property on Pools) Assume that ⊢ Π1 : ˆT
+is derivable and ρ(Π1) is valid. Also assume that ρ(v) contains no
+channels for every value v of the type ˆT . Then we have the following
+possibilities:
+
+• Π1 is a singleton mapping [0 7→ v] for some v, or
+• Π1 → Π2 holds for some Π2 such that ρ(Π2) ∈ RES.
+
+Proof The proof follows the same structure as the one for Theo-
+rem 2.8. Lemma 3.1 is needed to handle the case where all of the
+threads (possibly excluding the main thread) in a pool consist of
+blocked expressions.
+
+4. Additional Features for MTLCch
+We brieﬂy mention certain additional features for MTLCch that are
+to be used in some examples presented later.
+
+4.1 Bidirectional Forwarding
+There is a special primitive function of the name chposneg link for
+connecting a positive channel with a negative channel speciﬁed by
+the following session type:
+
+chposneg link
+
+:
+
+(chpos(σ), chneg(σ)) ⇒ 1
+
+Given a positive channel and a negative channel, chposneg link
+sends each value received from the positive channel onto the neg-
+ative channel and vice versa. In other words, chposneg link does
+bidirectional forwarding between these two channels. In practice,
+chposneg link is often used to implement delegation of service. It
+can be readily veriﬁed that the two channels passed to a call to
+chposneg link can never have the same channel id; if one is ch1,
+then the other must be ch2 for some ch2 distinct from ch1. Calling
+chposneg link on a positive channel and its dual surely results in a
+deadlock. One of the evaluation rules for chposneg link is given as
+follows:
+
+fun
+fserv_times{A,B:type}
+(
+
+chp: chpos(chsnd(chneg(A))::B)
+
+, chn_a: chneg(A), chn_b: chneg(B)
+) : void = let
+//
+val () =
+
+chanpos_send (chp, chn_a)
+
+//
+in
+
+chanposneg_link (chp, chn_b)
+
+end // end of [fserv_times]
+
+Π(tid1) = E1[e1]
+Π(tid3) = E3[e3]
+Π → Π[tid1 := E1[ch1]][tid2 := E2[e2]][tid3 := E3[(ch2, v)]]
+
+Π(tid2) = E2[e2]
+
+where we have e1 = recv(ch1, v), e2 = chposneg link(ch1, ch2),
+and e3 = recv(ch2). The other ones are omitted. It should be clear
+that Lemma 3.8 still holds after chposneg link is added, and thus
+Lemma 3.1 still holds as well.
+
+4.2 User-Deﬁned Datatypes
+The kind of (recursive) datatypes in ML (for tagged unions) can
+be added into MTLCch without any diﬃculty. In terms of theory,
+it is straightforward to support user-deﬁned (recursive) session
+datatypes in MTLCch, allowing sessions of indeﬁnite length to
+be speciﬁed. Essentially, all we need is to add folding/unfolding
+rules for handling recursive session types. As for implementation,
+we currently support recursive session types based on an indirect
+approach, which is illustrated through the examples presented in
+Section 6.
+
+4.3 Quantiﬁcation over Types
+We can readily incorporate both universally and existentially quan-
+tiﬁed types into MTLCch. In ATS, there are predicative quantiﬁ-
+cation and impredicative quantiﬁcation. The former is for depen-
+dent types (of DML-style [28, 30]) while the latter for parametric
+polymorphism. For instance, the example presented in Section 6.2
+makes use of both parametric polymorphism and DML-style de-
+pendent types. In terms of theory, we can readily incorporate quan-
+tiﬁed session types into MTLCch. As for implementation, we have
+not yet attempted to add into ATS direct support for programming
+with quantiﬁed session types. Instead, we rely on an indirect ap-
+proach to do so, which is illustrated in Section 5.
+
+Interpreting Linear Logic Connectives
+
+5.
+Unlike logic-based formalizations of session types [22, 26], we
+have not introduced session type constructors that are directly
+based on or related to logic connectives in linear logic. In this
+section, we interpret in MTLCch some common linear logic con-
+nectives including multiplicative conjunction (⊗), multiplicative
+implication (⊸), additive disjunction (&), and additive conjunc-
+tion (⊕). We are unclear as to whether multiplicative disjunction
+(M) can be handled at all. We also brieﬂy mention the exponential
+connective ! at the end.
+
+Note that the presented code is written in the concrete syntax of
+ATS, which is largely ML-like. We expect that people who can read
+ML code should have no great diﬃculty in following the presented
+ATS code as it makes only use of common functional programming
+features.
+M-Conjunction(⊗): Given two session types A and B, a channel
+of the session type A ⊗ B can be interpreted as one that inputs a
+channel speciﬁed by A and then behaves as a channel speciﬁed by
+
+Figure 5. Interpreting multiplicative conjunction
+
+fun
+fserv_implies{A,B:type}
+(
+
+chp: chpos(chrcv(chneg(A))::B)
+
+, fchn: chneg(A) -<lincloptr1> chneg(B)
+) : void = let
+
+val chn_b = fchn(chanpos_recv(chp))
+
+in
+
+cloptr_free(fchn); chanposneg_link(chp, chn_b)
+
+end // end of [fserv_implies]
+
+Figure 6. Interpreting (multiplicative) implication
+
+B [22, 26]. This interpretation is from the client’s viewpoint, mean-
+ing in MTLCch that A ⊗ B should be deﬁned as snd(chneg(A)) :: B.
+Clearly, any reasonable interpretation for A ⊗ B is expected to al-
+low the construction of a channel of the type chneg(A⊗ B) based on
+two channels of the types chneg(A) and chneg(B) and vice versa.
+In Figure 5, a function fserv_times is implemented to allow a
+channel of the type chneg(A ⊗ B) to be built by the following call:
+
+channeg_create(llam(chp) => fserv_times(chp,chn_a,chn_b))
+
+where chn_a and chn_b are channels of the types chneg(A) and
+chneg(B), respectively, and the keyword llam forms a linear func-
+tion (that is to be called exactly once). The other direction (that is,
+obtaining chneg(A) and chneg(B) from chneg(A ⊗ B)) is straight-
+forward and thus skipped.
+
+Of course, one can also interpret A ⊗ B as snd(chneg(A)) ::
+snd(chneg(B)) :: nil. With this interpretation, it should be obvi-
+ous to see how chneg(A ⊗ B) can be constructed based on chneg(A)
+and chneg(B) and vice versa.
+M-Implication(⊸): Given two session types A and B, a chan-
+nel of the session type A ⊸ B can be interpreted as one that
+outputs a channel speciﬁed by A and then behaves as a channel
+speciﬁed by B [22, 26]. This interpretation is from the client’s
+viewpoint, meaning in MTLCch that A ⊸ B should be deﬁned as
+rcv(chneg(A)) :: B. If one has a function fchn that turns a negative
+channel speciﬁed by A into a negative channel speciﬁed by B, then
+one can build as follows a negative channel speciﬁed by A ⊸ B:
+
+channeg_create(llam(chp) => fserv_limplies(chp, fchn))
+
+where the function fserv_implies is implemented in Figure 6.
+Note that the function cloptr_free is called to explicitly free a
+linear function that has been called.
+A-Disjunction(⊕) Given two session types A and B, a channel of
+the session type A⊕B can be interpreted as one that inputs a boolean
+value and then behaves as a channel speciﬁed by either A or B
+depending on whether the boolean value is true or false, respec-
+
+datatype
+channeg_adisj
+
+(A:type, B:type, type) =
+
+| channeg_adisj_l(A, B, A) of () // tag=0
+| channeg_adisj_r(A, B, B) of () // tag=1
+
+extern
+fun
+channeg_adisj{A,B:type}
+(
+
+chn: !chneg(adisj(A, B)) >> chneg(X)
+
+) : #[X:type] channeg_adisj(A, B, X)
+
+extern
+fun
+chanpos_adisj_l{A,B:type}
+
+(chp: !chpos(adisj(A,B)) >> chpos(A)): void
+
+and
+chanpos_adisj_r{A,B:type}
+
+(chp: !chpos(adisj(A,B)) >> chpos(B)): void
+
+(* ****** ****** *)
+
+fun
+fserv_adisj_l{A,B:type}
+(
+
+chp: chpos(adisj(A, B)), chn: chneg(A)
+
+) : void = let
+
+val()=chanpos_adisj_l(chp) in chanposneg_link(chp, chn)
+
+end // end of [fserv_adisj_l]
+
+fun
+fserv_adisj_r{A,B:type}
+(
+
+chp: chpos(adisj(A, B)), chn: chneg(B)
+
+) : void = let
+
+val()=chanpos_adisj_r(chp) in chanposneg_link(chp, chn)
+
+end // end of [fserv_adisj_r]
+
+Figure 7. Interpreting additive disjunction
+
+tively. This interpretation is from the client’s viewpoint, meaning
+in MTLCch that A ⊕ B should be deﬁned as follows:
+
+∀b : bool. snd(bool(b)) :: choose(A, B, b)
+
+where bool(b) is a singleton type for the boolean value equal to
+b, and choose(A, B, b) equals either A or B depending on whether b
+equals true or false, respectively. It should be noted that the positive
+channel type chpos(∀b : bool. snd(. . .) :: . . .) should be interpreted
+as follows:
+
+∀b : bool. chpos(snd(bool(b)) :: choose(A, B, b))
+
+but the negative one chneg(∀b : bool. snd(. . .) :: . . .) is as follows:
+
+∃b : bool. chneg(snd(bool(b)) :: choose(A, B, b))
+
+We have not yet added into ATS direct support for quantiﬁed ses-
+sion types like the ones appearing here. Instead, we rely on an indi-
+rect approach to handle such types. In Figure 7, the type constructor
+adisj stands for ⊕. We declare a datatype channeg_adisj so as
+to introduce two tags: channeg_adisj_l and channeg_adisj_r
+are internally represented as 0 and 1, respectively. When applied
+to a negative channel speciﬁed by some session type adisj(A,B),
+channeg_adisj returns a tag received from the channel. Note that
+the syntax [X:type] represents an existential quantiﬁer and the
+symbol # in front of it means that the type variable X to the left of
+the quantiﬁer is also in its scope. Essentially, the type assigned to
+channeg_adisj indicates that the tag returned from a call to the
+function determines the type of the argument of the function after
+
+the call: 0 means chneg(A) and 1 means chneg(B) here. Applied
+to a positive channel, chanpos_adisj_l and chanpos_adisj_r
+send 0 and 1 onto the channel, respectively. By now, it should
+be clearly that the following call turns a channel chn of the type
+chneg(A) into one of the type chneg(adisj(A,B)):
+
+channeg_create(llam(chp) => fserv_adisj_l(chp, chn))
+
+Similarly, the following call turns a channel chn of the type
+chneg(B) into one of the type chneg(adisj(A,B)):
+
+channeg_create(llam(chp) => fserv_adisj_r(chp, chn))
+
+Often, the kind of choice associated with A ⊕ B is referred to as
+internal choice as it is the server that determines whether A or B is
+chosen.
+
+A-Conjunction(&) Given two session types A and B, a channel
+of the session type A&B can be interpreted as one that outputs a
+boolean value and then behaves as a channel speciﬁed by either A
+or B depending on whether the boolean value is true or false, re-
+spectively. This interpretation is from the client’s viewpoint, mean-
+ing in MTLCch that A&B should be deﬁned as follows:
+∀b : bool. rcv(bool(b)) :: choose(A, B, b)
+
+Note that the positive channel type chpos(∀b : bool. rcv(. . .) :: . . .)
+should be interpreted as follows in this case:
+
+∃b : bool. chpos(rcv(bool(b)) :: choose(A, B, b))
+
+but the negative one chneg(∀b : bool. rcv(. . .) :: . . .) is as follows:
+
+∀b : bool. chneg(rcv(bool(b)) :: choose(A, B, b))
+
+The code in Figure 8 essentially shows how a channel of the
+type chneg(A&B) can be built based on a value of the type
+chneg(A)&chneg(B). Note that aconj refers to & when called
+to form a session type. As & is not supported as a type constructor
+in ATS, we use the following one to represent it:
+
+∀b : bool. bool(b) →l choose(chneg(A), chneg(B), b)
+
+The declared datatype choose is a linear one. The symbol ˜ in
+front of a linear data constructor like choose_l means that the
+constructor itself is freed after the arguments of the constructor
+are taken out. What fserv_conj does is clear: It checks the tag
+received on its ﬁrst argument chp (a positive channel) and then
+determine whether to oﬀer chp as a channel speciﬁed by A or B.
+So the kind of choice provided by & is external: It is the client that
+decides whether A or B is chosen.
+Exponential(!) Given a session type S , we have a type service(S )
+that can be assigned to a value representing a persistent service
+speciﬁed by S . With such a service, channels of the type chneg(S )
+can be created repeatedly. A built-in function service create is
+assigned the following type for creating a service:
+
+service create
+
+:
+
+(chpos(σ) →i 1) ⇒ service(σ)
+
+In contrast with chneg create for creating a channel, service create
+requires that its argument be a non-linear function (so that this
+function can be called repeatedly).
+
+6. Examples of Session-Typed Programs
+We present some simple running examples in this section to fur-
+ther illustrate programming with session types. More practical ex-
+amples (e.g. FTP and reversed FTP) are available but diﬃcult to
+present here.
+
+6.1 Eratosthenes’s Sieve
+We give an implementation of Eratosthenes’s sieve based on
+session-typed channels. In particular, we make use of channels
+
+datatype
+chanpos_aconj
+
+(A:type, B:type, type) =
+
+| chanpos_aconj_l(A, B, A) of () // tag=0
+| chanpos_aconj_r(A, B, B) of () // tag=1
+
+extern
+fun
+chanpos_aconj{A,B:type}
+(
+
+datatype
+chanpos_list
+
+(a:type, type) =
+
+| chanpos_list_nil(a, nil) of () // tag=0
+| chanpos_list_cons(a, snd(a)::sslist(a)) of () // tag=1
+
+extern
+fun
+chanpos_list{a:type}
+(
+
+!chpos(aconj(A, B)) >> chpos(X)
+
+) : #[X:type] chanpos_aconj(A, B, X)
+
+chp: !chanpos(sslist(a)) >> chanpos(ss)
+
+) : #[ss:type] chanpos_list(a, ss)
+
+extern
+fun
+channeg_aconj_l{A,B:type}
+
+extern
+fun
+channeg_list_nil{a:type}
+
+(!chneg(aconj(A,B)) >> chneg(A)): void
+
+(chn: !chneg(sslist(a)) >> chneg(nil)): void
+
+and
+channeg_aconj_r{A,B:type}
+
+(!chneg(aconj(A,B)) >> chneg(B)): void
+
+and
+channeg_list_cons{a:type}
+(
+
+(* ****** ****** *)
+
+datavtype
+choose(a:vtype, b:vtype, bool) =
+| choose_l (a, b, true) of (a)
+| choose_r (a, b, false) of (b)
+
+fun
+fserv_aconj
+
+{A,B:type}
+
+(
+
+chp: chpos(aconj(A, B))
+
+, fchn:
+
+{b:bool}
+
+bool(b) -<lincloptr1> choose(chneg(A), chneg(B), b)
+
+// fchn
+
+) : void = let
+
+val opt = chanpos_aconj(chp)
+
+in
+//
+case opt of
+| chanpos_aconj_l() => let
+
+val˜choose_l(chn) = fchn(true)
+
+in
+
+chanposneg_link(chp, chn)
+
+end // end of [chanpos_aconj_l]
+
+| chanpos_aconj_r() => let
+
+val˜choose_r(chn) = fchn(false)
+
+in
+
+chanposneg_link(chp, chn)
+
+end // end of [chanpos_aconj_r]
+
+//
+end // end of [fserv_aconj]
+
+Figure 8. Interpreting additive conjunction
+
+speciﬁed by session lists that are of indeﬁnite length. This exam-
+ple is essentially taken from SILL [8]. In Figure 9, we give three
+functions for unfolding channels speciﬁed by session lists: one for
+positive channels and two for negative channels. Strictly speaking,
+we should use the name co-lists (instead of lists) here as it is the
+client that decides whether the next element of a list should be
+generated or not.
+
+For someone familiar with stream-based lazy evaluation, the
+code in Figure 10 and Figure 11 should be easily accessible.
+Given a channel chn of integers and an integer n0, the function
+ints_filter builds a new channel of integers that outputs, when
+requested, the ﬁrst integer from chn that is not a multiple of n0.
+Given a channel chn of integers, the function sieve outputs,
+
+chn: !chneg(sslist(a)) >> chneg(snd(a)::sslist(a))
+
+) : void // end-of-function
+
+Figure 9. Functions for unfolding session list channels
+
+when requested, the ﬁrst integer p0 from chn, and then applies
+ints_filter to chn and p0 to build a new channel, and then ap-
+plies itself to the new channel recursively. Note that the code for
+ints_from is omitted, which returns a channel of all the integers
+starting from a given one.
+
+6.2 A Queue of Channels
+We give a queue implementation based on a queue of session-typed
+channels. This example is largely based on one in SILL. What is
+novel here mainly involves the use of DML-style dependent types
+to specify the size of each queue in the implementation.
+
+Given a type a and an integer n, we use ssque(a,n) as a
+session type to specify a channel representing a queue of size n
+in which each element is of the type a. In Figure 12, there are four
+functions for unfolding channels speciﬁed by session queues: one
+for positive channels and three for negative channels.
+
+The function queue_create creates a negative channel repre-
+senting an empty queue. Based on the code for queue_create, we
+can see that a queue of size n is represented by a queue of n+1 chan-
+nels (where the last one always represents an empty queue); each
+element in the queue is held in the corresponding channel (or more
+precisely, the thread running to support the channel); enqueuing an
+element is done by sending the element down to the last channel
+(representing an empty queue), causing this channel to create an-
+other channel (representing an empty queue); dequeuing is done
+by sending out the element held in the ﬁrst channel (in the queue
+of channels) while the thread running to support the channel turns
+into one that does bidirectional forwarding.
+
+Note that the implementation of queue_create never needs to
+handle dequeuing an empty queue or closing a non-empty queues
+as these operations are ill-typed, reaping typical beneﬁts from
+(DML-style) dependent types.
+
+Implementing Session-Typed Channels
+
+7.
+As far as implementation is of the concern, there is very little that
+needs to be done regarding typechecking in order to support session
+types in ATS. Essentially, the entire eﬀort focuses on implementing
+session-typed channels.
+
+implement
+ints_filter
+
+(chn, n0) = let
+
+//
+fun
+getfst
+(
+
+chn: !chneg(sslist(int))
+
+) : int = let
+//
+val () =
+
+channeg_list_cons(chn)
+
+//
+val fst = channeg_send(chn)
+//
+in
+
+if fst mod n0 > 0 then fst else getfst(chn)
+
+end // end of [getfst]
+//
+fun
+fserv
+(
+
+chp: chpos(sslist(int))
+, chn: chneg(sslist(int))
+) : void = let
+//
+val opt = chanpos_list(chp)
+//
+in
+//
+case opt of
+| chanpos_list_nil() =>
+
+(
+
+)
+
+chanpos_close(chp);
+channeg_list_close(chn)
+
+| chanpos_list_cons() =>
+
+(
+
+)
+
+chanpos_send(chp, getfst(chn)); fserv(chp, chn)
+
+//
+end // end of [fserv]
+//
+in
+
+channeg_create(llam(chp) => fserv(chp, chn))
+
+end // end of [ints_filter]
+
+Figure 10. Ints ﬁlter: removing multiples of a given integer
+
+7.1 Implementation in ATS
+The session-typed channels as presented in this paper are ﬁrst
+implemented in ATS. The parties communicating to each other in
+a (dyadic) session run as pthreads. Each channel is represented
+as a record containing two buﬀers and some locking mechanism
+(i.e., mutexes and conditional variables); a positive channel and
+its negative dual share their buﬀers; the read buﬀer of a channel
+is the write buﬀer of its dual and vice versa. This implementation
+(of session-typed channels) is primarily done for the purpose of
+obtaining a proof of concept.
+
+7.2 Implementation in Erlang
+Another implementation of session-typed channels is done in Er-
+lang. As the ML-like core of ATS can already be compiled into
+Erlang, we have now an option to construct distributed programs
+in ATS that may make use of session types and then translate these
+programs into Erlang code for execution, thus taking great ad-
+vantage of the infrastructural support for distributed computing
+in Erlang. Each channel is implemented as a pair of processes;
+
+implement
+sieve() = let
+//
+fun
+fserv
+(
+
+chp: chpos(sslist(int))
+, chn: chneg(sslist(int))
+) : void = let
+//
+val opt = chanpos_list(chp)
+//
+in
+//
+case opt of
+| chanpos_list_nil() =>
+
+(
+
+)
+
+chanpos_close(chp);
+channeg_list_close(chn)
+
+| chanpos_list_cons() => let
+
+val () =
+
+channeg_list_cons(chn)
+
+// end of [val]
+val p0 = channeg_send(chn)
+val chn = ints_filter(chn, p0)
+
+in
+
+chanpos_send(chp, p0); fserv(chp, chn)
+
+end // end of [channeg_list_cons]
+
+//
+end // end of [fserv]
+//
+in
+
+channeg_create(llam(chp) => fserv(chp, ints_from(2)))
+
+end // end of [sieve]
+
+Figure 11. Implementing Eratosthenes’s sieve
+
+a positive channel shares with its dual the two processes: One
+handles read for the positive channel and write for its negative
+dual, and the other does the opposite. Implementing the functions
+chanpos send/channeg recv and chanpos recv/channeg send
+is straightforward. A signiﬁcant complication occurs in our imple-
+mentation of chanposneg link, which requires the sender of a
+message to deliver it at its ﬁnal destination (instead of having it
+forwarded there explicitly). For a straightforward but much less
+eﬃcient implementation of chanposneg link, one can just rely
+on explicit forwarding.
+
+8. Related Work and Conclusion
+Session types were introduced by Honda [9] and further ex-
+tended [10, 20]. There have since been extensive theoretical studies
+on session types in the literature(e.g., [1, 3, 6, 11, 21, 24, 26]).
+However, there is currently rather limited support for practical pro-
+gramming with session types, and more evidence is clearly needed
+to show convincingly that session types can actually be employed
+cost-eﬀectively in the construction of relatively large and complex
+programs. It is in this context that we see it both interesting and
+relevant to study implementation of session types formally.
+
+There are reported implementations of session types in Java[5,
+12, 13] and other languages (e.g. Python). However, these im-
+plementations are of a very diﬀerent nature when compared to
+MTLCch. For instance, they mostly focus on session-typed func-
+tionalities being implemented rather than the (formal) correctness
+of the implementation of these functionalities.
+
+There are also several implementations of session types in
+Haskell (e.g., [16, 17]), which primarily focus on obtaining certain
+
+datatype
+chanpos_ssque
+
+(a:type, type, int) =
+
+| chanpos_ssque_nil(a, nil, 0) of ()
+| {n:pos}
+
+chanpos_ssque_deq(a,snd(a)::ssque(a,n-1),n) of ()
+
+| {n:nat}
+
+implement
+queue_create
+
+{a}((*void*)) = let
+
+//
+fun
+fserv
+(
+
+chanpos_ssque_enq(a,rcv(a)::ssque(a,n+1),n) of ()
+
+chp: chpos(ssque(a,0))
+
+extern
+fun
+chanpos_ssque
+
+{a:type}{n:nat}
+(!chpos(ssque(a,n)) >> chpos(ss))
+
+: #[ss:type] chanpos_ssque(a, ss, n)
+
+extern
+fun
+channeg_ssque_nil
+
+{a:type}
+(!chneg(ssque(a,0)) >> chneg(nil)): void
+
+extern
+fun
+channeg_ssque_deq
+{a:type}{n:pos}
+
+(
+
+!chneg(ssque(a,n)) >> chneg(snd(a)::ssque(a,n-1))
+
+) : void // end-of-function
+and
+channeg_ssque_enq
+{a:type}{n:nat}
+
+(
+
+!chneg(ssque(a,n)) >> chneg(rcv(a)::ssque(a,n+1))
+
+) : void // end-of-function
+
+Figure 12. Functions for unfolding session queue channels
+
+typeful encodings for session-typed channels. While the obtained
+encodings are shown to be type-correct, there is no provided mech-
+anism to establish any form of global progress for them. As is ex-
+plained in the case of chneg create2, one can readily introduce po-
+tential deadlocks inadvertently without breaking type-correctness.
+It is in general a challenging issue to establish deadlock-freeness
+for session-typed concurrency. There are variations of session types
+that introduce a partial order on time stamps [19] or a constraint
+on dependency graphs [2]. As for formulations of session types
+(e.g., [1, 26]) based on linear logic [7], the standard technique
+for cut-elimination is often employed to establish global progress
+(which implies deadlock-freeness). In MTLCch, there is no explicit
+tracking of cut-rule applications in the type derivation of a program
+(and it is unclear how such tracking can be done). In essence, the
+notion of DF-reducibility (Deﬁnition 3.3) is introduced in order to
+carry out cut-elimination in the absence of explicit tracking of cut-
+rule applications.
+
+Probably, MTLCch is most closely related to SILL [23], a func-
+tional programming language that adopts via a contextual monad a
+computational interpretation of linear sequent calculus as session-
+typed processes. Unlike in MTLCch, the support for linear types
+in SILL is not direct and only monadic values (representing open
+process expressions) in SILL can be linear. For instance, one can
+readily construct linear data containing channels in ATS but this is
+not allowed in SILL. In terms of theoretical development, the ap-
+proach to establishing global progress in SILL cannot be applied
+to MTLCch directly. Instead, we see Lemma 3.7 as a generalization
+of the argument presented in the proof of the theorem on global
+progress in SILL. Please see Theorem 5.2 [23] for details.
+
+Also, MTLCch is related to previous work on incorporating ses-
+sion types into a multi-threaded functional language [25], where a
+
+) : void = let
+
+val opt = chanpos_ssque(chp)
+
+in
+//
+case opt of
+| chanpos_ssque_nil() =>
+
+chanpos_close(chp)
+
+| chanpos_ssque_enq() => let
+
+val x0 = chanpos_recv{a}(chp)
+
+in
+
+fserv2(x0, queue_create(), chp)
+end // end of [chanpos_ssque_enq]
+
+//
+end // end of [fserv]
+//
+and
+fserv2
+{n:nat}
+(
+
+x0: a
+
+, chn: chneg(ssque(a,n))
+, chp: chpos(ssque(a,n+1))
+) : void = let
+
+val opt = chanpos_ssque(chp)
+
+in
+//
+case opt of
+| chanpos_ssque_deq() => let
+
+val () = chanpos_send(chp, x0)
+
+in
+
+chanposneg_link(chp, chn)
+
+end // end of [chanpos_ssque_deq]
+
+| chanpos_ssque_enq() => let
+
+val y = chanpos_recv{a}(chp)
+val () = channeg_ssque_enq(chn)
+val () = channeg_recv(chn, y)
+
+in
+
+fserv2(x0, chn, chp)
+
+end // end of [chanpos_ssque_enq]
+
+//
+end // end of [fserv2]
+//
+in
+
+channeg_create(llam(chp) => fserv(chp))
+
+end // end of [queue_create]
+
+Figure 13. Queue create: creating an empty queue of channels
+
+type safety theorem is established to ensure that the evaluation of
+a well-typed program can never lead to a so-called faulty conﬁgu-
+ration. However, this theorem does not imply global progress as a
+program that is not of faulty conﬁguration can still deadlock.
+
+As for future work, we are particularly interested in extending
+MTLCch with multi-party session types [11]. It will be very in-
+teresting to see whether the approach we use to establish global
+progress for MTLCch can be adapted to handling multi-party ses-
+sion types. We are also interested in studying session types in re-
+stricted settings. For instance, the number of channels allowed in a
+program is required to be bounded; channels (of certain types) may
+not be sent from one party to another; etc.
+
+There are a variety of programming issues that need to be
+addressed in order to facilitate the use of session types in practice.
+Currently, session types are represented as datatypes in ATS, and
+programming with session types often involves writing boilerplate
+code (e.g., the code implementing functions like chanpos_list,
+channeg_list_nil and channeg_list_cons). In the presence
+of large and complex session types, writing such code can tedious
+and error-prone. Naturally, we are interested in developing some
+meta-programming support for generating such code automatically.
+Also, we are in process of designing and implementing session
+combinators (in the spirit of parsing combinators [14]) that can be
+conveniently called to assemble subsessions into a coherent whole.
+
+References
+[1] Lu´ıs Caires and Frank Pfenning. Session types as intuitionistic lin-
+ear propositions. In CONCUR 2010 - Concurrency Theory, 21th In-
+ternational Conference, CONCUR 2010, Paris, France, August 31-
+September 3, 2010. Proceedings, pages 222–236, 2010.
+
+[2] Marco Carbone and Søren Debois. A graphical approach to progress
+for structured communication in web services. In Proceedings Third
+Interaction and Concurrency Experience: Guaranteed Interaction,
+ICE 2010, Amsterdam, The Netherlands, 10th of June 2010., pages
+13–27, 2010.
+
+[3] Giuseppe Castagna, Mariangiola Dezani-Ciancaglini, Elena Giachino,
+and Luca Padovani. Foundations of session types. In Proceedings of
+the 11th International ACM SIGPLAN Conference on Principles and
+Practice of Declarative Programming, September 7-9, 2009, Coimbra,
+Portugal, pages 219–230, 2009.
+
+[4] Chiyan Chen and Hongwei Xi. Combining Programming with The-
+orem Proving. In Proceedings of the Tenth ACM SIGPLAN Interna-
+tional Conference on Functional Programming, pages 66–77, Tallinn,
+Estonia, September 2005.
+
+[5] Juliana Franco and Vasco Thudichum Vasconcelos.
+
+A concur-
+rent programming language with reﬁned session types.
+In Soft-
+ware Engineering and Formal Methods - SEFM 2013 Collocated
+Workshops: BEAT2, WS-FMDS, FM-RAIL-Bok, MoKMaSD, and
+OpenCert, Madrid, Spain, September 23-24, 2013, Revised Selected
+Papers, pages 15–28, 2013.
+
+[6] Simon J. Gay and Vasco Thudichum Vasconcelos. Linear type theory
+J. Funct. Program., 20(1):19–50,
+
+for asynchronous session types.
+2010.
+
+[7] Jean-Yves Girard. Linear logic.
+
+Theoretical Computer Science,
+
+50(1):1–101, 1987.
+
+[8] Dennis Griﬃth. SILL: A session-typed functional programming lan-
+
+guage, 2015. Available at:
+https://github.com/ISANobody/sill.
+
+[9] Kohei Honda. Types for dyadic interaction.
+
+In CONCUR ’93, 4th
+International Conference on Concurrency Theory, Hildesheim, Ger-
+many, August 23-26, 1993, Proceedings, pages 509–523, 1993.
+
+[10] Kohei Honda, Vasco Vasconcelos, and Makoto Kubo. Language prim-
+itives and type discipline for structured communication-based pro-
+gramming. In Programming Languages and Systems - ESOP’98, 7th
+European Symposium on Programming, Held as Part of the European
+Joint Conferences on the Theory and Practice of Software, ETAPS’98,
+Lisbon, Portugal, March 28 - April 4, 1998, Proceedings, pages 122–
+138, 1998.
+
+[11] Kohei Honda, Nobuko Yoshida, and Marco Carbone. Multiparty asyn-
+chronous session types. In Proceedings of the 35th ACM SIGPLAN-
+SIGACT Symposium on Principles of Programming Languages, POPL
+2008, San Francisco, California, USA, January 7-12, 2008, pages
+273–284, 2008.
+
+[12] Raymond Hu, Dimitrios Kouzapas, Olivier Pernet, Nobuko Yoshida,
+and Kohei Honda. Type-safe eventful sessions in Java.
+In ECOOP
+2010 - Object-Oriented Programming, 24th European Conference,
+Maribor, Slovenia, June 21-25, 2010. Proceedings, pages 329–353,
+2010.
+
+[13] Raymond Hu, Nobuko Yoshida, and Kohei Honda. Session-based
+distributed programming in Java. In ECOOP 2008 - Object-Oriented
+Programming, 22nd European Conference, Paphos, Cyprus, July 7-11,
+2008, Proceedings, pages 516–541, 2008.
+
+[14] Graham Hutton. Higher-order functions for parsing. J. Funct. Pro-
+
+gram., 2(3):323–343, 1992.
+
+[15] Robin Milner, J. Parrow, and David Walker. A calculus of processes,
+Information and Computation, 100:1–40 and 41–77,
+
+parts I and II.
+1992.
+
+[16] Matthias Neubauer and Peter Thiemann. An implementation of ses-
+sion types. In Practical Aspects of Declarative Languages, 6th Inter-
+national Symposium, PADL 2004, Dallas, TX, USA, June 18-19, 2004,
+Proceedings, pages 56–70, 2004.
+
+[17] Riccardo Pucella and Jesse A. Tov. Haskell session types with (almost)
+no class.
+In Proceedings of the 1st ACM SIGPLAN Symposium on
+Haskell, Haskell 2008, Victoria, BC, Canada, 25 September 2008,
+pages 25–36, 2008.
+
+[18] Rui Shi and Hongwei Xi. A Linear Type System for Multicore
+Programming. In Proceedings of Simposio Brasileiro de Linguagens
+de Programacao, Gramado, Brazil, August 2009.
+
+[19] Eijiro Sumii and Naoki Kobayashi. A generalized deadlock-free
+process calculus. Electr. Notes Theor. Comput. Sci., 16(3):225–247,
+1998.
+
+[20] Kaku Takeuchi, Kohei Honda, and Makoto Kubo. An interaction-
+based language and its typing system. In PARLE ’94: Parallel Archi-
+tectures and Languages Europe, 6th International PARLE Conference,
+Athens, Greece, July 4-8, 1994, Proceedings, pages 398–413, 1994.
+
+[21] Bernardo Toninho, Lu´ıs Caires, and Frank Pfenning. Dependent ses-
+sion types via intuitionistic linear type theory.
+In Proceedings of
+the 13th International ACM SIGPLAN Conference on Principles and
+Practice of Declarative Programming, July 20-22, 2011, Odense, Den-
+mark, pages 161–172, 2011.
+
+[22] Bernardo Toninho, Lu´ıs Caires, and Frank Pfenning. Functions as
+session-typed processes.
+In Foundations of Software Science and
+Computational Structures - 15th International Conference, FOSSACS
+2012, Held as Part of the European Joint Conferences on Theory and
+Practice of Software, ETAPS 2012, Tallinn, Estonia, March 24 - April
+1, 2012. Proceedings, pages 346–360, 2012.
+
+[23] Bernardo Toninho, Lu´ıs Caires, and Frank Pfenning. Higher-order
+processes, functions, and sessions: A monadic integration.
+In Pro-
+gramming Languages and Systems - 22nd European Symposium on
+Programming, ESOP 2013, Held as Part of the European Joint Confer-
+ences on Theory and Practice of Software, ETAPS 2013, Rome, Italy,
+March 16-24, 2013. Proceedings, pages 350–369, 2013.
+
+[24] Vasco T. Vasconcelos. Fundamentals of session types. Inf. Comput.,
+
+217:52–70, 2012.
+
+[25] Vasco Thudichum Vasconcelos, Ant´onio Ravara, and Simon J. Gay.
+Session types for functional multithreading.
+In CONCUR 2004 -
+Concurrency Theory, 15th International Conference, London, UK,
+August 31 - September 3, 2004, Proceedings, pages 497–511, 2004.
+
+[26] Philip Wadler. Propositions as sessions.
+
+In ACM SIGPLAN Inter-
+national Conference on Functional Programming, ICFP’12, Copen-
+hagen, Denmark, September 9-15, 2012, pages 273–286, 2012.
+
+[27] Hongwei Xi. Applied Type System (extended abstract).
+
+In post-
+workshop Proceedings of TYPES 2003, pages 394–408. Springer-
+Verlag LNCS 3085, 2004.
+
+[28] Hongwei Xi. Dependent ML: an approach to practical program-
+Journal of Functional Programming,
+
+ming with dependent types.
+17(2):215–286, 2007.
+
+[29] Hongwei Xi. The ATS Programming Language System, 2008. Avail-
+
+able at: http://www.ats-lang.org/.
+
+[30] Hongwei Xi and Frank Pfenning. Dependent Types in Practical Pro-
+gramming.
+In Proceedings of 26th ACM SIGPLAN Symposium on
+Principles of Programming Languages, pages 214–227, San Antonio,
+Texas, January 1999. ACM press.
+
+

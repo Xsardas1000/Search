@@ -1,0 +1,2106 @@
+Faster and Cheaper: Parallelizing Large-Scale Matrix
+
+Factorization on GPUs
+
+Wei Tan
+
+Center
+
+IBM T. J. Watson Research
+
+Yorktown Heights, NY, USA
+
+wtan@us.ibm.com
+
+∗
+Liangliang Cao
+
+Yahoo! Labs
+
+New York City, NY, USA
+liangliang@yahoo-
+
+inc.com
+
+Liana Fong
+
+IBM T. J. Watson Research
+
+Center
+
+Yorktown Heights, NY, USA
+
+llfong@us.ibm.com
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+1
+1
+
+ 
+ 
+]
+
+C
+D
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+0
+2
+8
+3
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+ABSTRACT
+Matrix factorization (MF) is employed by many popular al-
+gorithms, e.g., collaborative ﬁltering. The emerging GPU
+technology, with massively multicore and high intra-chip
+memory bandwidth but limited memory capacity, presents
+an opportunity for accelerating MF much further when ap-
+propriately exploiting the GPU architectural characteris-
+tics. This paper presents cuMF, a CUDA-based matrix
+factorization library that implements memory-optimized al-
+ternate least square (ALS) method to solve very large-scale
+MF. CuMF uses a variety set of techniques to maximize
+the performance on either single or multiple GPUs. These
+techniques include smart access of sparse data leveraging
+GPU memory hierarchy, using data parallelism in conjunc-
+tion with model parallelism, minimizing the communication
+overhead between computing units, and utilizing a novel
+topology-aware parallel reduction scheme. With only a sin-
+gle machine with four Nvidia GPU cards, cuMF can be 6-10
+times as fast, and 33-100 times as cost-eﬃcient, compared
+with the state-of-art distributed CPU solutions. Moreover,
+this cuMF can solve the largest matrix factorization problem
+ever reported yet in current literature, while maintaining im-
+pressively good performance.
+
+1.
+
+INTRODUCTION
+
+Sparse matrix factorization (SMF or MF) factors a sparse
+rating matrix R (m by n, with Nz non-zero elements) into
+a m-by-f and a f -by-n matrices, as shown in Figure 1. MF
+is widely used for collaborative-ﬁltering-based recommenda-
+tions [13] in e-commerce (e.g., Amazon) and digital content
+streaming (e.g., Netﬂix). Very recently, MF is also applied
+in text mining, deriving hidden features of words [23].
+
+Given the widespread use of MF, a scalable and speedy
+implementation is very important. In terms of scale, many
+
+∗Work done while the author worked at IBM.
+
+Figure 1: Matrix factorization.
+
+parallel solutions [36, 32, 33] target at medium-sized prob-
+lems such as the Netﬂix challenge [35]. However, the industry-
+scale recommendation problems have evolved to two-orders-
+of-magnitude larger. Figure 2 shows the scale of MF prob-
+lems, in terms of number of ratings and number of model
+parameters. As an example, Facebook’s MF is with 100+
+billion ratings, 1 billion users, and millions of items [11].
+No existing system except [11] has tackled problems at this
+scale. In terms of speed, recommendations need to evolve
+promptly in online applications. Current approaches includ-
+ing MPI [33], Spark [31] and parameter server [28] address
+large-scale MF problems. However, they require costly clus-
+ters (e.g., 50-node) and still suﬀer from long latency.
+
+Recently, the GPU emerges as an accelerator for parallel
+algorithms [14, 27]. It has big compute power (typically 10x
+ﬂoating-point operations per second, ﬂops vs. a CPU) and
+memory bandwidth (typically 5x vs. a CPU) [8], but limited
+amount of control logic and memory capacity. Particularly,
+GPU’s success in deep learning [3] inspires us to try it for
+MF. In deep learning, the computation is mainly dense ma-
+trix multiplication which is compute bound. As a result,
+GPU can train deep neural network 10x as fast as CPU by
+saturating its ﬂops. However, unlike deep learning, a MF
+problem involves sparse matrix manipulation which is usu-
+ally memory bound. Given this, we want to explore a MF
+algorithm and a system that can still leverage GPU’s com-
+pute and memory capability. We identiﬁed that, the alter-
+nating least square (ALS) algorithm [13] for MF is inherently
+parallel so as to exploit thousands of GPU cores. Moreover,
+compared with stochastic gradient descent (SGD), ALS has
+
+1CCD++ [32], DSGD [7], DSGD++ [30], Facebook [11],
+Factorbird [28], Flink [25], Hugewiki
+[36], Netﬂix [35]
+SparkALS [31], and YahooMusic [6].
+
+1
+
+Table 2: Notations
+
+Name Meaning
+
+Range
+
+R
+X
+Θ
+m
+n
+f
+Nz
+ruv
+
+xT
+u
+θv
+Ru∗
+R∗v
+
+sparse rating matrix: m by n
+low rank matrix: m by f
+low rank matrix: n by f
+vertical dimension of R
+horizontal dimension of R
+dimension of latent features
+number of non-zero entries in R
+R’s value at position (u, v); 1 ≤ u ≤
+m, 1 ≤ v ≤ n
+X’s uth row; 1 ≤ u ≤ m
+ΘT ’s vth column; 1 ≤ v ≤ n
+R’s uth row; 1 ≤ u ≤ m
+R’s vth column; 1 ≤ v ≤ n
+
+Note: usually Nz (cid:29) m, n and m, n (cid:29) f .
+
+103 to 109
+103 to 109
+5 to 100s
+108 to 1011
+
+systems’ cost is calculated by (price per node per hr) ∗
+(#nodes) ∗ (execution time), with unit price taken when
+submitting this paper2. CuMF runs on one machine with
+two Nvidia K80 (four GPUs devices in total) from IBM Soft-
+layer, with an amortized hourly cost of $2.44. With faster
+speed and fewer machine requirement, cuMF’s overall cost
+of running these benchmarks is merely 1%-3% of the base-
+line systems compared. That is, cuMF is 33-100x as cost-
+eﬃcient.
+
+In summary, this paper describes a novel implementation
+of MF on a machine with GPUs and the set of exemplary
+optimization techniques in leveraging the GPU architectural
+characteristics. The experimental results demonstrate that
+with up to four Nvidia GPUs on one machine, cuMF is (1)
+competitive compared with multi-core methods, on medium-
+sized problems; (2) much faster than vanilla GPU implemen-
+tations without memory optimization; (3) 6-10 times as fast,
+and 33-100 times as cost-eﬃcient as distributed CPU sys-
+tems, on large-scale problems; (4) more signiﬁcantly, able to
+solve the largest matrix factorization problem ever reported.
+This paper is organized as follows. Section 2 formulates
+the problem of matrix factorization and explains the two
+challenges in large-scale ALS, i.e., memory access on one
+GPU and scalability on multiple GPUs. Section 3 introduces
+the memory-optimized ALS algorithm on a single GPU, to
+address challenge 1. Section 4 introduces the scale-up ALS
+algorithm to parallelize MF on multiple GPUs, to address
+challenge 2. Section 5 shows the experiment results and Sec-
+tion 6 reviews related work. Section 7 concludes the paper.
+
+2. PROBLEM DEFINITION
+
+2.1 ALS algorithm for matrix factorization
+
+Referring to the notations listed in Table 2, matrix factor-
+ization is to factor a sparse matrix R with two lower-rank,
+dense matrices X and Θ, such that:
+R ≈ X · ΘT
+
+2AWS price: https://aws.amazon.com/ec2/pricing/; GPU
+machine price: http://www.softlayer.com/gpu
+
+Figure 2: The scale of MF data sets1. Y-axis is the Nz of R,
+and x-axis is (m + n) × f . CuMF can tackle MF problems
+of greater size, compared with existing systems.
+
+Table 1: Speed and cost of cuMF on one machine with four
+GPUs, compared with three distributed CPU systems, on the
+cloud
+
+Baseline
+
+baseline
+conﬁg
+
+NOMAD m3.xlarge
+32
+SparkALS m3.2xlarge 50
+Factorbird c3.2xlarge
+50
+
+#nodes price
+
+/node/hr
+$0.27
+$0.53
+$0.42
+
+cuMF
+speed
+10x
+10x
+6x
+
+cuMF
+cost
+3%
+1%
+2%
+
+Note: Experiment details are in Section 5. NOMAD [33] uses
+Hugewiki data and AWS servers; it used m1.xlarge which is
+now superseded by m3.xlarge by Amazon. Factorbird’s node is
+similar to AWS c3.2xlarge [28].
+
+advantage when R is made up of implicit ratings and there-
+fore cannot be considered sparse [13].
+
+Based on these observations, we design and implement
+cuMF (CUDA Matrix Factorization), a scalable ALS so-
+lution on one machine with one or more GPUs. CuMF
+achieves excellent scalability and performance by making
+the following contributions.
+
+(1) On a single GPU, MF is inherently sparse and memory
+bound and thus diﬃcult to utilize GPU’s compute power.
+We optimize memory access in ALS by various techniques
+including reducing discontiguous memory access, retaining
+hotspot variables in faster memory, and aggressively using
+registers. By this means cuMF gets closer to the rooﬂine
+performance of a single GPU.
+
+(2) On multiple GPUs, we add data parallelism to ALS’s
+inherent model parallelism. Data parallelism needs a faster
+reduction operation among GPUs, leading to (3).
+
+(3) We also develop an innovative topology-aware, parallel
+reduction method to fully leverage the bandwidth between
+GPUs. By this means cuMF ensures that multiple GPUs
+are eﬃciently utilized simultaneously.
+
+The resulting CuMF is competitive in both speed and
+monetary cost. Table 1 shows cuMF’s speed and cost com-
+pared with three CPU systems, NOMAD (with Hugewiki
+data) [33], Spark ALS [31], and Factorbird [28]. NOMAD
+and Spark ALS use Amazon AWS, and we pick an AWS
+node type similar to what Factorbird uses. CPU and GPU
+
+2
+
+(cid:88)
+
+(cid:88)
+
+(cid:88)
+
+As illustrated in Figure 1, suppose ruv is the non-zero ele-
+ment of R at position (u, v), we want to minimize the follow-
+ing cost function (1). To avoid overﬁtting we use weighted-
+λ-regularization proposed in [35], where nxu and nθv denote
+the number of total ratings on user u and item v, respec-
+tively.
+
+J =
+
+(ruv−xT
+
+u θv)2+λ(
+
+nxu||xu||2+
+
+nθv||θv||2) (1)
+
+u,v
+
+u
+
+v
+
+Many optimization methods, including ALS [35], CGD
+[32], and SGD [36] have been applied to minimize J. We
+adopt the ALS approach that would ﬁrst optimize X while
+ﬁxing Θ, and then to optimize Θ while ﬁxing X. Consider
+
+∂J
+∂xu
+
+= 0
+
+∂J
+∂θv
+
+= 0
+
+and
+
+(cid:88)
+together with:(cid:88)
+
+ruv(cid:54)=0
+
+ruv(cid:54)=0
+
+which lead to the following equation:
+
+(θvθT
+
+v + λI) · xu = ΘT · RT
+u∗
+
+(xuxT
+
+u + λI) · θv = X T · R∗v
+
+(2)
+
+(3)
+
+By this means, ALS updates X using eq. (2), and updates
+Θ using eq. (3), in an alternating manner. Empirically, ALS
+often converges in 5-20 iterations, with each iteration con-
+sisting of both update-X and update-Θ. In the rest of this
+paper, we explain our method using update-X. The same
+method is applicable to update-Θ.
+
+The formalism of ALS enables solving in parallel so as to
+harness the power of GPU. Eqs. (2) and (3) shows that, the
+updates of each xu and θv are independent of each other.
+This independent nature does not hold for SGD, which ran-
+domly selects a sample ruv, and updates the parameters by:
+
+xu = xu − α[(xT
+θv = θv − α[(xT
+
+u θv − ruv)θv + λxu]
+u θv − ruv)xu + λθv]
+
+(4)
+
+Suppose there are two random samples ruv and ruv(cid:48) with
+the same row index u, their updates to xu cannot be treated
+independently. Previous works on CPUs
+[36, 33, 7, 30]
+all partition R into blocks with no overlapping rows and
+columns. Such a strategy works eﬀectively on tens of CPU
+cores but is diﬃcult to scale to a GPU with thousands of
+cores. As a result, we choose ALS instead of SGD for cuMF.
+2.2 Challenges of speedy and scalable ALS
+
+Table 3 lists the compute cost and memory footprint of
+solving X with eq. (2), using single precision. The calcula-
+tion is divided into two phases, i.e.,
+
+get hermitian x to obtain the left-hand Hermitian ma-
+v + λI) and the right-hand Bu = ΘT ·
+
+(θvθT
+
+trix Au = (cid:80)
+
+ruv(cid:54)=0
+
+RT
+
+u∗, and
+batch solve to solve many equations Auxu = Bu.
+In line 3 of Table 3: one item in phase get hermitian x,
+to solve one row xu, obtaining Au needs to calculate Nz/m
+
+3
+
+times3 of θvθT
+v s, each of which needs f (f + 1)/2 multipli-
+cations. The cost of obtaining Bu is (Nz + Nzf )/m + 2f
+[22]. In terms of memory, Au uses f 2 ﬂoats, Bu uses f , ΘT
+uses nf , and a row of R in Compressed Sparse Row (CSR)
+format uses (2Nz + m + 1)/m. In phase batch solve, solving
+the linear equation Auxu = Bu does not need additional
+memory storage by using in-place solvers, but has an f 3
+computation cost.
+Challenge 1. On a single GPU, how to optimize
+sparse, irregular and intensive memory access.
+Table 3 shows that, computation is bounded in both phases
+get hermitian x (O(Nzf 2)) and batch solve (O(mf 3)).
+CUDA library cuBLAS [21] already provides dense solvers
+for phase batch solve, so we focus on the get hermitian x
+phase. This phase is very costly, especially when Nz (cid:29) m
+and therefore Nzf 2 > mf 3. What is more troublesome is
+the sparse, irregular and intensive memory access in this
+phase. Details are as follows:
+
+1. Access many columns θv subject to ruv (cid:54)= 0 for ev-
+ery u. This access is irregular w.r.t. ΘT , due to the
+sparseness of R.
+In each iteration to solve one xu
+we need to access nxu columns (Nz/m, on average)
+spread sparsely and discontiguously across the n
+columns of ΘT . For example, in the Netﬂix data set
+[35], one user rates around 200 items on average, lead-
+ing to a discontiguous access of 200 columns from the
+total 17,770 in ΘT .
+
+2. Aggregate many θvθT
+
+v s and xuxT
+
+u s, is memory inten-
+sive due to the large number of θvs and xus to ag-
+gregate. According to eq.
+(2), obtaining Au needs
+to calculate many θvθT
+v s and aggregate them. There-
+fore, each element in column vector θv is accessed fre-
+quently, and the partial aggregation result is updated
+frequently. To calculate θvθT
+v we need to read each el-
+ement of θv f times; after obtaining a θvθT
+v , to add it
+v + λI) we need to write f (f + 1)/2, or f 2
+
+to (cid:80)
+
+(θvθT
+
+ruv(cid:54)=0
+
+elements if the downstream solver does not appreciate
+symmetricity.
+
+Section 3 presents how cuMF tackles Challenge 1, with
+
+experiment results shown in Sections 5.2 and 5.3.
+Challenge 2. On multiple GPUs, how to scale and
+minimize communication overhead.
+
+When m, n, Nz and f get larger, ALS is bounded by
+the memory capacity of a single GPU. For example, the
+update-X iteration is to be bounded by memory footprint of
+m Aus (mf 2 without considering symmetricity), X T (mf ),
+ΘT (nf ) and R (2Nz + m + 1). The current Nvidia Maxwell
+and Kepler GPUs have 12 GB memory per device. Each
+device would only be able to load 3 billion (3 × 109) single
+precision ﬂoats. However, the smallest data set, i.e., Netﬂix,
+in Figure 2, has m = 480K. When f = 100, m Hermitian
+matrices are with size mf 2 = 480K×1002 = 4.8 billion ﬂoats
+> 3 billion.
+
+Previous CPU solutions already encountered and partially
+addressed this memory capacity issue. PALS [35] partitions
+X and R by rows, solving each partition in parallel by repli-
+cating ΘT . However, this model parallelism is only feasi-
+ble when ΘT is small. SparkALS [31], the ALS implementa-
+tion in Spark MLlib [18], also partitions X and R by rows,
+
+3Nz/m is the average number of non-zero entries per row.
+
+Table 3: Compute cost and memory footprint of ALS: the update-X step
+
+compute cost
+Bu in (2)
+(Nz + Nzf )/m + 2f
+
+Au in (2)
+Nzf (f + 1)/2m
+mbNzf (f + 1)/2m mb(Nz + Nzf )/m + 2mbf mbf 2
+mf 2
+
+Nz + Nzf + 2mf
+
+get hermitian x
+
+batch solve
+
+one item
+mb items
+all m items Nzf (f + 1)/2
+f 3
+one item
+mbf 3
+mb items
+all m items mf 3
+
+memory footprint
+
+Au in (2) Bu in (2)
+f 2
+
+nf + f + (2Nz + m + 1)/m
+nf + mbf + mb(2Nz + m + 1)/m
+nf + mf + (2Nz + m + 1)
+
+Note: here we omit some minor computations and auxiliary data structures needed in eq. (2).
+
+and then solve each partition Xi in parallel. Its improvement
+to PALS is that, instead of replicating ΘT , it splits ΘT into
+overlapping partitions {ΘT
+i contains only the
+necessary θv columns for all xus in Xi. This improvement
+still has several deﬁciencies:
+
+i }, where ΘT
+
+1. Generating ΘT
+i
+
+from Xi is actually a graph partition-
+
+ing task and time consuming.
+
+2. Transferring each ΘT
+i
+
+to Xi involves much network
+
+traﬃc, especially when Nz (cid:29) m.
+i may still be too big to ﬁt into a single GPU device,
+especially when Nz (cid:29) m.
+
+3. ΘT
+
+Section 4 presents how cuMF tackles Challenge 2, with
+
+experiment results shown in Sections 5.4 and 5.5.
+
+3. MEMORY-OPTIMIZED ALS ON ONE GPU
+3.1 The GPU memory hierarchy
+
+To address Challenge 1 “On a single GPU, how to op-
+timize sparse, irregular and intensive memory access”, we
+need direct control on GPU’s memory hierarchy. We choose
+Nvidia GPUs because they provides a rich set of programmable
+memory of diﬀerent characteristics, shown in Table 4. 4
+
+Table 4: Programmable GPU memory
+
+Memory type Size
+large
+medium medium application, read-
+
+Latency Scope
+high
+
+global
+texture
+
+application
+
+shared
+register
+
+small
+small
+
+low
+lowest
+
+only
+thread block
+thread; not index-
+able
+
+Although the principles of memory optimization are gen-
+erally known, the speciﬁc implementation of ALS on GPU
+is not trivial due to the following reasons:
+
+1. GPU has a lower clock frequency than CPU (typically
+< 1 GHz vs. 2-3 GHz). If the massive parallelism in
+GPU is not fully utilized, cuMF is likely to be slower
+than the highly-optimized CPU implementations.
+
+4There are non-programmable memory such as L1 and L2
+cache. They also accelerate memory access but are not di-
+rectly controllable by programmers. Therefore in cuMF we
+focus on the optimization by using the programmable mem-
+ory.
+
+4
+
+2. Compared with CPU, GPU’s global memory is smaller,
+e.g., 12 GB. In contrast, GPU has a much larger regis-
+ter ﬁle, e.g., 4 MB, which is largely ignored nowadays.
+
+3. The control of register, shared, texture and global mem-
+ory is complex. The global memory is large but slow,
+texture memory is read-only, and register and shared
+memory are not visible across GPU kernels (i.e., device
+functions). Moreover, registers are not dynamically in-
+dexable, which prevents them from being used for large
+arrays.
+
+Due to these diﬃculties, without insight on both GPU
+hardware and algorithm speciﬁcs, an implementation can
+easily be bounded by memory capacity, latency or band-
+width, preventing us from harnessing the full power of GPU.
+3.2 The base ALS algorithm
+
+The base ALS algorithm 1 shows how to update X with
+eq.
+(2). The algorithm to update Θ is similar with all
+variables symmetrically exchanged. Algorithm 1 consists of
+two procedures: Get Hermitian X() and Batch Solve().
+
+Algorithm 1 Base ALS: Update X
+Input Rm×n
+Input ΘT : [θ1, θ2, ..., θn]f×n
+Output X : [xT
+
+2 ; ...; xT
+
+m]m×f
+
+1 ; xT
+
+for u ← 1, m do
+
+u ← sub-matrix of ΘT with cols θv s.t. ruv (cid:54)= 0
+ΘT
+Au ← 0
+for all columns θv in ΘT
+v + λI
+
+1: procedure Get Hermitian X(R, ΘT )
+2:
+3:
+4:
+5:
+6:
+7:
+8:
+9:
+10:
+11: end procedure
+
+end for
+return ([A1, A2, ...Am], [B1, B2, ..., Bm])
+
+end for
+Bu ← ΘT · RT
+u∗
+
+Au ← Au + θvθT
+
+u do
+
+for u ← 1, m do
+
+xu ← solve Au · xu = Bu
+
+12: procedure Batch Solve([A1, A2, ...Am], [B1, B2, ..., Bm])
+13:
+14:
+15:
+16:
+17: end procedure
+18: (A, B) ← Get Hermitian X(R, ΘT )
+19: X ← Batch Solve(A, B)
+
+end for
+return [x1, x2, ...xm]T
+
+Algorithm 2 MO-ALS: Memory-Optimized ALS; update
+X on one GPU.
+G{var}: var in global memory
+T {var}: var in texture memory
+S{var}: var in shared memory
+R{var}: var in register memory
+Input Rm×n
+Input ΘT : [θ1, θ2, ..., θn]f×n
+Output X : [xT
+
+2 ; ...; xT
+
+m]m×f
+
+1 ; xT
+
+1: procedure Get Hermitian X MO(R, ΘT )
+2:
+3:
+
+u} ← sub-matrix of G{ΘT} with cols θv s.t.
+
+for u ← 1, m do
+
+ruv (cid:54)= 0
+
+T {ΘT
+R{Au} ← 0
+while T {ΘT
+
+S{ΘT
+for all cols θv in S{ΘT
+
+u} has more cols not processed do
+u [bin]} ← next bin cols from T {ΘT
+u}
+v } + λI
+R{Au} ← R{Au} + S{θv}S{θT
+
+u [bin]} do
+
+end for
+end while
+G{Au} ← R{Au}
+G{Bu} ← G{ΘT} · G{RT
+
+u∗}
+
+end for
+return G([A1, A2, ...Am], [B1, B2, ..., Bm])
+(A, B) ← Get Hermitian X MO(R, ΘT )
+X ← Batch Solve(A, B)
+
+15:
+16:
+17: end procedure
+
+4:
+5:
+6:
+7:
+8:
+9:
+10:
+11:
+12:
+13:
+14:
+
+register ﬁle6. In Algorithm 2, Au is with size f 2 and to put
+it in register and access it, we have to declare f 2 variables
+instead of a single array. This makes the CUDA code hard
+to write. We use macro expansion in C to generate such a
+verbose paragraph of code. The snippet in Listing 1 demon-
+strates how the expanded code looks like when f = 10.
+
+1 g e t A u k e r n e l ( )
+2 { . . .
+
+temp0 = 0 , temp1 = 0 , temp2 = 0 ,
+
+// d e c l a r e Au i n r e g i s t e r s
+f l o a t
+temp3 = 0 , temp4 = 0 , temp5 = 0 ,
+temp6=0, temp7=0 , temp8=0, temp9 =0;
+. . .
+f l o a t
+temp93 = 0 , temp94 = 0 , temp95 = 0 ,
+temp96 =0, temp97 =0, temp98 =0 , temp99 =0;
+// a g g r e g a t e Au i n r e g i s t e r
+f o r ( k ){
+
+temp90 = 0 , temp91 = 0 , temp92 = 0 ,
+
+temp0 += t h e t a [ k∗ f ]∗ t h e t a [ k∗ f ] ;
+temp1 += t h e t a [ k∗ f ]∗ t h e t a [ k∗ f + 1 ] ;
+. . .
+temp98 += t h e t a [ k∗ f +9]∗ t h e t a [ k∗ f + 8 ] ;
+temp99 += t h e t a [ k∗ f +9]∗ t h e t a [ k∗ f + 9 ] ;
+
+t o g l o b a l memory
+
+3.3 The memory-optimized ALS algorithm MO-
+
+ALS
+
+Table 3 indicates that, Get Hermitian X() in Algorithm
+1 is memory intensive. We observed that Lines 3-7, i.e.,
+computing Au, takes much of the overall execution time.
+To optimize the performance, we enhance Algorithm 1 by
+leveraging diﬀerent types of GPU memory. We call this
+memory-optimized ALS algorithm MO-ALS, as described
+in Algorithm 2. The following lines in Algorithm 1 are en-
+hanced in MO-ALS:
+
+1. Reading from ΘT in Line 3. ΘT with dimension f × n
+is stored in global memory. When collecting the sub-
+matrix ΘT
+u from ΘT , we use texture memory as the
+cache because: (1) this collecting process enjoys spa-
+tial locality, (2) ΘT is read-only when updating X, and
+(3) diﬀerent ΘT
+u s can potentially re-use the same θvs
+cached in texture memory. As a result, this caching
+step reduces discontiguous memory access. This opti-
+mization is shown in Line 3 in Algorithm 2.
+
+2. Storage of ΘT
+
+u in Line 3. We use one thread block
+with f threads to calculate each Au, and use the per-
+block shared memory to store ΘT
+u , so as to speed up
+the subsequent read in Line 6. However, for each Au,
+we are not able to copy the whole ΘT
+u into its shared
+u is of size f × nxu
+memory space. This is because ΘT
+and too big compared to the 48 or 96 KB per-SM5
+shared memory. If a single thread block consumes too
+much shared memory, other blocks are prohibited from
+launching, resulting in low parallelism.
+In order to
+achieve higher parallelism, we select a bin size bin, and
+for each xu only allocate a share memory space ΘT
+u [bin]
+of size f × bin. In practice we choose bin between 10
+and 30, while nxu can be hundreds to thousands. We
+iteratively move a subset of ΘT
+u [bin] to be
+processed in the following step. This optimization is
+shown in Lines 5-10 in Algorithm 2.
+
+u into ΘT
+
+3. Update of Au in Line 6. Here we need to read a θv from
+u [bin], calculate the f×f elements of θv·θT
+ΘT
+v , and add
+them to global variable Au. Obviously Au is a memory
+hotspot. In order to speedup the aggregation in Au,
+θvθT
+v ,
+
+we choose register memory to hold (cid:80)
+
+θv∈ΘT
+
+u [bin]
+
+and only update global memory Au after we iterate
+over all columns in ΘT
+u . This reduces global memory
+access by a factor of nxu . This optimization is shown
+in Line 8 in Algorithm 2. More details are discussed
+in the following Section 3.4.
+
+Figure 3 illustrates the memory usage of MO-ALS.
+
+3.4 Enhanced utilization of registers
+
+We exploit the GPU register ﬁle which is larger and has
+higher bandwidth compared to its shared memory [2]. For
+example, in the latest Nvidia Maxwell generation GPUs,
+each SM has a 256 KB register ﬁle and only 96 KB shared
+memory. However, while there is much focus on using shared
+memory [26], the use of registers is surprisingly ignored.
+This under-utilization of registers is mainly due to the
+fact that, register variables cannot be dynamically indexed.
+That is to say, you cannot declare and refer to an array in
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+
+11
+
+12
+
+13
+
+14
+
+15
+
+16
+
+17
+
+18
+
+19
+
+20
+
+21
+
+22
+
+23
+
+24
+
+}
+// copy r e g i s t e r
+Au [ 0 ] = temp0 ;
+Au [ 1 ] = temp1 ;
+. . .
+Au [ 9 8 ] = temp98 ;
+Au [ 9 9 ] = temp99 ;
+
+5SM or SMX: stream multiprocessor. A GPU device usually
+consists of 10 to 15 SMs.
+
+6An exception is that, the CUDA compiler may put very
+small (≤ 5) arrays on registers in loop unfolding.
+
+5
+
+Figure 3: Illustration of memory usage in MO-ALS. Line numbers correspond to those in Algorithm 2. For simplicity, we
+solve two rows of X, i.e., xu1 and xu2, in parallel. In reality we solve as many rows of X as possible in parallel.
+
+25 }
+
+Listing 1: CUDA kernel code to use registers when f is 10
+
+Limitation of MO-ALS. Algorithm 2 is able to deal
+with big X with one GPU, as long as Θ can ﬁt into it.
+When X is big and Θ is small, we ﬁrst load the whole Θ
+to the GPU, then load R and solve X in batches. However,
+this batch-based approach does not work when Θ cannot ﬁt
+into a single GPU. This motivates us to scale to multiple
+GPUs on a single machine, as presented in Section 4.
+
+4. SCALE-UP ALS ON MULTIPLE GPUS
+
+Section 3 addresses Challenge 1 regarding memory op-
+timization on a single GPU. As problem size gets bigger, we
+need to address Challenge 2: “On multiple GPUs, how to
+scale and minimize communication overhead.” This section
+presents a scale-up algorithm called SU-ALS which adds
+data-parallelism and parallel-reduction on top of MO-
+ALS.
+4.1 The SU-ALS algorithm
+
+In distributed machine learning, model parallelism and
+data parallelism are two common schemes [5]. Model
+parallelism partitions parameters among multiple learners
+with each one learns a subset of parameters. Data paral-
+lelism partitions the training data among multiple learners
+with each one learns all parameters from its partial observa-
+tion. These two schemes can be combined when both model
+parameters and training data are large.
+
+ALS is inherently suitable for model parallelism, as the
+updates of each xu and θv are independent. As discussed in
+Section 2.2, both PALS and SparkALS employ only model
+parallelism without considering data parallelism. To solve X
+
+in parallel, PALS and SparkALS partition X among multi-
+ple nodes. PALS broadcasts the whole ΘT while SparkALS
+transfers a subset of it to each X partition. As pointed out
+by [32], both approaches are ineﬃcient and may cause out-
+of-memory failure, when ΘT is big and ratings are skewed.
+To tackle large-scale problems, on top of the existing model
+parallelism, we design a data-parallel approach. A limita-
+tion of model parallelism is that, it requires all Aus in one
+partition X (j) (1 ≤ j ≤ q) to be computed on the same
+GPU. Consequently, a subset of ΘT has to be transferred
+into that GPU. In contrast, our data-parallel approach dis-
+tributes the computation of any single Hermitian matrix Au
+to multiple GPUs.
+Instead of transferring all θvs to one
+GPU, it calculates a local Au on each GPU with only the
+local θvs, and reduce (aka., aggregate) many local Aus later.
+Assume that there are p GPUs to parallelize on, we re-write
+eq. (2) to its data-parallelism form as:
+
+Au =
+
+(θvθT
+
+v + λI) =
+
+(θvθT
+
+v + λI)
+
+(5)
+
+(cid:88)
+
+ruv(cid:54)=0
+
+p(cid:88)
+
+GP Ui(cid:88)
+
+i=1
+
+ruv(cid:54)=0
+
+This approach is described in Algorithm 3 and illustrated
+
+in Figure 4.
+
+Lines 2-4 : partitions the input data. ΘT is evenly split
+by columns into p partitions, X is evenly split by rows into
+q partitions, and R is split by rows and columns following
+the partition schemes of X and ΘT .
+Lines 5-7 : copies ΘT (i) to GPUi (1 ≤ i ≤ p), in parallel.
+Lines 8-20 : loop over {X (1), X (2), ..., X (q)} and solve each
+X (j) partition in sequence (1 ≤ j ≤ q). Given more GPUs,
+this sequential loop can further be parallelized.
+Line 9-18 : parallel loop over {ΘT (i)} (1 ≤ i ≤ p) to solve
+X (j). Without suﬃcient number of GPUs, this parallel for
+loop can degrade to a sequential one.
+
+6
+
+Lines 13-14 : evenly partition A(ij) and B(ij) by rows of
+X (j). That is, A(ij) on GPUi is evenly divided into p por-
+tions:
+
+A(ij)
+
+1
+
+, A(ij)
+
+2
+
+, ..., A(ij)
+
+p
+
+B(ij) is partitioned in the same manner into:
+
+B(ij)
+
+1
+
+, B(ij)
+
+2
+
+, ..., B(ij)
+
+p
+
+Lines 15-16 : parallel reduce p A(ij)s and B(ij)s into
+the global A(j) and B(j), on p GPUs. GPUi takes care
+of the reduction of partition i of all A(kj)s (1 ≤ k ≤ p).
+See Figure 5 (a) for an example where j = 1 and p =
+4: GPU1 reduces {A(11)
+}, GPU2 reduces
+, A(21)
+{A(11)
+}, and so on. B(ij)s are reduced in
+, A(31)
+, A(41)
+the same manner.
+
+, A(31)
+
+, A(41)
+
+, A(21)
+
+1
+
+2
+
+2
+
+1
+
+1
+
+1
+
+2
+
+2
+
+Line 17 : solves the p partitions concurrently on p GPUs.
+) it reduces in
+
+GPUi solves the local partition (A(j)
+Lines 15-16.
+
+Line 19 : obtain X (j) by collecting p partitions {X (j)
+
+, B(j)
+
+i
+
+i
+
+on p GPUs.
+4.2 Topology-aware parallel reduction to speed
+
+up SU-ALS
+
+1 , X (j)
+
+p }
+2 , ..., X (j)
+
+Parallel reduction. In Lines 13-17 of Algorithm 3, (A(j), B(j))
+could have been reduced in one GPU (say, GPU1) and X (j)
+solved there. However, this simple approach fails to paral-
+lelize either data transfer or computation. Moreover, mul-
+tiple GPUs on a machine are usually connected through
+a PCIe bus. PCIe channels are full-duplex, meaning that
+data transfer in both directions can happen simultaneously
+without aﬀecting each other. To leverage the bandwidth in
+both directions, we develop a parallel reduction scheme that
+evenly utilizes both incoming and outgoing channels of all
+GPUs, as shown in Figure 5 (a). Experiment on Hugewiki
+data set shows that this optimization is 1.7x as fast com-
+pared with the reducing-by-one-GPU approach. After this
+parallel reduction, batch solve begins on p GPUs in parallel.
+Topology-aware parallel reduction. Figure 5 (a) as-
+sumes a ﬂat interconnection where all GPUs directly con-
+nect to a PCIe root. This assumption may not always hold.
+For example, in a two-socket machine with four GPUs, a
+typical conﬁguration is that every two GPUs connect to one
+socket. Communications between the two GPUs in the same
+socket still go though the local PCIe bus, while communi-
+cations between GPUs in diﬀerent sockets go through the
+inter-socket connection. In this case, intra-socket transfers
+enjoy zero-copy and faster duplex PCIe channel, compared
+with inter-socket transfers. In such a topology, the scheme
+shown in Figure 5 (a) is not optimal.
+
+Based on the GPU connection topology, we design a two-
+phase parallel reduction scheme shown in Figure 5 (b). In
+this scheme, each partition is ﬁrst reduced intra socket (see
+the dash line). Afterward, the partial, intra-socket reduc-
+tion results are moved across socket and generate the ﬁnal
+reduction result (the solid line). Experiments show that
+this two-phase scheme enjoys an additional 1.5x speedup
+compared with the one-phase scheme shown in Figure 5 (a).
+4.3 How to partition?
+
+Assume a single GPU’s memory capacity is C. According
+to Algorithm 3, one GPU needs to hold X (j), Θ(i), R(ij),
+
+Figure 4: SU-ALS. ΘT is partitioned evenly and vertically,
+and stored on p GPUs. X is partitioned evenly and hori-
+zontally, and solved in batches, achieving model parallelism.
+Each X batch is solved in parallel on p GPUs, each with
+ΘT ’s partition on it, achieving data parallelism.
+
+Algorithm 3 SU-ALS: Scale-Up ALS; update X on multi-
+ple GPUs.
+
+(cid:46) parallel copy to each GPUi
+
+copy GPUi ← ΘT (i)
+
+1: Given p GPUs: GPU1, GPU2, ..., GPUp.
+2: {ΘT (1), ΘT (2), ..., ΘT (p)} ← V erticalP artition(ΘT , p)
+3: {X (1), X (2), ..., X (q)} ← HorizontalP artition(X, q)
+4: {R(11), R(12), ..., R(pq)} ← GridP artition(R, p, q)
+5: parfor i ← 1, p do
+6:
+7: end parfor
+8: for j ← 1, q do
+9:
+10:
+11:
+12:
+13:
+14:
+
+copy GPUi← R(ij)
+(A(ij), B(ij)) ← Get Hermitian X MO(R(ij), ΘT (i))
+synchronize threads()
+{A(ij)
+{B(ij)
+1
+A(j)
+
+(cid:46) model parallel
+(cid:46) data parallel on GPUi
+
+p } ← A(ij)
+p } ← B(ij)
+
+, ..., A(ij)
+, ..., B(ij)
+A(kj)
+
+parfor i ← 1, p do
+
+, A(ij)
+, B(ij)
+
+2
+
+i
+
+2
+
+1
+
+i ← p(cid:80)
+i ← p(cid:80)
+
+k=1
+
+15:
+
+16:
+
+i
+
+k=1
+
+B(kj)
+
+B(j)
+i ← Batch Solve(A(j)
+X (j)
+p }
+2 , ..., X (j)
+
+1 , X (j)
+
+end parfor
+X (j) ← {X (j)
+
+i
+
+17:
+18:
+19:
+20: end for
+
+, B(j)
+
+i
+
+)
+
+Lines 11 : on GPUi (1 ≤ i ≤ p), for each row xu in X (j),
+calculate the Au local to GPUi by only observing ΘT (i) and
+R(ij):
+
+GP Ui(cid:88)
+
+ruv(cid:54)=0
+
+Ai
+
+u =
+
+(θvθT
+
+v + λI)
+
+(6)
+
+(7)
+
+Similarly, we calculate the local Bu matrix:
+
+u = ΘT (i) · (R(ij)
+Bi
+
+u∗ )T
+
+The collection of all Ai
+
+us and Bi
+
+us on GPUi are denoted
+
+as (A(ij), B(ij)).
+
+Line 12 : a synchronization barrier to wait for all parfor
+
+threads to reach this step.
+
+7
+
+3. We usually start from p such that
+
+n × f
+
+p
+
+≈ C
+2
+
+, and
+
+then choose the smallest q that satisﬁes (8).
+Implementation of cuMF
+
+4.4
+
+This section describes selected details of cuMF. CuMF is
+implemented in C, using CUDA 7.0 and GCC OpenMP v3.0.
+It has circa 6,000 lines of code.
+
+Out-of-core computation. As seen in Figure 2 and Ta-
+ble 5, rating and feature matrices can both have 100 billion
+entries. This goes far beyond the host and device mem-
+ory limit. For such out-of-core problems, cuMF ﬁrst gener-
+ate a partition scheme, planning which partition to send to
+which GPU in what order. With this knowledge in advance,
+cuMF uses separate CPU threads to preload data from disk
+to host memory, and separate CUDA streams to preload
+from host memory to GPU memory. By this proactive and
+asynchronous data loading, we manage to handle out-of-core
+problems with close-to-zero data loading time except for the
+ﬁrst load.
+
+Elasticity to resources. Algorithm 3 is generic enough
+to cover many deployment scenarios where the number of
+GPUs are fewer or more than p or q. With more GPUs,
+the sequential for at Line 8 can be parallelized; with fewer
+GPUs, the parfor at Line 9 can be turned into a sequential
+for. This is similar to how MapReduce deals with resource
+elasticity: when there are fewer/more parallel tasks com-
+pared with task slots, tasks will be executed in fewer/more
+waves. By this design cuMF is able to solve ALS of any size.
+Fault tolerance. Handling machine failure is straight-
+forward in cuMF which uses a single machine. During ALS
+execution we asynchronously checkpoint X and Θ generated
+from the latest iteration, into a connected parallel ﬁle sys-
+tem. When the machine fails, the latest X or Θ (whichever
+is more recent) is used to restart ALS.
+
+5. EXPERIMENTS
+
+This section reports the performance evaluations on cuMF.
+We compare cuMF with multi-core solutions libMF [36] and
+NOMAD [33]. We also compare with distributed solutions
+including NOMAD (on multi-nodes), Factorbird [28], Spark
+ALS [31], and a Giraph based solution from Facebook [11].
+We select these solutions because they either perform better
+than earlier studies [7, 30, 15, 9, 32], or are able to handle
+large data sets. Because none of existing GPU-based solu-
+tions [1, 34] can tackle big data sets, we do not compare
+with their results.
+
+The goals of our experiments are to provide key insights
+
+on the following questions:
+
+1. how would cuMF on a single GPU compare with highly
+optimized multi-core methods, such as libMF and NO-
+MAD, on medium-size problems? (Section 5.2)
+
+2. are the memory optimization done by MO-ALS eﬀec-
+
+tive? (Section 5.3)
+
+3. is SU-ALS scalable with multiple GPUs? (Section 5.4)
+
+4. with four GPUs on one machine, how would cuMF
+compare with multi-node methods on large-size prob-
+lems? (Section 5.5)
+
+5.1 Experiment setting
+
+(a) One-phase parallel reduction.
+
+(b) Two-phase parallel reduction considering PCIe hi-
+erarchy: phase-1 (intra-socket) in dash lines; phase-2
+(inter-socket) in solid lines.
+
+Figure 5: Parallel reduce A(ij) in SU-ALS when j = 1 and
+p = 4. For 1 ≤ i ≤ p, on GPUi, A(ij) is evenly partitioned
+into p pieces: A(ij)
+. Afterward GPUi reduces
+across p GPUs (1 ≤ k ≤ p). This not only achieves
+all A(kj)
+parallel get hermitian x and batch solve, but also leverages
+cross-GPU bandwidth eﬃciently.
+
+, ..., A(ij)
+
+p
+
+i
+
+, A(ij)
+
+2
+
+1
+
+A(j), and B(j). Therefore the choices of p and q are subject
+to (8).
+
+m × f
+
+q
+
+n × f
+
+p
+
++
+
++ |R(ij)| +
+
+m
+q
+
+× f 2 +
+
+m
+q
+
+× f +  < C (8)
+
+ is a headroom space for miscellaneous small variables.
+
+In practice, when C = 12 GB we choose  = 500 MB.
+
+Here are some best practices in choosing p and q:
+
+1. If p = 1 can satisfy (8), you can solve X in a single
+In this case SU-ALS is
+
+GPU in sequential batches.
+equivalent to MO-ALS.
+
+2. When q increases and p = 1 satisﬁes (8), q should not
+increase any more. At this time there is already no
+need to further partition X.
+
+8
+
+Table 5: Data sets
+
+Data Set
+
+Netﬂix
+
+YahooMusic
+
+Hugewiki
+SparkALS
+Factorbird
+Facebook
+
+cuMF
+
+m
+
+480,189
+1,000,990
+50,082,603
+
+660M
+229M
+
+1B
+1B
+
+n
+
+17,770
+624,961
+39,780
+2.4M
+195M
+48M
+48M
+
+Nz
+99M
+
+f
+100
+252.8M 100
+100
+10
+5
+16
+100
+
+3.1B
+3.5B
+38.5B
+112B
+112B
+
+λ
+
+0.05
+1.4
+0.05
+0.05
+0.05
+0.05
+0.05
+
+Data Sets. We use three public data sets, i.e., Netﬂix
+[35], YahooMusic [6] and Hugewiki [36] to measure the con-
+vergence speed. For large-size problems, we synthesize the
+data sets used by SparkALS [31], Factorbird [28] and Face-
+book [11]. For these three systems, we compare the per
+iteration latency because their convergence speed are not
+reported. We also synthesize a data set to the size that is
+beyond any previous attempts. That is, we use the rating
+matrix of the Facebook data set, with an enlarged f of 100
+from the original 16. Characteristics of these data sets are
+shown in Table 5.
+
+Hardware. Unless otherwise mentioned, we use one to
+four Nvidia Titan X GPUs, each with 3072 CUDA cores and
+12 GB memory, on one machine. The machine is with two
+Intel Xeon E5 CPUs, 256 GB RAM, and the GPFS [10] as
+the ﬁle system.
+
+Parameters. The f and λ values for each data set are
+given in Table 5. Feature matrices are initiated with random
+numbers in [0, 1]. We focus on the speed and scalability of
+cuMF, and therefore did not spend much eﬀort in hyper-
+parameter tuning to achieve the best accuracy.
+
+Evaluation. For Netﬂix, YahooMusic and Hugewiki, we
+evaluate the root-mean-square-error (RMSE) on test set.
+Performance of libMF and NOMAD is obtained from [36,
+33]. For SparkALS, Factorbird and Facebook, since the data
+is synthetic and no test RMSE is reported, we compare the
+per iteration run time.
+5.2 MO-ALS on a single GPU
+
+We run cuMF on one GPU, measure the test RMSE w.r.t.
+training time, and compare with NOMAD and libMF on
+one machine with 30 cores [33]. We choose these two for
+comparison because they are among the fastest multi-core
+solutions.
+In Figure 6, on both Netﬂix and YahooMusic,
+cuMF performs slightly worse than NOMAD at the begin-
+ning but slightly better later, and constantly faster than
+libMF. CuMF use ALS where each iteration takes much
+longer than SGD based methods. This makes it slower at
+the beginning. Nevertheless cuMF catches up quickly and
+outperforms soon afterward.
+5.3 Beneﬁt of using register and texture mem-
+
+ory in MO-ALS
+
+We ﬁrst measure the beneﬁt of aggressively using registers
+in MO-ALS. Figure 7 compares cuMF’s performance, with
+or without using register memory to aggregate Au, on one
+GPU. On Netﬂix data, cuMF converges 2.5 times as slow (75
+seconds vs. 30 seconds when RMSE reaches 0.92) without
+using registers. The result strongly supports the idea of ag-
+gressively using registers. Among all optimizations done in
+
+(a) Netﬂix
+
+(b) YahooMusic
+
+Figure 6: Test RMSE convergence speed in terms of number
+of iterations: cuMF (with one GPU), NOMAD and libMF
+(both with 30 CPU cores).
+
+(a) Netﬂix
+
+(b) YahooMusic
+
+Figure 7: The convergence speed of cuMF, with or without
+aggressively using registers on one GPU.
+
+MO-ALS, using registers for Au brings the greatest perfor-
+mance gain. Without using the registers, cuMF converges
+1.7 times as slow on YahooMusic. YahooMusic has a smaller
+performance degradation without using registers than Net-
+ﬂix. This is because its rating matrix is more sparse. As a
+result, its Get Hermitian X() is less heavy-duty and oc-
+cupy a smaller percentage of the overall run time.
+
+Figure 8 compares cuMF’s performance with or without
+using texture memory. Using texture memory, the conver-
+gence speed is 25% to 35% faster. The reason for the gain is
+due to the fact that Algorithm 2 updates Θ and X in an al-
+ternating manner, i.e., Θ is read-only when updating X, and
+X is read-only when updating Θ. This feature enables us to
+leverage the read-only texture memory in GPU to speed up
+memory access. Since YahooMusic data is more sparse, the
+penalty of not using texture memory is also smaller.
+5.4 Scalability of SU-ALS on multiple GPUs
+This section ﬁrst studies how a problem with the ﬁxed
+
+(a) Netﬂix
+
+(b) YahooMusic
+
+Figure 8: The convergence speed of cuMF, with or without
+texture memory on one GPU.
+
+9
+
+(a) Netﬂix
+
+(b) YahooMusic
+
+Figure 9: The convergence speed of cuMF on one, two, and
+four GPUs.
+
+size data set can be accelerated with multiple GPUs.
+In
+both Netﬂix and YahooMusic, X and Θ can both ﬁt on one
+GPU. As a result only model parallelism is needed. We run
+Netﬂix and YahooMusic data on one, two and four GPUs,
+respectively, on one machine. As seen from Figure 9, close-
+to-linear speedup is achieved. For example, the speedup is
+3.8x when using four GPUs, measured at RMSE 0.92. De-
+tailed proﬁling shows that, the very small overhead mainly
+comes from PCIe IO contention when multiple GPUs read
+from host memory simultaneously.
+
+In contrast, NOMAD observed a sub-linear speedup on
+certain data sets, due to cache locality eﬀects and commu-
+nication overhead [33]. CuMF achieves better scalability due
+to the optimized memory access and inter-GPU communica-
+tion. An advantage of cuMF is that, it consolidates massive
+computation on a single machine, so that it only uses PCIe
+connections which are faster than any existing network.
+
+We also tested Hugewiki data on four GPUs. We com-
+pare with multi-node NOMAD (on 64-node HPC cluster
+and 32-node AWS cluster) because it outperforms DSGD [7]
+and DSGD++ [30]. Hugewiki is a relatively large data set
+where m ≈ 50M, n ≈ 40K, and Nz ≈ 3B. When using X to
+solve Θ, X is too big to ﬁt on one GPU. According to Al-
+gorithm 3 we partition X evenly into four GPUs and apply
+data parallelism. We use the two-phase parallel reduction
+scheme shown in Figure 5 (b), because our machine has two
+sockets each connecting to two GPUs. With all the intra-
+and inter-GPU optimizations, cuMF performs slightly bet-
+ter than NOMAD on a 64-node HPC cluster (again, with a
+slower start), and much better than NOMAD on a 32-node
+AWS cluster, as shown in Figure 10. This result is very im-
+pressive, as a 64-node HPC cluster is outperformed by only
+one node plus four GPUs. This indicates that cuMF brings
+a big saving in infrastructure and management cost.
+5.5 Solve extremely large-scale problems
+
+We conduct experiments on three extremely large prob-
+lems. In this experiment we use four Nvidia GK210 cards on
+one machine. Each card is with 2496 CUDA cores (slightly
+fewer than Titan X) and 12 GB memory, and every two
+cards are encapsulated as one K80 GPU.
+
+The results for the following experiments are shown in
+Figure 11. SparkALS [31] is a benchmark of Spark ML-
+lib ALS. Its rating matrix is from the 100-by-1 duplication
+It uses 50×m3.2xlarge
+of the Amazon Reviews [29] data.
+AWS nodes with Spark MLlib 1.1, and takes 240 seconds
+per ALS iteration. We synthesize the data in the same way
+as [31], apply model parallelism solving X, and apply data
+parallelism solving Θ. CuMF with four GPUs completes
+
+Figure 10: CuMF@4GPU, vs. NOMAD on a 64-node HPC
+cluster and a 32-node AWS cluster, with Hugewiki data.
+CuMF converges similar to NOMAD with 64 nodes, and
+10x as fast as NOMAD with 32 nodes.
+
+Figure 11: CuMF@4GPU on three very large data sets, com-
+pared with the their original implementations as baselines.
+
+one iteration in 24 seconds, which is ten times as fast as
+SparkALS.
+
+Factorbird [28] is a parameter server system for MF. It
+trains a data set (m = 229M, n = 195M, f = 5, and Nz =
+38.5B) on a cluster of 50 nodes. We synthesize the data
+using the method described in [30]. We use only model
+parallelism in solving X and Θ because they both ﬁt into
+one GPU. CuMF with four GPUs completes one iteration
+in 92 seconds. Factorbird needs 563 seconds per iteration,
+and with SGD it may need more iterations than ALS.
+
+Facebook [11] recently revealed that its MF system deals
+with 1 billion users, millions of items and over 100 billion
+ratings. Given this hint we did a 160-by-20 duplication of
+the Amazon Review data, yielding a data set with m =
+1056M, n = 48M, f = 16, and Nz = 112B. We use data
+parallelism to solve both X and Θ. Especially, when solving
+Θ, because X is huge (1056M×16 ﬂoats) and cannot ﬁt on
+4 GPUs, we change the parfor in Line 9-18 of Algorithm 3
+into a sequential for with many batches. By doing this,
+cuMF completes one ALS iteration in 746 seconds. [11] does
+not report its speed on 50 Giraph workers, but we believe
+cuMF is competitive given the size of the problem and the
+low cost of one machine with GPUs. We further try a larger
+f = 100, and cuMF completes one iteration in 3.8 hours. To
+the best of our knowledge, this is by far the largest matrix
+factorization problem ever reported in literature.
+
+As a summary, on two extremely large data sets, CuMF
+with four GPUs signiﬁcantly outperforms the original dis-
+tributed implementations. CuMF is also able to factorize
+the largest collaborative ﬁltering matrix ever reported.
+
+10
+
+6. RELATED WORK
+
+SGD, Coordinate Gradient Descent (CGD) and ALS are
+the three main algorithms for MF. This section ﬁrstly re-
+views the three algorithms and then the methods to paral-
+lelize them. Subsequently, we review GPU-based MF solu-
+tions.
+
+6.1 MF algorithms
+
+SGD based algorithms [13] have been often applied to
+matrix factorization. SGD handles large scale problems by
+splitting the rating matrix into blocks along with sophis-
+ticated conﬂict-avoiding updates. CGD based algorithms
+update along one coordinate direction in each iteration. [9]
+improved the default cyclic CGD scheme by prioritizing the
+more important coordinates. ALS algorithms [35, 24] have
+advantages in easy to parallelize, converging in fewer it-
+erations, and dealing with non-sparse rating matrices [13].
+CuMF is based on ALS.
+
+6.2 Parallel computing paradigms
+
+Parallel SGD. SGD has been parallelized in environ-
+ments including multi-core [36], multi-node MPI [30, 33],
+MapReduce [7, 15] and parameter-server [28, 4]. These
+studies are inspired by HOGWILD! [20], which shows how
+to avoid expensive memory locking in memory sharing sys-
+tems for some optimization problems with sparse updates.
+These methods partition the rating matrix into blocks with
+no overlapping rows or columns, and work on these blocks
+in parallel. They also use asynchronous communication,
+overlapping of communication and computation, and shared
+memory to achieve further speedup.
+
+LibMF [36] is a very eﬃcient SGD based library for matrix
+factorization on multi-cores. It has out performed nearly all
+other approaches on a 12-core machine. However, our ex-
+perimental results show that libMF stops scaling beyond 16
+cores, similar to the observation of [19]. Moreover, libMF is
+a single-machine implementation, which limits its capability
+to solve large-scale problems. NOMAD [33] extends the idea
+of block partitioning, adding the capability to release a por-
+tion of a block to another thread before its full completion.
+It performs similar to libMF on a single machine, and can
+scale out to a 64-node HPC cluster.
+
+Parameter Server with SGD. More recently, the idea
+of “parameter server” [16, 4] emerges for extremely large-
+scale machine learning problems.
+In this paradigm, the
+server nodes store parameters, while the worker nodes store
+training data and compute on them. The parameter-server
+framework manages asynchronous communication between
+nodes, ﬂexible consistency models, elastic scalability, and
+fault tolerance. Following this idea, Petuum [4] runs Net-
+ﬂix data on a 512 cores cluster using SGD. Factorbird [28]
+is a parameter server speciﬁcally implemented for matrix
+factorization, also based on SGD.
+
+Parallel CGD. CCD++ [32] performs sequential up-
+dates on one row of the decomposed matrix while ﬁxing
+other variables. CCD++ has lower time complexity but
+makes less progress per iteration, compared with ALS. In
+practice, CCD++ behaves well in the early stage of opti-
+mization, but then becomes slower than libMF.
+
+Parallel ALS. As discussed in Section 2.2, PALS [35] and
+SparkALS [18] parallelize ALS by feature matrix replication
+and partial replication, respectively. These approaches does
+
+not work when feature matrices get extremely large. Face-
+book [11] tackles this issue by feeding a feature matrix in
+parts to a node. For example, when solving X, X is parti-
+tioned disjointedly across nodes; Θ is also partitioned and
+rotated across the same set of nodes. When a Θ partition
+Θ(j) meets X partition X (i), X (i) is updated by observing
+Θ(j); X (i) completes an iteration of update after it meets
+all Θ(j)s. This is somewhat similar to SU-ALS but SU-ALS
+does not use rotation, as GPUs do not have suﬃcient mem-
+ory to do rotation.
+
+GraphLab [17] implements ALS in such a way that when
+Θ is big, it is distributed among multiple machines. When
+updating a xu in a node, all needed θvs are fetched on-the-
+ﬂy from all nodes. This involves a lot of cross-node traﬃc
+and puts a high requirement on network bandwidth.
+6.3 GPU approaches
+
+[1] employs GPU-based restricted Boltzmann machine for
+collaborative ﬁltering, which gives relative performance com-
+pared with a CPU implementation on Netﬂix data. [34] im-
+plements both SGD and ALS on GPU to solve MF. It uses
+a mini-batch-based and sequential version of SGD, and a
+variant of ALS that adjusts (rather than re-calculates) the
+inverse of the Hermitian matrices in each iteration. They
+neither optimize the memory access to fully utilize GPU’s
+compute power, nor scale to multiple GPUs to handle large-
+scale problems.
+
+Compared with CPU-based approaches, cuMF has better
+performance with a fraction of hardware resources. Com-
+pared with GPU-based approaches, our optimization in mem-
+ory access and parallelism yields higher performance and
+scalability.
+
+7. CONCLUSION
+
+Advances in GPU computing opens new possibilities to ac-
+celerate high performance parallel and large scale distributed
+applications. GPUs enable us to consolidate huge com-
+pute power and memory bandwidth on one or few machines,
+which may reduce the demand for big distributed clusters.
+This scale-up approach provides an alternative to the scale-
+out systems in distributed applications. Evidently, cuMF
+using a single machine with GPUs is faster and cheaper to
+solve matrix factorization, compared with distributed CPU
+systems. CuMF achieves this by optimizing memory ac-
+cess, combining data and model parallelism, and applying
+topology-aware parallel reduction.
+
+In future work we plan to extend cuMF to deal with other
+sparse problems such as graph algorithms [12], and use it to
+accelerate Hadoop/Spark framework [27].
+
+8. REFERENCES
+[1] X. Cai, Z. Xu, G. Lai, C. Wu, and X. Lin.
+
+GPU-accelerated restricted boltzmann machine for
+collaborative ﬁltering. In ICA3PP, pages 303–316,
+2012.
+
+[2] J. Canny, D. L. W. Hall, and D. Klein. A
+
+multi-teraﬂop constituency parser using GPUs. In
+EMNLP, pages 1898–1907, 2013.
+
+[3] A. Coates, B. Huval, T. Wang, D. Wu, B. Catanzaro,
+
+and N. Andrew. Deep learning with COTS HPC
+systems. In ICML, pages 1337–1345, 2013.
+
+11
+
+[4] H. Cui, J. Cipar, Q. Ho, J. K. Kim, S. Lee, A. Kumar,
+
+J. Wei, W. Dai, G. R. Ganger, P. B. Gibbons, G. A.
+Gibson, and E. P. Xing. Exploiting bounded staleness
+to speed up big data analytics. In USENIX ATC,
+pages 37–48, 2014.
+
+[5] J. Dean, G. S. Corrado, R. Monga, K. Chen,
+M. Devin, Q. V. Le, M. Z. Mao, M. Ranzato,
+A. Senior, P. Tucker, K. Yang, and A. Y. Ng. Large
+scale distributed deep networks. In NIPS, pages
+1223–1231, 2012.
+
+[6] G. Dror, N. Koenigstein, Y. Koren, and M. Weimer.
+
+The Yahoo! Music Dataset and KDD-Cup ’11. In
+KDD Cup 2011 competition, 2012.
+
+[7] R. Gemulla, E. Nijkamp, P. J. Haas, and Y. Sismanis.
+
+Large-scale matrix factorization with distributed
+stochastic gradient descent. In KDD, pages 69–77,
+2011.
+
+[8] J. L. Hennessy and D. A. Patterson. Computer
+
+architecture: a quantitative approach. Elsevier, 2011.
+
+[9] C.-J. Hsieh and I. S. Dhillon. Fast coordinate descent
+
+methods with variable selection for non-negative
+matrix factorization. In KDD, pages 1064–1072, 2011.
+
+[10] IBM. General Parallel Filesystem. http://www-01.
+ibm.com/support/knowledgecenter/?lang=en#!/
+SSFKCN_4.1.0.4/gpfs.v4r104_welcome.html, 2014.
+
+[11] M. Kabiljo and A. Ilic. Recommending items to more
+
+than a billion people. https:
+//code.facebook.com/posts/861999383875667, 2015.
+[Online; accessed 17-Aug-2015].
+
+[12] F. Khorasani, K. Vora, R. Gupta, and L. N. Bhuyan.
+
+Cusha: Vertex-centric graph processing on gpus. In
+HPDC, pages 239–252, 2014.
+
+[13] Y. Koren, R. M. Bell, and C. Volinsky. Matrix
+
+factorization techniques for recommender systems.
+Computer, 42(8):30–37, 2009.
+
+[14] S. J. Krieder, J. M. Wozniak, T. Armstrong,
+
+M. Wilde, D. S. Katz, B. Grimmer, I. T. Foster, and
+I. Raicu. Design and evaluation of the gemtc
+framework for gpu-enabled many-task computing. In
+HPDC, pages 153–164, 2014.
+
+[15] B. Li, S. Tata, and Y. Sismanis. Sparkler: Supporting
+
+large-scale matrix factorization. In EDBT, pages
+625–636, 2013.
+
+[16] M. Li, D. G. Andersen, J. W. Park, A. J. Smola,
+
+A. Ahmed, V. Josifovski, J. Long, E. J. Shekita, and
+B.-Y. Su. Scaling distributed machine learning with
+the parameter server. In OSDI, pages 583–598, 2014.
+
+[17] Y. Low, D. Bickson, J. Gonzalez, C. Guestrin,
+A. Kyrola, and J. M. Hellerstein. Distributed
+GraphLab: a framework for machine learning and data
+mining in the cloud. In VLDB, pages 716–727, 2012.
+
+[18] X. Meng, J. K. Bradley, B. Yavuz, E. R. Sparks,
+
+S. Venkataraman, D. Liu, J. Freeman, D. B. Tsai,
+M. Amde, S. Owen, D. Xin, R. Xin, M. J. Franklin,
+R. Zadeh, M. Zaharia, and A. Talwalkar. MLlib:
+Machine Learning in Apache Spark. CoRR,
+abs/1505.06807, 2015.
+
+[19] Y. Nishioka and K. Taura. Scalable task-parallel sgd
+on matrix factorization in multicore architectures. In
+ParLearning, 2015.
+
+[20] F. Niu, B. Recht, C. Re, and S. J. Wright.
+
+HOGWILD!: A lock-free approach to parallelizing
+stochastic gradient descent. In NIPS, pages 693–701,
+2011.
+
+[21] Nvidia. cuBLAS.
+
+http://docs.nvidia.com/cuda/cublas/, 2015.
+[Online; accessed 17-Aug-2015].
+
+[22] Nvidia. cuSPARSE. http://docs.nvidia.com/cuda/
+cusparse/#cusparse-lt-t-gt-csrmm2, 2015. [Online;
+accessed 4-Aug-2015].
+
+[23] J. Pennington, R. Socher, and C. D. Manning. Glove:
+
+Global vectors for word representation. In EMNLP,
+pages 1532–1543, 2014.
+
+[24] I. Pillaszy, D. Zibriczky, and D. Tikk. Fast ALS-based
+matrix factorization for explicit and implicit feedback
+datasets. In RecSys, pages 71–78, 2010.
+
+[25] T. Rohrmann. How to factorize a 700 GB matrix with
+
+Apache Flink. http://data-artisans.com/
+how-to-factorize-a-700-gb-matrix-with-apache-flink/,
+2015. [Online; accessed 15-Aug-2015].
+
+[26] S. Ryoo, C. I. Rodrigues, S. S. Baghsorkhi, S. S.
+
+Stone, D. B. Kirk, and W.-m. W. Hwu. Optimization
+principles and application performance evaluation of a
+multithreaded GPU Using CUDA. In PPoPP, pages
+73–82, 2008.
+
+[27] A. Sabne, P. Sakdhnagool, and R. Eigenmann.
+
+Heterodoop: A mapreduce programming system for
+accelerator clusters. In HPDC, pages 235–246, 2015.
+
+[28] S. Schelter, V. Satuluri, and R. B. Zadeh. Factorbird-a
+
+parameter server approach to distributed matrix
+factorization. In NIPS Workshop on Distributed
+Matrix Computations, 2014.
+
+[29] Stanford SNAP Lab. Web data: Amazon reviews.
+
+https://snap.stanford.edu/data/web-Amazon.html,
+2015. [Online; accessed 18-Aug-2015].
+
+[30] C. Teﬂioudi, F. Makari, and R. Gemulla. Distributed
+
+matrix completion. In ICDM, pages 655–664, 2012.
+
+[31] B. Yavuz, X. Meng, and R. Xin. Scalable
+Collaborative Filtering with Spark MLlib.
+https://databricks.com/blog/2014/07/23/
+scalable-collaborative-filtering-with-spark-mllib.
+html, 2014. [Online; accessed 15-Aug-2015].
+
+[32] H.-F. Yu, C.-J. Hsieh, S. Si, and I. S. Dhillon. Scalable
+
+coordinate descent approaches to parallel matrix
+factorization for recommender systems. In ICDM,
+pages 765–774, 2012.
+
+[33] H. Yun, H.-F. Yu, C.-J. Hsieh, S. Vishwanathan, and
+
+I. S. Dhillon. NOMAD: Non-locking, stochastic
+multi-machine algorithm for asynchronous and
+decentralized matrix completion. In VLDB, pages
+975–986, 2014.
+
+[34] D. Zastrau and S. Edelkamp. Stochastic gradient
+
+descent with GPGPU. In KI 2012: Advances in
+Artiﬁcial Intelligence, pages 193–204. Springer, 2012.
+[35] Y. Zhou, D. M. Wilkinson, R. Schreiber, and R. Pan.
+
+Large-scale parallel collaborative ﬁltering for the
+netﬂix prize. In AAIM, pages 337–348, 2008.
+
+[36] Y. Zhuang, W. Chin, Y. Juan, and C. Lin. A fast
+
+parallel SGD for matrix factorization in shared
+memory systems. In RecSys, pages 249–256, 2013.
+
+12
+
+

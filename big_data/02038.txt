@@ -1,0 +1,868 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+7
+
+ 
+
+ 
+ 
+]
+
+O
+R
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+8
+3
+0
+2
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Unscented Bayesian Optimization for Safe Robot Grasping
+
+Jos´e Nogueira1, Ruben Martinez-Cantin2, Alexandre Bernardino1, and Lorenzo Jamone1
+
+1Institute for Systems and Robotics, Instituto Superior Tecnico, Lisboa, Portugal
+2Centro Universitario de la Defensa, Zaragoza, Spain, email: rmcantin@unizar.es
+
+Abstract
+
+We address the robot grasp optimization problem of unknown objects considering uncertainty in
+the input space. Grasping unknown objects can be achieved by using a trial and error exploration
+strategy. Bayesian optimization is a sample eﬃcient optimization algorithm that is especially suitable
+for this setups as it actively reduces the number of trials for learning about the function to optimize.
+In fact, this active object exploration is the same strategy that infants do to learn optimal grasps. One
+problem that arises while learning grasping policies is that some conﬁgurations of grasp parameters
+may be very sensitive to error in the relative pose between the object and robot end-eﬀector. We call
+these conﬁgurations unsafe because small errors during grasp execution may turn good grasps into
+bad grasps. Therefore, to reduce the risk of grasp failure, grasps should be planned in safe areas. We
+propose a new algorithm, Unscented Bayesian optimization that is able to perform sample eﬃcient
+optimization while taking into consideration input noise to ﬁnd safe optima. The contribution
+of Unscented Bayesian optimization is twofold as if provides a new decision process that drives
+exploration to safe regions and a new selection procedure that chooses the optimal in terms of its
+safety without extra analysis or computational cost. Both contributions are rooted on the strong
+theory behind the unscented transformation, a popular nonlinear approximation method. We show
+its advantages with respect to the classical Bayesian optimization both in synthetic problems and
+in realistic robot grasp simulations. The results highlights that our method achieves optimal and
+robust grasping policies after few trials while the selected grasps remain in safe regions.
+
+1
+
+Introduction
+
+Robot grasping in general conditions is a challenging problem due to a multitude of sources of uncer-
+tainty. Perception of object shape is often noisy and partial; geometric transformations between the
+perceptual reference frame and the robot end-eﬀector may carry calibration errors. Also, link ﬂexibility
+and controller errors may prevent a precise positioning of the robot hand in the desired pose for the
+object to grasp. As such, when planning for a robotic grasp, one must consider the impact of the un-
+certainty in the input space (positioning errors) in the quality of the grasp. This depends not only on
+the magnitude of the errors but also on the characteristics of the object and the type of grasp strategy
+employed. Whereas, for simple grippers, we may reason that smooth object surfaces will present less
+sensitivity to errors, for multi-ﬁngered hands this is not suﬃcient. This problem is ampliﬁed by the noisy
+and discontinuous nature of commonly used grasp quality metrics. In general, a sampling approach may
+be required to search for good grasps in a trial and error fashion.
+
+The question we address in the paper is: given an unknown object, where should the robot perform a
+grasp, in order to simultaneously maximize the grasp quality and minimize the risk of failure? A brute-
+force approach would need to test grasps in many diﬀerent conﬁgurations in search for the best grasping
+point and, for each conﬁguration, repeat the test many times to average out the robot positioning
+uncertainty. This is clearly unfeasible in practice, and better search strategies must be devised.
+In
+robotics in general and, for the problem of robot grasping in particular, Bayesian optimization has been
+one of the most successful trial-and-error techniques [18, 19, 1, 6], even in the presence of mechanical
+failures [5]. Bayesian optimization [25, 13, 2] is a global optimization technique for black-box functions.
+Because it is designed for sample eﬃciency, at the cost of extra computations, it is intended for functions
+that are expensive to evaluate in terms of cost, energy, time, etc.
+
+The beauty of Bayesian optimization is its capability to deal with general black-box functions, there-
+fore being able to address the grasping problem without any extra information, just the results from
+previous trials. Bayesian optimization relies on a probabilistic surrogate function (e.g.: a Gaussian pro-
+cess) that is able to learn about the target function based on previous samples and, therefore, drive
+future sampling more eﬃciently. Because Bayesian optimization is purely driven by sampling, but, at
+the same time, it is currently the most sample eﬃcient global optimization method, it has been called
+the intelligent brute-force algorithm.
+
+However, to the authors knowledge, the consideration of uncertainty in the input space has been
+addressed neither in the grasp planning literature nor in the Bayesian optimization literature. The main
+contribution of the paper addresses the problem of input noise in Bayesian optimization, which is then
+applied to robot grasping. For dealing the input noise, we need a system to propagate the noise distri-
+bution from the input query through all the functions and surrogates of our method. We solve this with
+the unscented transformation [15, 34], a method to estimate the results of applying a nonlinear trans-
+formation to a probability distribution. Thus, we can apply the unscented transformation to propagate
+the input noise through all the Bayesian optimization procedure. The unscented transformation is very
+popular in the control and signal processing literature for its eﬃciency and robustness, especially when
+combined with the Kalman ﬁlter or related algorithms.
+
+In this paper, we present the Unscented Bayesian optimization (UBO) algorithm.
+
+It has the ad-
+vantages of the intelligent brute-force from Bayesian optimization and the capability of dealing with
+input noise during function queries. Applied to grasping, this means that the method can ﬁnd the op-
+timal grasp while considering the input noise for safety. Furthermore, due to the recent popularity of
+Bayesian optimization in many areas, this method can be automatically extended to many other ﬁelds.
+Recent examples are applications in autonomous algorithm tuning [28, 7], robot planning [20, 22], control
+[31, 4], reinforcement learning [23, 6], product design [30, 8], sensor networks [29, 9], simulation design
+[2], biology [32], etc. All those ﬁelds could beneﬁt for an extension to deal with input noise.
+
+2 Bayesian optimization
+
+Consider the problem of ﬁnding the minimum of an unknown real valued function f : X → R, where X
+is a compact space, X ⊂ Rd, d ≥ 1. In order to ﬁnd the minimum, the algorithm has a maximum budget
+of N evaluations of the target function f . The purpose of the Bayesian optimization algorithm is to
+select the best query points at each iteration such as the optimization gap |y∗ − yn| is minimum for the
+available budget.
+Bayesian optimization achieves optimal sampling performance by using two ingredients. First, a
+probabilistic surrogate model that is a distribution over the family of functions P (f ) where the target
+function f () belongs. This surrogate model is able to capture all information available, from prior
+information to any sample or observation as soon as it is gathered. Second, an Bayesian decision process
+that takes all the information captured in the surrogate model and selects the next query point in order
+to maximize the information about the maximum. In that way, Bayesian optimization can be understood
+as active learning applied to learn the optimum location.
+
+Without loss of generality, for the remainder of the paper we are going to assume that the surrogate
+model P (f ) is a Gaussian process GP(x|µ, σ2, θ) with inputs x ∈ X, scalar outputs y ∈ R and an asso-
+ciated kernel or covariance function k(·,·) with hyperparameters θ. The hyperparameters are estimated
+using a Monte Carlo Markov Chain (MCMC) algorithm, i.e.: slice sampling [28, 21], resulting in m
+samples Θ = {θi}m
+Given a dataset at step n of query points X = {x1:n} and its respective outcomes y = {y1:n}, then
+the prediction of the Gaussian process at a new query point xq, with kernel ki conditioned on the i-th
+hyperparameter sample ki = k(·,·|θi) is a normal distribution such as yq ∼ Pm
+
+i=1 N (µi, σ2
+
+i=1.
+
+µi(xq) = ki(xq, X)Ki(X, X)−1y
+i (xq) = ki(xq, xq) − ki(xq, X)Ki(X, X)−1ki(X, xq)
+σ2
+
+(1)
+
+being ki(xq, X) the corresponding cross-correlation vector of the query point xq with respect to the
+dataset X and Ki(X, X) is the Gram matrix corresponding to kernel ki for the dataset X included the
+noise term σ2
+n. The noise term is used to represent the observation noise in stochastic functions [11] or
+
+i |xq) where:
+
+the nugget term for surrogate missmodeling [10]. Note that, because we use a sampling distribution of
+θ the predictive distribution at any point x is a mixture of Gaussians.
+
+To select the next point at each iteration, we use the expected improvement criterion [26] as a way to
+minimize the optimality gap. The expected improvement is deﬁned as the expectation of the improvement
+function I(x) = max(0, ybest − f (x)), where ybest is the best outcome until that iteration. Taking the
+expectation over the mixture of Gaussians of the predictive distribution, we can compute the expected
+improvement as:
+
+EI(x) = E
+
+p(y|x,θ) [max(0, ρ − f (x))]
+mX
+
+[(ybest − µi) Φ(zi) + σiφ(zi)]
+
+=
+
+i=1
+
+(2)
+
+where φ and Φ are the corresponding Gaussian probability density function (PDF) and cumulative
+density function (CDF), being zi = (ρ − µi)/σi. In this case, (µi, σ2
+i ) is the prediction computed with
+Equation (1).
+
+Finally, in order to avoid bias and guarantee global optimality, we rely on an initial design of p points
+
+based on Latin Hypercube Sampling (LHS) following the recommendation in the literature [14, 3, 17].
+
+3 Unscented Bayesian optimization
+
+There has been previous works that consider input noise in Gaussian processes [24], however, those
+methods propagate the input noise to the output space, which may result in an over exploration of the
+space during optimization.
+
+In this paper, we propose to consider the input noise during the decision process to explore and select
+the regions that are safe. That is, the regions that guarantee good results even if the experiment/trial is
+repeated several times. Our contribution is twofold: we present the unscented expected improvement and
+the unscented optimum incumbent. Both methods are based on the unscented transformation [35, 15]
+that was initially developed for tracking and ﬁltering applications.
+
+3.1 Unscented transformation
+
+The unscented transformation is a method to propagate probability distributions through nonlinear
+transformations with a trade oﬀ of computational cost vs accuracy. It is based on the principle that it
+is easier to approximate a probability distribution than to approximate an arbitrary nonlinear function.
+The unscented transformation uses a set of deterministally selected samples from the original distribution
+(called sigma points) and transform them through the nonlinear function f (·). Then, the transformed
+distribution is computed based on the weighted combination of the transformed sigma points.
+The advantage of the unscented transformation is that the mean and covariance estimates of the
+new distribution are accurate to the third order of the Taylor series expansions of f (·) provided that
+the original distribution is a Gaussian prior, or up to the second order of the expansion for any other
+prior. Figure 1 highlights the diﬀerences between approximating the distribution using sigma points
+(UT) or using standard ﬁrst-order Taylor linearization (Lin.). The distribution from the UT is closer to
+the real distribution. Because the prior and posterior distributions are both Gaussians, the unscented
+transformation is a linearization method. However, because the linearization is based on the statistics
+of the distribution, it is often found in the literature as statistical linearization.
+
+Another advantage of the unscented transformation is its computational cost. For a d-dimensional
+input space, the unscented transformation requires a set of 2d + 1 sigma points. Thus, the computational
+cost is negligible compared to other alternatives to distribution approximation such as Monte Carlo,
+which requires a large number of samples, or numerical integration such as Gaussian quadrature, which
+has an exponential cost on d. Van der Merwe [34] proved that the unscented transformation is part of the
+more general sigma point ﬁlters, which achieve similar performance results. Other sigma point methods
+are the central diﬀerence ﬁlter (CDF) [12] and the divided diﬀerence ﬁlter (DDF) [27].
+
+Figure 1: Propagation of a normal distribution through a nonlinear function. The ﬁrst order Taylor
+expansion (dotted) only uses information of the function at the mean point to compute the linear ap-
+proximation, while the UT (dashed) approaches the function with a linear regression of several sigma
+points. The actual distribution is the solid one. (Adapted from [34])
+
+3.2 Computing the unscented transformation
+
+Assuming that the prior distribution is a Gaussian distribution x ∼ N (bx, Σx), then the 2d + 1 sigma
+
+points of the unscented transformation are computed based on this sampling strategy
+
+x
+
+(i)
+
+x0 = bx
++ = bx +(cid:16)p(d + k)Σx(cid:17)i
+− = bx −(cid:16)p(d + k)Σx(cid:17)i
+
+x(i)
+
+∀i = 1..d
+∀i = 1..d
+
+(3)
+
+where (√·)i is the i-th row or column of the corresponding matrix square root. In this case, k is a free
+parameter that can be used to tune the scale of the sigma points. Although it may break the positive
+deﬁned requirement, the original authors [15] recommended k = −3 or k = 0. To alleviate the potential
+numerical problem raised by negative k values and to increase the expressiveness of the methods, the
+authors later introduced the scaled unscented transform [16]. However, for our application such extra
+complexity is unnecessary.
+
+For these sigma points, the weights are deﬁned as:
+
+ω0 =
+
+ω(i)
++ =
+
+k
+
+d + k
+1
+
+2(d + k)
+
+∀i = 1..d
+
+∀i = 1..d
+Then, the transformed distribution is computed as x′ ∼ N (bx′, Σ′
+
+2(d + k)
+
+ω(i)
+− =
+
+1
+
+x) where:
+
+2dX
+
+i=0
+
+bx′ =
+
+ω(i)f (x(i))
+
+(4)
+
+(5)
+
+3.3 Unscented expected improvement
+
+Bayesian optimization is about selecting the most interesting point each iteration. Usually, this is achieve
+by a greedy criterion, or acquisition functions, such as: the expected improvement, the upper conﬁdence
+bound or the predictive entropy. Those criteria are designed to select the point that has the higher
+potential to become the optimum. However, all those methods assume that the observed value would
+
+be exactly the outcome of the query plus some observation noise. They assume that the query is always
+deterministic.
+
+Instead, we are going to assume that the query is a probability distribution. Thus, instead of analysing
+the outcome of the criterion, we are going to analyse the resulting posterior distribution of transforming
+the query distribution through the acquisition function. For the remainder of the section, we assume that
+the input distribution corresponds to the input noise in each query point xq of the Bayesian optimization
+process. That is, each query point is distributed according to an isotropic multivariate normal distribution
+N (0, Iσx).
+For the purpose of safe Bayesian optimization, we will use the expected value of the transformed
+distribution as the acquisition function. In this case, we will use the expected improvement. Therefore,
+the unscented expected improvement is computed as:
+
+U EI(x) =
+
+2dX
+
+i=0
+
+ω(i)EI(x(i))
+
+(6)
+
+where x(i) and ω(i) are computed according to equations (3) and (4) respectively. Note that we only
+
+compute the expected value of the transformed distribution bx′ = U EI(x). This value is enough to
+
+take a decision considering the risk on the input noise. However, the value of Σ′
+x represents also the
+output uncertainty and can be used as meta-analysis tool, that is, the value can be used as a risk on the
+estimation of the risk. This opens a new set of criteria functions, like the upper bound of the output
+distribution.
+
+3.4 Unscented optimal incumbent
+
+The unscented expected improvement can be used to drive the search procedure towards safe regions.
+However, because the target function is unknown by deﬁnition, the sampling procedure can still query
+good outcomes in unsafe areas.
+
+Furthermore, in Bayesian optimization there is a ﬁnal decision that is independent of the acquisition
+function employed. Once the optimization process is stopped after sampling N queries, we still need to
+decide which point is the best. Moreover, after every iterations, we may need to say which point is the
+incumbent as the best observation.
+
+If the ﬁnal decision about the incumbet is based on the greedy policy of selecting the sample with
+
+best outcome x∗ such that ybest = f (x∗) we may select an unsafe query.
+
+Instead, we propose to apply the unscented transformation also to the select the optimal incumbent
+x∗, based on the function outcome f (). This would require to evaluate on f () the 2d + 1 sigma points
+for each observation. However, the main idea of Bayesian optimization is to reduce the number of
+evaluations on f (). Therefore, we evaluate the sigma points at the GP prediction µ(). Thus, let us deﬁne
+the unscented outcome (UO) as:
+
+U O(x) =
+
+2dX
+
+i=0
+
+ω(i)
+
+mX
+
+j=1
+
+µj(x(i))
+
+(7)
+
+j=1 µj(x(i)) is the prediction of the GP according to equation (1) integrated over the kernel
+
+where Pm
+
+hyperparameters and at the sigma points of equation (3).
+
+Under this conditions, the incumbent of the optimal solution x∗ corresponds to:
+
+x∗ = arg max
+
+U O(x)
+
+x
+
+(8)
+
+In the Bayesian optimization literature, when f () represents an stochastic function with large output
+noise, it is common to return the expected value of the GP at the optimum query, instead of the optimum
+observation. Note that our method is also valid under those conditions.
+
+As an illustrative example, take the function in Fig. 2. In this case, the maximum of the function is
+at x ≈ 0.87. However, this maximum is very risky, that is, small variations in x results in large deviations
+from the optimal outcome. On the other hand, the local maximum at x ≈ 0.07 is safer. Even if there
+is noise in x, repeated queries will produce similar outcomes. In this case, if we assume input noise of
+σx = 0.05 and compute the unscented transformation of that noise through the function, we can see that
+
+the sigma points centered at the leftmost maximum would have higher outcome that the sigma points
+centered at the global maximum. Therefore, the expected posterior value of the local smooth maximum
+would be larger than the value at the global narrow maximum.
+
+In summary, our method takes the unscented transformation to compute the decision functions in
+Bayesian optimization, assuming that each query is a probability distribution (due to the input noise)
+instead of a deterministic value. We found that, for Bayesian optimization, we need to consider the
+unscented version of the acquisition function, for which we propose the unscented expected improvement.
+Furthermore, we also need to take into consideration the decision to select the best observation or the
+potential optimum.
+In this case, we propose the unscented optimal incumbent as a robust selection
+method.
+
+4 Results
+
+In this section we describe the methods used and experiments performed to compare the beneﬁts of the
+Unscented Bayesian Optimization (UBO) with respect to the classical expected Bayesian optimization
+(BO). The main goal in these experiments is to demonstrate that, by using the UBO, we minimize the
+risk of choosing unsafe global optima. We ﬁrst illustrate the method in synthetic functions that allows to
+visualize the importance of selecting the safe optimum. Then, we show the results of doing autonomous
+exploration of daily life objects with a dexterous robot hand using realistic simulations, reproducing the
+conditions of a real robot setup.
+
+In this work we have used and extended the BayesOpt software [21] with the proposed methods1. For
+the kernel, we used the standard choice of the Mat´ern kernel with ν = 5/2. As commented in Section 2,
+we used slice sampling for the kernel hyperparameters.
+
+To reproduce the eﬀect of the input noise, we queried the result of each method using Monte Carlo
+samples according the input noise distribution at each iteration. By analysing the outcome of the samples
+we can estimate the expected outcome from the optima (ymean (xmc
+)) and the instability of the optimum
+(ystd (xmc
+)). As we can see in the results, out method is able to provide equal or better expected outcomes
+while reducing the instability of those same outcomes.
+
+i
+
+i
+
+4.1 Synthetic Functions
+
+In this section, we use two synthetic functions with distinct regions in terms of risk: the 1D RKHS from
+[36] and a Mixture of 2D Gaussian distributions (GM), see Fig.2. Both have a global maximum at a
+narrow peak, which represents a region of high risk, that may not be the ideal one in case of signiﬁcant
+input noise.
+
+We have performed 100 runs of Bayesian Optimization for both functions (RKHS, GM) and the
+optimization procedure (BO and UBO). Also, to represent the input noise, we have used 100 Monte
+Carlo samples at the optimal query point as seen before.
+
+For RKHS each run has 5 initial samples and the optimization performs 45 iterations. The input
+noise is set as σx = 0.01. For GM each run has 30 initial samples and the optimization performs 90
+iterations. The input noise is set as σx = 0.1. In Fig. 3 and Fig. 4 we show the statistics over the
+diﬀerent runs for the evaluation criteria with respect to the number of iterations. The shaded region
+represents the 95% conﬁdence interval.
+
+For both functions, we can observe that UBO quickly overcomes the results of BO. As soon as the
+random exploration phase ﬁnishes and the optimization starts, the UBO computes less risky solutions,
+as demonstrated by the higher expected return value and lower standard deviation. In table 1 we show
+the numeric results obtained at the last iteration. We show also values for the worst sample of the Monte
+Carlo runs2. The worst case for UBO is always more favourable than the worst case for BO by a large
+margin.
+
+1The new code will be release upon acceptance of the paper.
+2Worst cases are not shown graphically due to lack of space, but they are coherent with the evolution of the means.
+
+6
+
+5
+
+4
+
+3
+
+2
+
+1
+
+0
+
+−1
+
+−2
+
+y
+
+0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1
+
+x
+
+Figure 2: Left: RKHS function [36]. Right: Gaussian mixture (GM) function
+
+(a) ¯ymc (x
+
+∗)
+
+(b) std (ymc (x
+
+∗))
+
+Figure 3: RKHS Results
+
+4.2 Robot Grasp Simulations
+
+We use the Simox simulation toolbox for robot grasping [33]. This toolbox simulates the iCub’s robot
+hand grasping arbitrary objects. Given an initial pose for the robot hand and a ﬁnger joint trajectory,
+the simulator runs until the ﬁngers are in contact with the object surface and computes a grasp quality
+metric based on wrench space analysis. We use a representation of the iCub’s left hand which can move
+freely in space (Fig. 5) and a few static objects, shown in 6.
+
+The robot hand is initially placed with palm facing parallel to one of the facets, at a ﬁxed distance of
+the object bounding box, and the thumb aligned with one of the neighbour facets (Fig. 5). This deﬁnes
+uniquely the pose of the hand with respect to the object. The hand’s pose is then deﬁned with respect
+to the initial pose by incremental translations and rotations: (δx, δy, δz, θx, θy, θz).
+
+(a) ¯ymc (x
+
+∗)
+
+(b) std (ymc (x
+
+∗))
+
+Figure 4: G-Mixture Results
+
+For the experiments we have only optimized the translation parallel to the facet (δx, δy) while the rest
+of the values were ﬁxed in advance. The translation variables are bound to the limits of the bounding box.
+A power grasp posture synergy was adopted for the hand closure. In this strategy all ﬁnger joints close at
+the same time by roughly the same amount. The advantage of the Bayesian optimization methodology
+as a black-box optimization is that the system is agnostic to the parametrization selected and it can be
+easily replaced.
+
+We have performed 30 runs of the robotic grasp simulation for each object and each optimization
+
+criterion. The robot hand posture with respect to the objects is initialized as shown in Fig. 6.
+
+Each run starts with 40 initial random samples and proceeds with 60 iterations of Bayesian optimiza-
+tion, for a total of 100. In this case, we assume that the function is stochastic, due to small simulation
+errors and inconsistencies, assuming σy = 10−4. Also, we assume an input noise σx = 0.03 (note that
+the input space was normalized in advance to the unit hypercube [0, 1]d). In each iteration we sample 20
+times at the query point with input noise to compute the expected outcome. The results can be observed
+in ﬁgures 7, 8, 9 and 10. We note that the plots seem noisier than with the synthetic functions. This
+fact is due to a lower number of samples at the query points, for the sake of computation time, as each
+one required to run the full grasp simulation. Note also that those samples are only used for illustrative
+purposes and would not be required in practice.
+
+It can be observed that, for the water bottle and glass, the UBO method has clear advantages over
+BO. As soon as the initial sampling phase ﬁnishes, UBO obtains higher mean values and lower standard
+deviations. For the drill, the UBO eventually overcomes the BO, but at later iterations, which might
+imply that the unsafe optimum is diﬃcult to ﬁnd, but still exists. Looking at the quantitative results
+shown in Table 1, we can see that, at the end of the optimization, UBO is better than BO in all
+criteria, except for the mean output value for the mug. For the mug, the 100 iteration are not enough to
+obtain better mean values. We can see that the mug and drill objects are more challenging due to their
+non-rotational symmetry. Since the optimization is only done in translation parameters, the method is
+missing exploration in the rotation degrees of freedom. Furthermore, in the mug’s case, the facet chosen
+was the one that contains the mug’s handle. Trying to learn a grasp in this setting is much harder
+than the other cases since, for the same input space volume, the percentage of conﬁgurations which
+return a good metric is much smaller. This hinders Bayesian Optimization performance in general and
+deteriorates GP regression. For the water bottle and the glass, the rotational degrees of freedom are not
+so important because the objects are rotationally symmetric.
+
+Figure 5: The Simox robot grasp simulator. The iCub’s left hand is used to perform grasping trials on
+arbitrary objects, in this case a glass. The red lines around the glass represent and Object Oriented
+Bounding Box, whose facets are used to setup the initial hand conﬁguration.
+
+In Fig. 11 we illustrate four grasps at the water bottle explored during the experiments. Two of the
+grasps are performed in a safe region while the two other are explored at a unsafe region. Although the
+unsafe zone has one observation with the highest value, it has also higher risk of getting a low value
+observation in its vicinity.
+
+¯ymc (x∗)
+
+worst
+
+ymc (x∗)
+
+std (ymc (x∗))
+
+Synthetic Problems
+
+Function BO
+RKHS
+G-Mix
+
+UBO BO
+
+UBO
+4.863 4.934 2.881 4.657
+0.080 0.093 0.023 0.053
+Simulation - Simox
+
+UBO BO
+
+Object BO
+Bottle
+Mug
+Glass
+Drill
+
+UBO
+0.550 0.567 0.390 0.430
+0.119 0.114 0.051 0.059
+0.421 0.452 0.080 0.252
+0.101 0.108 0.050 0.068
+
+BO
+UBO
+0.554 0.065
+0.027 0.014
+
+BO
+UBO
+0.077 0.065
+0.029 0.027
+0.184 0.087
+0.030 0.018
+
+Table 1: Results at the last iteration of the Bayesian Optimization process (means over all runs).
+
+(a) Waterbottle
+
+(b) Mug
+
+(c) Glass
+
+(d) Drill
+
+Figure 6: Objects used in the simulations with corresponding initial robot hand conﬁguration.
+
+(a) ¯ymc (x
+
+∗)
+
+(b) std (ymc (x
+
+∗))
+
+Figure 7: Waterbottle. Input Space Noise σx = 0.01
+
+(a) ¯ymc (x
+
+∗)
+
+(b) std (ymc (x
+
+∗))
+
+Figure 8: Mug. Input Space Noise σx = 0.03
+
+(a) ¯ymc (x
+
+∗)
+
+(b) std (ymc (x
+
+∗))
+
+Figure 9: Glass. Input Space Noise σx = 0.03
+
+(a) ¯ymc (x
+
+∗)
+
+(b) std (ymc (x
+
+∗))
+
+Figure 10: Drill. Input Space Noise σx = 0.03
+
+(a) Safe-zone, y = 0.413
+
+(b) Safe-zone, y = 0.418
+
+(c) Unsafe-zone, y = 0.439
+
+(d) Unsafe-zone, y = 0.377
+
+Figure 11: Grasp safety. In this example the best grasp is at an unsafe zone (c). However, a bad grasp is
+in its vicinity (d). The unscented Bayesian optimization chooses grasps with lower risk at the safe zone
+(a) and (b), where performance is robust to input noise.
+
+5 Conclusion
+
+The contribution of this paper is twofold. On one hand, we present a method for robust and safe grasping
+of unknown objects by trial and error, analogous to the process infants develop object exploration and
+grasping at early stages. Because the process is based on general black-box optimization, the method is
+capable to deal with arbitrary objects, eﬀectors and environmental conditions. On the other hand, in this
+work we have developed an extension for Bayesian optimization in the presence of input noise, that we
+have called unscented Bayesian optimization. The potential interest of this method goes beyond grasping
+or even robotics. Bayesian optimization is currently being used in many applications, from engineering,
+computer sciences, economics, simulations, experimental design, biology, artiﬁcial intelligence, etc. In all
+those ﬁelds, there are many situations where input noise or uncertainty may arise. In those cases, safe
+optimization is fundamental. For example, in other areas of robotics, it might be used for navigation,
+planing or sensor placement, as the robot/sensor location is uncertain.
+
+References
+
+[1] Abdeslam Boularias, James Andrew Bagnell, and Anthony Stentz. Eﬃcient optimization for au-
+
+tonomous robotic manipulation of natural objects. In AAAI, pages 2520–2526, 2014.
+
+[2] E. Brochu, V. Cora, and N. Freitas. A tutorial on bayesian optimization of expensive cost functions,
+with application to active user modeling and hierarchical reinforcement learning. December 2010.
+arXiv:1012.2599v1.
+
+[3] Adam D. Bull. Convergence rates of eﬃcient global optimization algorithms. Journal of Machine
+
+Learning Research, 12:2879–2904, 2011.
+
+[4] R. Calandra, A. Seyfarth, J. Peters, and M. Deisenroth. Bayesian optimization for learning gaits
+under uncertainty. Annals of Mathematics and Artiﬁcial Intelligence (AMAI), 1 1:1–19 1–19, 2015.
+
+[5] Antoine Cully, Jeﬀ Clune, Danesh Tarapore, and Jean-Baptiste Mouret. Robots that can adapt like
+
+animals. Nature, 521:503507, 2015.
+
+[6] C. Daniel, O. Kroemer, M. Viering, J. Metz, and J. Peters. Active reward learning with a novel
+
+acquisition function. Autonomous Robots, 39(3):389–405, 2015.
+
+[7] Matthias Feurer, Aaron Klein, Katharina Eggensperger, Jost Springenberg, Manuel Blum, and
+Frank Hutter. Eﬃcient and robust automated machine learning. In Advances in Neural Information
+Processing Systems, pages 2944–2952, 2015.
+
+[8] Alexander IJ Forrester, Neil W Bressloﬀ, and Andy J Keane. Optimization using surrogate models
+and partially converged computational ﬂuid dynamics simulations. Proceedings of the Royal Society
+of London A: Mathematical, Physical and Engineering Sciences, 462(2071):2177–2204, 2006.
+
+[9] Roman Garnett, Michael A. Osborne, and Stephen J. Roberts. Bayesian optimization for sensor set
+
+selection. In Information Processing in Sensor Networks (IPSN 2010), 2010.
+
+[10] Robert B. Gramacy and Herbert K.H. Lee. Cases for the nugget in modeling computer experiments.
+
+Statistics and Computing, 22:713–722, 2012.
+
+[11] D. Huang, T. T. Allen, W. I. Notz, and N. Zheng. Global optimization of stochastic black-box
+systems via sequential kriging meta-models. Journal of Global Optimization, 34(3):441– 466, 2006.
+
+[12] K. Ito and K. Xiong. Gaussian ﬁlters for nonlinear ﬁltering problems.
+
+IEEE Transactions on
+
+Automatic Control, 45(5):910–927, 2000.
+
+[13] D. Jones, M. Schonlau, and W. Welch. Eﬃcient global optimization of expensive black-box functions.
+
+Journal of Global Optimization, 13(4):455–492, December 1998.
+
+[14] Donald R. Jones, Matthias Schonlau, and William J. Welch. Eﬃcient global optimization of expen-
+
+sive black-box functions. Journal of Global Optimization, 13(4):455–492, 1998.
+
+[15] S. Julier and J. Uhlmann. Unscented ﬁltering and nonlinear estimation. Proceedings of the IEEE,
+
+92(3):401–422, March 2004.
+
+[16] S. Julier and J.K. Uhlmann. The scaled unscented transformation.
+
+In IEEE American Control
+
+Conf., pages 4555–4559, Anchorage AK, USA, 8–10 May 2002.
+
+[17] Kirthevasan Kandasamy, Jeﬀ Schneider, and Barnabas Poczos. High dimensional bayesian optimi-
+sation and bandits via additive models. In International Conference on Machine Learning (ICML),
+2015.
+
+[18] Oliver Kroemer, Renaud Detry, Justus Piater, and Jan Peters. Active learning using mean shift
+
+optimization for robot grasping. In IROS, 2009.
+
+[19] Oliver Kroemer, Renaud Detry, Justus Piater, and Jan Peters. Combining active learning and
+
+reactive control for robot grasping. Robotics and Autonomous systems, 58(9):1105–1116, 2010.
+
+[20] Roman Marchant and Felix Ramos. Bayesian optimisation for informative continuous path planning.
+In Robotics and Automation (ICRA), 2014 IEEE International Conference on, pages 6136–6143.
+IEEE, 2014.
+
+[21] Ruben Martinez-Cantin. BayesOpt: A Bayesian optimization library for nonlinear optimization,
+
+experimental design and bandits. Journal of Machine Learning Research, 15:3735–3739, 2014.
+
+[22] Ruben Martinez-Cantin, Nando de Freitas, Eric Brochu, Jose Castellanos, and Arnoud Doucet. A
+Bayesian exploration-exploitation approach for optimal online sensing and planning with a visually
+guided mobile robot. Autonomous Robots, 27(3):93–103, 2009.
+
+[23] Ruben Martinez-Cantin, Nando de Freitas, Arnoud Doucet, and Jose A. Castellanos. Active policy
+learning for robot planning and exploration under uncertainty. In Robotics: Science and Systems,
+2007.
+
+[24] J. McHutchon and C. Rasmussen. Gaussian process training with input noise. Technical report,
+
+Cambrige University, 2011.
+
+[25] J. Mockus. Application of bayesian approach to numerical methods of global and stochastic opti-
+
+mization. Journal of Global Optimization, 4(4):347–365, June 1994.
+
+[26] Jonas Mockus. Bayesian Approach to Global Optimization, volume 37 of Mathematics and Its
+
+Applications. Kluwer Academic Publishers, 1989.
+
+[27] M. Nørgaard, N.K. Poulsen, and O. Ravn. New developments in state estimation for nonlinear
+
+systems. Automatica, 36(11):1627–1638, November 2000.
+
+[28] Jasper Snoek, Hugo Larochelle, and Ryan Adams. Practical Bayesian optimization of machine
+
+learning algorithms. In NIPS, pages 2960–2968, 2012.
+
+[29] Niranjan Srinivas, Andreas Krause, Sham Kakade, and Matthias Seeger. Gaussian process optimiza-
+tion in the bandit setting: No regret and experimental design. In Proc. International Conference
+on Machine Learning (ICML), 2010.
+
+[30] Matthew A Taddy, Herbert KH Lee, Genetha A Gray, and Joshua D Griﬃn. Bayesian guided
+
+pattern search for robust local optimization. Technometrics, 51(4):389–401, 2009.
+
+[31] Matthew Tesch, Jeﬀ Schneider, and Howie Choset. Adapting control policies for expensive systems
+to changing environments. In IEEE/RSJ International Conference on Intelligent Robots and Systems
+(IROS), September 2011.
+
+[32] Doniyor Ulmasov, Caroline Baroukh, Benoit Chachuat, Marc Peter Deisenroth, and Ruth Misener.
+Bayesian optimization with dimension scheduling: Application to biological systems. In 26th Euro-
+pean Symposium on Computer Aided Process Engineering, Computer-Aided Chemical Engineering,
+2016.
+
+[33] V. Vahrenkamp.
+
+Simox - a lightweight simulation and motion planning toolbox for c++.
+
+http://simox.sourceforge.net/. Accessed: 2015-05-24.
+
+[34] R. van der Merwe. Sigma-Point Kalman Filters for Probabilistic Inference in Dynamic State-Space
+Models. PhD thesis, OGI School of Science & Engineering, Oregon Health & Science University,
+April 2004.
+
+[35] E. Wan and R. Van Der Merwe. The unscented kalman ﬁlter for nonlinear estimation. In Proceedings
+of the IEEE 2000 Adaptive Systems for Signal Processing, Communications, and Control Symposium
+(Cat. No.00EX373). Institute of Electrical & Electronics Engineers (IEEE), 2000.
+
+[36] Z. Wang, J. Assel, and N. Freitas.
+
+Rkhs 1d function for bayesian optimization tasks.
+
+https://github.com/iassael/function-rkhs. Accessed: 2015-10-03.
+
+

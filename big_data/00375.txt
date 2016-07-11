@@ -1,0 +1,1916 @@
+Easy-First Dependency Parsing with Hierarchical Tree LSTMs
+
+Eliyahu Kiperwasser
+
+Computer Science Department
+
+Bar-Ilan University
+Ramat-Gan, Israel
+
+Yoav Goldberg
+
+Computer Science Department
+
+Bar-Ilan University
+Ramat-Gan, Israel
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+1
+
+ 
+
+ 
+ 
+]
+L
+C
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+5
+7
+3
+0
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+elikip@gmail.com
+
+yoav.goldberg@gmail.com
+
+Abstract
+
+We suggest a compositional vector represen-
+tation of parse trees that relies on a recursive
+combination of recurrent-neural network en-
+coders. To demonstrate its effectiveness, we
+use the representation as the backbone of a
+greedy, bottom-up dependency parser, achiev-
+ing state-of-the-art accuracies for English and
+Chinese, without relying on external word
+embeddings. The parser’s implementation is
+available for download at the ﬁrst author’s
+webpage.
+
+Introduction
+
+1
+Dependency-based syntactic representations of sen-
+tences are central to many language processing tasks
+(Kübler et al., 2008). Dependency parse-trees en-
+code not only the syntactic structure of a sentence
+but also many aspects of its semantics.
+
+A recent trend in NLP is concerned with en-
+coding sentences as a vectors (“sentence embed-
+dings”), which can then be used for further pre-
+diction tasks. Recurrent neural networks (RNNs)
+(Elman, 1990), and in particular methods based on
+the LSTM architecture (Hochreiter and Schmidhu-
+ber, 1997), work very well for modeling sequences,
+and constantly obtain state-of-the-art results on both
+language-modeling and prediction tasks (see, e.g.
+(Mikolov et al., 2010)).
+
+Several works attempt to extend recurrent neu-
+ral networks to work on trees (see Section 8 for a
+brief overview), giving rise to the so-called recursive
+neural networks (Goller and Küchler, 1996; Socher
+et al., 2010). However, recursive neural networks
+
+do not cope well with trees with arbitrary branch-
+ing factors – most work require the encoded trees to
+be binary-branching, or have a ﬁxed maximum arity.
+Other attempts allow arbitrary branching factors, in
+the expense of ignoring the order of the modiﬁers.
+
+In contrast, we propose a tree-encoding that nat-
+urally supports trees with arbitrary branching fac-
+tors, making it particularly appealing for depen-
+dency trees. Our tree encoder uses recurrent neural
+networks as a building block: we model the left and
+right sequences of modiﬁers using RNNs, which are
+composed in a recursive manner to form a tree (Sec-
+tion 3). We use our tree representation for encoding
+the partially-build parse trees in a greedy, bottom-up
+dependency parser which is based on the easy-ﬁrst
+transition-system of Goldberg and Elhadad (2010).
+Using the Hierarchical Tree LSTM representa-
+tion, and without using any external embeddings,
+our parser achieves parsing accuracies of 92.6 UAS
+and 90.2 LAS on the PTB (Stanford dependencies)
+and 86.1 UAS and 84.4 LAS on the Chinese tree-
+bank, while relying on greedy decoding.
+
+To the best of our knowledge, this is the ﬁrst work
+to demonstrate competitive parsing accuracies for
+full-scale parsing while relying solely on recursive,
+compositional tree representations, and without us-
+ing a reranking framework. We discuss related work
+in Section 8.
+
+While the parsing experiments demonstrate the
+suitability of our representation for capturing the
+structural elements in the parse tree that are useful
+for predicting parsing decisions, we are interested in
+exploring the use of the RNN-based compositional
+vector representation of parse trees also for seman-
+
+tic tasks such as sentiment analysis (Socher et al.,
+2013b; Tai et al., 2015), sentence similarity judge-
+ments (Marelli et al., 2014) and textual entailment
+(Bowman et al., 2015).
+
+2 Background and Notation
+2.1 Dependency-based Representation
+A dependency-based syntactic representation is cen-
+tered around syntactic modiﬁcation relations be-
+tween head words and modiﬁer words. The result
+are trees in which each node is a word in the sen-
+tence, and every node except for one designated root
+node has a parent node. A dependency tree over
+a sentence with n words w1, . . . , wn can be repre-
+sented as a list of n pairs of the form (h, m), where
+0 ≤ h ≤ n and 1 ≤ m ≤ n. Each such pair rep-
+resents an edge in the tree in which h is the index
+of a head word (including the special ROOT node
+0), and m is the index of a modiﬁer word. In or-
+der for the dependency trees to be useful for actual
+downstream language processing tasks, each edge is
+labeled with a syntactic relation. The tree represen-
+tation then becomes a list of triplets (h, m, (cid:96)), where
+1 ≤ (cid:96) ≤ L is the index of a dependency relation out
+of a designated set of L syntactic relations.
+
+Dependency trees tend to be relatively shallow,
+with some nodes having many children. Looking
+at trees in the PTB training set we ﬁnd that 94% of
+the trees have a height of at most 10, and 49% of the
+trees a height of at most 6. In terms of width, 93%
+of the trees have at least one node with an arity of 4
+or more, and 56% of the trees have at least one node
+with an arity of 6 or more.
+
+2.2 Recurrent Networks and LSTMs
+Recurrent neural networks (RNNs), ﬁrst proposed
+by Elman (1990) are statistical learners for model-
+ing sequential data. In this work, we use the RNN
+abstraction as a building block, and recursively com-
+bine several RNNs to obtain our tree representa-
+tion. We brieﬂy describe the RNN abstraction be-
+low. For further detail on RNNs, the reader is re-
+ferred to sources such as (Goldberg, 2015; Bengio
+et al., 2015; Cho, 2015).
+
+The RNN abstraction is a function RN N that
+takes in a sequence of inputs vectors x1, . . . , xn
+(xi ∈ Rdin), and produces a sequence of state vec-
+
+tors (also called output vectors) y1, . . . , yn (yi ∈
+Rdout). Each yi is conditioned on all the inputs
+x1, . . . , xi preceding it.
+Ignoring the intermediate
+outputs y1, . . . , yn−1, the RNN can be thought of as
+encoding the sequence x1, . . . , xn into a ﬁnal state
+yn. Our notation in this paper follows this view.
+
+The RNN is deﬁned recursively using two func-
+
+tions:1
+
+RN N (s0, x1, . . . , xn) = yn = O(sn)
+si = N (si−1, xi)
+
+Here, a function N takes as input a vector xi and
+a state vector si−1 and returns as output a new state
+si. One can then extract an output vector yi from si
+using the function O (the function O is usually the
+identity function, or a function that returns a subset
+of the elements in si).
+
+Taking an algorithmic perspective, one can view
+the RNN as a state object with three operations:
+s = RNN.initial() returns a new initial state,
+s.advance(x) takes an input vector and returns
+a new state, and s.output() returns the output
+vector for the current state. When clear from the
+context, we abbreviate and use the state’s name (s)
+instead of s.output() to refer to the output vec-
+tor at the state.
+
+The functions N and O deﬁning the RNN are pa-
+rameterized by parameters θ (matrices and vectors),
+which are trained from data. Speciﬁcally, one is usu-
+ally interested in using some of the outputs yi for
+making predictions. The RNN is trained such that
+the encoding yi is good for the prediction task. That
+is, the RNN learns which aspects of the sequence
+x1, . . . , xi are informative for the prediction.
+
+We use subscripts (i.e. RN NL, RN NR) to indi-
+cate different RNNs, that is, RNNs that have differ-
+ent sets of parameters.
+
+Speciﬁc instantiations of N and O yield differ-
+ent recurrent network mechanisms. In this work we
+use the Long Short Term Memory (LSTM) variant
+(Hochreiter and Schmidhuber, 1997) which is shown
+to be a very capable sequence learner. However, our
+algorithm and encoding method do not rely on any
+speciﬁc property of the LSTM architecture, and the
+
+1We follow the notation of Goldberg (2015), with the excep-
+tion of taking the output of the RNN to be a single vector rather
+than a sequence, and renaming R to N.
+
+LSTM can be transparently switched for any other
+RNN variant.
+
+3 Tree Representation
+
+We now describe our method for representing a
+tree as a d-dimensional vector. We assume trees in
+which the children are ordered and there are kl ≥ 0
+children before the parent node (left children) and
+kr ≥ 0 children after it (right children). Such
+trees correspond well to dependency tree structures.
+We refer to the parent node as a head, and to its
+children as modiﬁers. For a node t, we refer to
+its left modiﬁers as t.l1, t.l2, . . . , t.lkl and its right
+modiﬁers as t.r1, t.r2, . . . , t.rkr The indices of the
+modiﬁer are always from the parent outward, that
+is t.l1 is the left modiﬁer closest to the head t:
+
+The gist of the idea is to treat the modiﬁers of a
+node as a sequence, and encode this sequence us-
+ing an RNN. We separate left-modiﬁers from right-
+modiﬁers, and use two RNNs:
+the ﬁrst RNN en-
+codes the sequence of left-modiﬁers from the head
+outwards, and the second RNN the sequence of
+right-modiﬁers from the head outwards. The ﬁrst
+input to each RNN is the vector representation of
+the head word, and the last input is the vector rep-
+resentation of the left-most or the right-most modi-
+ﬁer. The node’s representation is then a concatena-
+tion of the RNN encoding of the left-modiﬁers with
+the RNN encoding of the right-modiﬁers. The en-
+coding is recursive: the representation for each of
+the modiﬁer nodes is computed in a similar fashion.
+
+More formally, consider a node t. Let i(t) be
+the sentence index of the word corresponding to the
+head node t, and let vi be a vector corresponding
+to the ith word in the sentence (this vector captures
+information such as the word form and its part of
+speech tag, and will be discussed shortly). The vec-
+tor encoding of a node enc(t) ∈ Rdenc is then de-
+
+ﬁned as follows:
+enc(t) =g(W e · (el(t) ◦ er(t)) + be)
+el(t) =RN NL(vi(t), enc(t.l1), . . . , enc(t.lkl))
+er(t) =RN NR(vi(t), enc(t.r1), . . . , enc(t.rkr ))
+
+First, the sequences consisting of the head-vector
+vi(t) followed by left-modiﬁers and the head-vector
+followed by right-modiﬁers are encoded using two
+RNNs, RN NL and RN NR, resulting in RNN states
+el(t) ∈ Rdout and er(t) ∈ Rdout. Then,
+the
+RNN states are concatenated, resulting in a 2dout-
+dimensional vector (el(t) ◦ er(t)), which is reduced
+back to d-dimensions using a linear transformation
+followed by a non-linear activation function g. The
+recursion stops at leaf nodes, for which:
+
+enc(leaf) =g(W e · (el(leaf) ◦ er(leaf)) + be)
+el(leaf) =RN NL(vi(leaf))
+er(leaf) =RN NR(vi(leaf))
+
+Figure 1 shows the network used for encoding the
+sentence “the black fox who really likes apples did
+not jump over a lazy dog yesterday”.
+
+3.1 Representing words
+In the discussion above we assume a vector repre-
+sentation vi associated with the ith sentence word.
+What does vi look like? A sensible approach would
+be to take vi to be a function of the word-form and
+the part-of-speech (POS) tag of the ith word, that is:
+
+vi = g(W v · (wi ◦ pi) + bv)
+
+where wi and pi are the embedded vectors of the
+word-form and POS-tag of the ith word.
+
+This encodes each word in isolation, disregarding
+its context. The context of a word can be very in-
+formative regarding its meaning. One way of incor-
+porating context is the Bidirectional RNN (Schuster
+and Paliwal, 1997). Bidirectional RNNs are shown
+to be an effective representation for sequence tag-
+ging (Irsoy and Cardie, 2014). Bidirectional RNNs
+represent a word in the sentence using a concate-
+nation of the end-states of two RNNs, one running
+from the beginning of the sentence to the word and
+
+tt.r1t.r2t.r3t.r4t.l1t.l2t.l3tRLt.r1Rt.r2Rt.r3Rt.r4Rtt.l1Lt.l2Lt.l3Lenc(t)RNNRRNNLconcatenateandcompressFigure 1: Network for encoding the sentence “the black fox who really likes apples did not jump over a lazy dog
+yesterday”. Top: the network structure: boxed nodes represent LSTM cells, where L are cells belonging to the left-
+modiﬁers sequence model RN NL, and R to the right-modiﬁers sequence model RN NR. Circle nodes represent a
+concatenation followed by a linear transformation and a non-linearity. Bottom: the dependency parse of the sentence.
+
+the other running from the end to the word. The re-
+sult is a vector representation for each word which
+captures not only the word but also its context.
+
+We adopt the Bidirectional LSTM scheme to en-
+rich our node vector representation, and for an n-
+words sentence compute the vector representations
+vi as follows:
+
+(cid:48)
+
+i =g(W v · (wi ◦ pi) + bv)
+v
+(cid:48)
+2, . . . , v
+fi =LST MF (v
+i)
+(cid:48)
+n−1, . . . , v
+bi =LST MB(v
+vi =(fi ◦ bi)
+
+1, v
+n, v
+
+(cid:48)
+(cid:48)
+
+(cid:48)
+
+(cid:48)
+
+i)
+
+We plug this word representation as word vectors,
+allowing each word vector vi to capture informa-
+tion regarding the word form and POS-tag, as well
+as the sentential context it appears in. The BI-
+LSTM encoder is trained jointly with the rest of the
+network towards the parsing objective, using back-
+propagation.
+Embedding vectors The word and POS embed-
+dings wi and pi are also trained together with the
+network. For the word embeddings, we experiment
+
+with random initialization, as well as with initializa-
+tion using pre-trained word embeddings. Our main
+goal in this work is not to provide top parsing accu-
+racies, but rather to evaluate the ability of the pro-
+posed compositional architecture to learn and cap-
+ture the structural cues that are needed for accurate
+parsing. Thus, we are most interested in the random
+initialization setup: what can the network learn from
+the training corpus alone, without relying on exter-
+nal resources.
+
+However, the ability to perform semi-supervised
+learning by initializing the word-embeddings with
+vectors that are pre-trained on large amount of unan-
+notated data is an appealing property of the neural-
+network approaches, and we evaluate our parser also
+in this semi-supervised setup. When using pre-
+trained word embeddings, we follow (Dyer et al.,
+2015) and use embedding vectors which are trained
+using positional context (Ling et al., 2015), as these
+were shown to work better than traditional skip-
+gram vectors for syntactic tasks such as part-of-
+speech tagging and parsing.
+
+theblackfoxwhoreallylikesapplesdidnotjumpoveralazydogyesterdayLRLRLRLRLRLRLRLRLRLLLLLRLRRLRRLRLLRRLRRLRRLLtheblackreallyfoxLfoxRwhoLwhoRlikesLlikesRjumpLjumpRoverLoverRdogLdogRtheblackfoxwhoreallylikesappleswhoreallylikesapplesreallylikesapplesoveralazydogapplesalazydogdidnotalazyyesterdaytheblackfoxwhoreallylikesapplesdidnotjumpoveralazydogyesterday3.2 A note on the head-outward generation
+Why did we choose to encode the children from the
+head outward, and not the other way around? The
+head outward generation order is needed to facili-
+tate incremental tree construction and allowing for
+efﬁcient parsing, as we show in section 4 below. Be-
+side the efﬁciency considerations, using the head-
+outward encoding puts more emphasis on the outer-
+most dependants, which are known to be the most in-
+formative for predicting parse structure.2 We rely on
+the RNN capability of extracting information from
+arbitrary positions in the sequence to incorporate in-
+formation about the head word itself, which appears
+in the beginning of the sequence. This seem to work
+well, which is expected considering that the aver-
+age maximal number of siblings in one direction in
+the PTB is 4.1, and LSTMs were demonstrated to
+capture much longer-range interactions. Still, when
+using the tree encoding in a situation where the tree
+is fully speciﬁed in advance, i.e. for sentence classi-
+ﬁcation, sentence similarity or translation tasks, us-
+ing a head-inward generation order (or even a bi-
+directional RNN) may prove to work better. We
+leave this line of inquiry to future work.
+
+The head-outward modiﬁer generation approach
+has a long history in the parsing literature, and goes
+back to at least Eisner (1996) and Collins (1997).
+In contrast to previous work in which each modi-
+ﬁer could condition only on a ﬁxed small number
+of modiﬁers preceding it, and in which the left- and
+right- sequences of modiﬁers were treated as inde-
+pendent from one another for computational efﬁ-
+ciency reasons, our approach allows the model to
+access information from the entirety of both the left
+and the right sequences jointly.
+
+4 Parsing Algorithm
+
+We now turn to explain how to parse using the tree
+encoder deﬁned above. We begin by describing our
+bottom-up parsing algorithm, and then show how the
+
+encoded vector representation can be built and main-
+tained throughout the parsing process.
+
+4.1 Bottom-up Parsing
+We follow a (projective) bottom-up parsing strategy,
+similar to the easy-ﬁrst parsing algorithm of Gold-
+berg and Elhadad (2010).
+
+The main data-structure in the parser is a list of
+partially-built parse trees we call pending. For a
+sentence with words w1, . . . , wn, the pending list
+is initialized with n nodes, where pending[i] corre-
+sponds to word wi. The algorithm then chooses two
+neighbouring trees in the pending list pending[i]
+and pending[i + 1] and either attaches the root of
+pending[i + 1] as the right-most modiﬁer of the root
+of pending[i], or attaches the root of pending[i] as
+the left-most modiﬁer of the root of pending[i + 1].
+The tree which was treated as modiﬁer is then re-
+moved from the pending list, shortening it by one.
+The process ends after n − 1 steps, at which we re-
+main with a single tree in the pending list, which is
+taken to be the output parse tree. The parsing pro-
+cess is described in Algorithm 1.
+
+Algorithm 1 Parsing
+1: Input: Sentence w = w1, . . . , wn
+2: for i ∈ 1, . . . , n do
+pend[i].id ← i
+3:
+4: arcs ← []
+5: while |pend| > 1 do
+6: A ← {(i, d) | 1 ≤ i < |pend|, d ∈ {l, r}}
+i, d ← select(A)
+7:
+if d = l then
+8:
+9:
+10:
+11:
+12:
+13:
+14:
+15: return arcs
+
+m, h ← pend[i], pend[i + 1]
+pend.remove(i)
+h, m ← pend[i], pend[i + 1]
+pend.remove(i + 1)
+
+else
+
+arcs.append(h.id, m.id)
+
+2Features in transition-based dependency parsers often look
+at the current left-most and right-most dependents of a given
+node, and almost never look further than the second left-most
+or second right-most dependents. Second-order graph based
+dependency parsers (McDonald, 2006; Eisner, 2000) also con-
+dition on the current outermost dependent when generating its
+sibling.
+
+This parsing algorithm is both sound and com-
+plete with respect to the class of projective depen-
+dency trees (Goldberg and Elhadad, 2010). The al-
+gorithm depends on non-deterministic choices of an
+index in the pending list and an attachment direc-
+tion (line 7). When parsing in practice, the non-
+
+deterministic choice will be replaced by using a
+trained classiﬁer to assign a score to each index-
+direction pair, and selecting the highest scoring pair.
+We discuss the scoring function in Section 4.4, and
+the training algorithm in Section 5.
+
+4.2 Bottom-up Tree-Encoding
+We would like the scoring function to condition on
+the vector encodings of the subtrees it aims to con-
+nect. Algorithm 2 shows how to maintain the vec-
+tor encodings together with the parsing algorithm, so
+that at every stage in the parsing process each item
+pending[i] is associated with a vector encoding of
+the corresponding tree.
+
+Algorithm 2 Parsing while maintaining tree repre-
+sentations
+1: Input: Sentence w = w1, . . . , wn
+2: Input: Vectors vi corresponding to words wi
+3: arcs ← []
+4: for i ∈ 1, . . . , n do
+pend[i].id ← i
+5:
+pend[i].el ← RN NL.init().append(vi)
+6:
+pend[i].er ← RN NR.init().append(vi)
+7:
+8: while |pend| > 1 do
+9: A ← {(i, d) | 1 ≤ i < |pend|, d ∈ {l, r}}
+i, d ← select(A)
+10:
+if d = l then
+11:
+12:
+13:
+14:
+15:
+16:
+17:
+18:
+19:
+20:
+21:
+22:
+23:
+24: return arcs
+
+m, h ← pend[i], pend[i + 1]
+m.c = m.el ◦ m.er
+m.enc = g(W (m.c) + b)
+h.el.append(m.enc)
+pend.remove(i)
+h, m ← pend[i], pend[i + 1]
+m.c = m.el ◦ m.er
+m.enc = g(W (m.c) + b)
+h.er.append(m.enc)
+pend.remove(i + 1)
+
+else
+
+arcs.add(h.id, m.id)
+
+4.3 Labeled Tree Representation
+The tree representation described above does not ac-
+count for the relation labels (cid:96) the parsing algorithm
+assigns each edge. In cases the tree is fully speciﬁed
+in advance, the relation of each word to its head can
+
+be added to the word representations vi. However,
+in the context of parsing, the labels become known
+only when the modiﬁer is attached to its parent. We
+thus extend the tree representation by concatenating
+the node vector representation with a vector repre-
+sentation assigned to the label connecting the sub-
+tree to its parent. Formally, only the ﬁnal enc(t)
+equation changes:
+
+enc(t) = g(W e · (el ◦ er ◦ (cid:96)) + be)
+
+where (cid:96) is a learned embedding vector associated
+with the given label.
+
+4.4 Scoring Function
+The parsing algorithm relies on a function select(A)
+for choosing the action to take at each stage. We
+model this function as:
+
+select(A) = argmax(i,d,(cid:96))∈AScore(pend, i, d, (cid:96))
+
+where Score(.) is a learned function whose job is
+to assign scores to possible actions to reﬂect their
+quality.
+Ideally, it will not only score correct ac-
+tions above incorrect ones, but also more conﬁdent
+(easier) actions above less conﬁdent ones, in order
+to minimize error propagation in the greedy parsing
+process.
+
+When scoring a possible attachment between a
+head h and a modiﬁer m with relation (cid:96), the scor-
+ing function should attempt to reﬂect the following
+pieces of information:
+• Are the head words of h and m compatible un-
+• Is the modiﬁer m compatible with the already
+existing modiﬁers of h? In other words, is m a
+good subtree to connect as an outer-most mod-
+iﬁer in the subtree h?
+• Is m complete, in the sense that it already ac-
+
+der relation l?
+
+quired all of its own modiﬁers?
+
+to this end, the scoring function looks at a window
+of k subtrees to each side of the head-modiﬁer pair
+(pend[i − k], . . . , pend[i + 1 + k]) where the neigh-
+bouring subtrees are used for providing hints regard-
+ing possible additional modiﬁers of m and h that are
+yet to be acquired. We use k = 2 in our experi-
+ments, for a total of 6 subtrees in total. This win-
+dow approach is also used in the Easy-First parser
+of Goldberg and Elhadad (Goldberg and Elhadad,
+
+2010) and works that extend it (Tratz and Hovy,
+2011; Ma et al., 2012; Ma et al., 2013). How-
+ever, unlike the previous work, which made use of
+extensive feature engineering and rich feature func-
+tions aiming at extracting the many relevant linguis-
+tic sub-structures from the 6 subtrees and their inter-
+actions, we provide the scoring function solely with
+the vector-encoding of the 6 subtrees in the window.
+Modeling the labeled attachment score is more
+difﬁcult than modeling the unlabeled score and is
+prone to more errors. Moreover, picking the label
+for an attachment will cause less cascading error in
+contrast to picking the wrong attachment, which will
+necessarily preclude the parser from reaching the
+correct tree structure. In order to partially overcome
+this issue, our scoring function is a sum of two auxil-
+iary scoring function, one scoring unlabeled and the
+other scoring labeled attachments. The unlabeled at-
+tachment score term in the sum functions as a fall-
+back which makes it easier for a parser to predict the
+attachment direction even when there is no sufﬁcient
+certainty as to the label.
+
+Score(pend, i, d, (cid:96)) = ScoreU (pend, i, d)
+
++ ScoreL(pend, i, d, (cid:96))
+
+Each of ScoreU and ScoreL are modeled as multi-
+layer perceptrons:
+
+ScoreU (pend, i, d) = M LPU (xi)[d]
+ScoreL(pend, i, d, (cid:96)) = M LPL(xi)[(d, (cid:96))]
+xi = pend[i − 2].c ◦ ··· ◦ pend[i + 3].c
+
+where M LPU and M LPL are standard multi-
+layer perceptron classiﬁers with one hidden layer
+(M LPX (x) = W 2g(W 1x + b1) + b2) and have out-
+put layers with size 2 and 2L respectively, [.] is an
+indexing operation, and we assume the values of d
+and (d, (cid:96)) are mapped to integer values.
+
+parsing
+
+algorithm works
+
+4.5 Computational Complexity
+The Easy-First
+in
+O(n log n) time (Goldberg and Elhadad, 2010).
+The parser in this works differ by three aspects:
+running a BI-LSTM encoder prior
+to parsing
+(O(n)); maintaining the tree representation during
+parsing (lines 11–22 in Algorithm 2) which take a
+
+constant time at each parsing step; and local scoring
+using an MLP rather than a linear classiﬁer (again, a
+constant-time operation). Thus, the parser maintains
+the O(n log n) complexity of the Easy-First parser.
+
+5 Training Algorithm
+5.1 Loss and Parameter Updates
+At each step of the parsing process we select the
+highest scoring action (i, d, (cid:96)). The goal of training
+is to set the Score function such that correct actions
+are scored above incorrect ones. We use a margin-
+based objective, aiming to maximize the margin be-
+tween the highest scoring correct action and the set
+of incorrect actions. Formally, we deﬁne a hinge loss
+for each parsing step as follows:
+max{0, 1−max(i,d,(cid:96))∈GScore(pend, i, d, (cid:96))
+
++max(i(cid:48),d(cid:48),(cid:96)(cid:48))∈A\GScore(pend, i, d, (cid:96))}
+where A is the set of all possible actions and G is
+the set of correct actions at the current stage.
+
+As the scoring function depends on vector-
+encodings of the all the trees in the window, and each
+tree-encoding depends on the network’s parameters,
+each parameter update will invalidate all the vector
+encodings, requiring a re-computation of the entire
+network. We thus sum the local losses throughout
+the parsing process, and update the parameter with
+respect to the sum of the losses at sentence bound-
+aries. Furthermore, to increase gradient stability and
+training speed, we simulate mini-batch updates by
+only updating the parameters when the sum of local
+losses contains at least 50 non-zero elements. This
+assures us a sufﬁcient number of gradients for ev-
+ery update thus minimizing the effect of gradient in-
+stability. The gradients of the entire network with
+respect to the sum of the losses are calculated us-
+ing the backpropagation algorithm.
+Initial experi-
+ments with an SGD optimizer showed very instable
+results. We settled instead on using the ADAM op-
+timizer (Kingma and Ba, 2014) which worked well
+without requiring ﬁddling with learning rates.
+5.2 Error-Exploration and Dynamic Oracle
+
+Training
+
+At each stage in the training process, the parser as-
+signs scores to all the possible actions (i, d, (cid:96)) ∈ A.
+It then selects an action, applies it, and moves to the
+
+next step. Which action should be chosen? A sensi-
+ble option is to deﬁne G as the set of actions that can
+lead to the gold tree, and following the highest scor-
+ing actions in this set. However, using training in
+this manner tends to suffer from error propagation at
+test time. The parser sees only states that result from
+following correct actions. The lack of examples con-
+taining errors in the training phase makes it hard for
+the parser to infer the best action given partly erro-
+neous trees. In order to cope with this, we follow
+the error exploration training strategy, in which we
+let the parser follow the highest scoring action in A
+during training even if this action is incorrect, expos-
+ing it to states that result from erroneous decisions.
+This strategy requires deﬁning the set G such that
+the correct actions to take are well-deﬁned also for
+states that cannot lead to the gold tree. Such a set
+G is called a dynamic oracle. Error-exploration and
+dynamic-oracles were introduced by Goldberg and
+Nivre (2012).
+The Dynamic Oracle A dynamic-oracle for the
+easy-ﬁrst parsing system we use is presented in
+(Goldberg and Nivre, 2013a). Brieﬂy, the dynamic-
+oracle version of G deﬁnes the set of gold actions as
+the set of actions which does not increase the num-
+ber of erroneous attachments more than the mini-
+mum possible (given previous erroneous actions).
+The number of erroneous attachments is increased
+in three cases: (1) connecting a modiﬁer to its head
+prematurely. Once the modiﬁer is attached it is re-
+moved from the pending list and therefore can no
+longer acquire any of its own modiﬁers; (2) connect-
+ing a modiﬁer to an erroneous head, when the cor-
+rect head is still on the pending list; (3) connecting
+a modiﬁer to a correct head, but an incorrect label.
+
+Dealing with cases (2) and (3) is trivial. To deal
+with (1), we consider as correct only actions in
+which the modiﬁer is complete. To efﬁciently iden-
+tify complete modiﬁers we hold a counter for each
+word which is initialized to the number of modiﬁers
+the word has in the gold tree. When applying an
+attachment the counter of the modiﬁer’s gold head
+word is decreased. When the counter reaches 0, the
+sub-tree rooted at that word has no pending modi-
+ﬁers, and is considered complete.
+Aggressive Exploration We found that even when
+using error-exploration, after one iteration the model
+
+remembers the training set quite well, and does not
+make enough errors to make error-exploration effec-
+tive. In order to expose the parser to more errors,
+we employ a cost augmentation scheme: we some-
+times follow incorrect actions also if they score be-
+low correct actions. Speciﬁcally, when the score of
+the correct action is greater than that of the wrong
+action but the difference is smaller than the margin
+constant, we chose to follow the wrong action with
+probability paug (we use paug = 0.1 in our experi-
+ments). Pseudocode for the entire training algorithm
+is given in the supplementary material.
+
+5.3 Out-of-vocabulary items and word-dropout
+Due to the sparsity of natural language, we are likely
+to encounter at test time a substantial number of
+the words that did not appear in the training data
+(OOV words). OOV words are likely even when
+pre-training the word representations on a large un-
+annotated corpora. A common approach is to desig-
+nate a special “unknown-word” symbol, whose as-
+sociated vector will be used as the word representa-
+tion whenever an OOV word is encountered at test
+time. In order to train the unknown-word vector, a
+possible approach is to replace all the words appear-
+ing in the training corpus less than a certain num-
+ber of times with the unknown-word symbol. This
+approach give a good vector representation for un-
+known words but in the expense of ignoring many
+of the words from the training corpus.
+
+We instead propose a variant of the word-dropout
+approach (Iyyer et al., 2015). During training,
+we replace a word with the unknown-word symbol
+with probability that is inversely proportional to fre-
+quency of the word. Formally, we replace a word
+w appearing #(w) times in the training corpus with
+the unknown symbol with a probability:
+
+punk(w) =
+
+α
+
+#(w) + α
+
+Using this approach we learn a vector representa-
+tion for unknown words with minimal impact on the
+training of sparse words.
+
+6
+
+Implementation Details
+
+Our Python implementation will be made available
+at the ﬁrst author’s website. We use the PyCNN
+
+wrapper of the CNN library3 for building the com-
+putation graph of the network, computing the gradi-
+ents using automatic differentiation, and performing
+parameter updates. We noticed the error on the de-
+velopment set does not improve after 20 iterations
+over the training set, therefore, we ran the train-
+ing for 20 iterations. The sentences where shufﬂed
+between iterations. Non-projective sentences were
+skipped during training. We use the default parame-
+ters initialization, step sizes and regularization val-
+ues provided by the PyCNN toolkit. The hyper-
+parameters of the ﬁnal networks used for all the re-
+ported experiments are detailed in Table 1.
+
+Word embedding dimension
+POS tag embedding dimension
+Relation embedding dimension
+
+Hidden units in ScoreU
+Hidden units in ScoreL
+LSTM Dimensions (tree)
+
+LSTM Layers (tree)
+BI-LSTM Dimensions
+
+BI-LSTM Layers
+Mini-batch size
+
+α (for word dropout)
+
+paug (for exploration training)
+
+g
+
+100
+25
+25
+100
+100
+200
+2
+
+100+100
+
+2
+50
+0.25
+0.1
+tanh
+
+Table 1: Hyper-parameter values used in experiments
+
+Weiss et al (2015) stress the importance of care-
+ful hyperparameter tuning for achieving top accu-
+racy in neural network based parser. We did not
+follow this advice and made very few attempts at
+hyper-parameter tuning, using manual hill climbing
+until something seemed to work with reasonable ac-
+curacy, and then sticking with it for the rest of the
+experiments.
+
+7 Experiments and Results
+We evaluated our parsing model to English and Chi-
+nese data. For comparison purposes we followed the
+setup of (Dyer et al., 2015).
+Data For English, we used the Stanford Depen-
+dency (SD) (de Marneffe and Manning, 2008) con-
+version of the Penn Treebank (Marcus et al., 1993),
+using the standard train/dev/test splitswith the same
+predicted POS-tags as used in (Dyer et al., 2015;
+
+3https://github.com/clab/cnn/tree/
+
+master/pycnn
+
+BOTTOMUPPARSER
++HTLSTM
++BI-LSTM input
++external embeddings
+
+Dyer et al (2015) no external
+Dyer et al (2015) w/ external
+C&M (2014) w/ external
+BOTTOMUP+ALL–POS
+Dyer et al (2015) –POS
+
+Test
+
+Dev
+UAS LAS UAS LAS
+78.6
+83.3
+89.8
+92.4
+90.2
+93.0
+93.3
+90.9
+90.0
+92.7
+90.9
+93.2
+89.6
+92.2
+92.9
+90.6
+90.3
+93.1
+
+82.7
+92.0
+92.6
+93.0
+92.4
+93.1
+91.8
+92.9
+92.7
+
+79.0
+90.1
+90.5
+90.8
+90.4
+90.9
+89.7
+90.5
+90.4
+
+Table 2: English parsing results (SD)
+
+Chen and Manning, 2014). This dataset contains a
+few non-projective trees. Punctuation symbols are
+excluded from the evaluation.
+
+For Chinese, we use the Penn Chinese Treebank
+5.1 (CTB5), using the train/test/dev splits of (Zhang
+and Clark, 2008; Dyer et al., 2015) with gold part-
+of-speech tags, also following (Dyer et al., 2015;
+Chen and Manning, 2014).
+
+When using external word embeddings, we also
+
+use the same data as (Dyer et al., 2015).4
+
+in several
+
+conﬁguration.
+
+tree-encoding,
+
+conﬁgurations We
+
+the baseline parser,
+
+Experimental
+evaluated
+the parser
+BOT-
+TOMUPPARSER is
+not
+using the
+and instead repre-
+senting each item in pending solely by the
+vector-representation (word and POS) of its head
+word.
+BOTTOMUPPARSER+HTLSTM is using
+our Hierarchical Tree LSTM representation.
+BOTTOMUPPARSER+HTLSTM+BI-LSTM is
+the
+Hierarchical Tree LSTM where we additionally use
+a BI-LSTM encoding for the head words. Finally,
+we added external, pre-trained word embeddings
+to the BOTTOMUPPARSER+HTLSTM+BI-LSTM
+setup. We also evaluated the ﬁnal parsers in a –POS
+setup, in which we did not feed the parser with any
+POS-tags.
+
+Results Results for English and Chinese are pre-
+sented in Tables 2 and 3 respectively. For compar-
+ison, we also show the results of the Stack-LSTM
+transition-based parser model of Dyer et al (2015),
+which we consider to be state-of-the-art, with and
+without pre-trained embeddings, and with and with-
+out POS-tags.
+
+4We thank Dyer et al for sharing their data with us.
+
+BOTTOMUPPARSER
++HTLSTM
++BI-LSTM
++external embeddings
+
+Dyer et al (2015) no external
+Dyer et al (2015) w/ external
+C&M (2014) no external
+BOTTOMUP+ALL –POS
+Dyer et al (2015) –POS
+
+Test
+
+Dev
+UAS LAS UAS LAS
+76.3
+79.3
+84.7
+86.2
+84.4
+86.2
+87.2
+85.5
+84.1
+86.3
+85.7
+87.2
+82.4
+84.0
+82.9
+79.5
+79.1
+82.8
+
+78.8
+86.2
+86.1
+87.1
+85.7
+87.2
+83.9
+82.6
+82.2
+
+77.1
+84.5
+84.5
+85.7
+84.7
+85.9
+82.4
+80.0
+79.8
+
+Table 3: Chinese parsing results (CTB5)
+
+The trends are consistent across the two lan-
+guages. The baseline Bottom-Up parser performs
+very poorly. This is expected, as only the head-word
+of each subtree is used for prediction. When adding
+the tree-encoding, results jump to near state-of-the-
+art accuracy, suggesting that the composed vector
+representation indeed successful in capturing pre-
+dictive structural information. Replacing the head-
+words with their BI-LSTM encodings result in an-
+other increase in accuracy for English, outperform-
+ing the Dyer et al (S-LSTM no external) models on
+the test-set. Adding the external pre-trained embed-
+dings further improve the results for both our parer
+and Dyer et al’s model, closing the gap between
+them. When POS-tags are not provided as input, the
+numbers for both parsers drop. The drop is small for
+English and large for Chinese, and our parser seem
+to suffer a little less than the Dyer et al model.
+
+Importance of the dynamic oracle We also eval-
+uate the importance of using the dynamic oracle and
+error-exploration training, and ﬁnd that they are in-
+deed important for achieving high parsing accura-
+cies with our model (Table 4).
+
+English
+
+Chinese
+
+RAND
+RAND-NODYN
+EXT
+EXT-NODYN
+
+UAS LAS UAS LAS
+84.5
+93.0
+84.1
+92.2
+85.7
+93.3
+92.7
+85.1
+
+86.2
+85.7
+87.2
+86.6
+
+90.5
+89.8
+90.8
+90.4
+
+Effect of
+
+Table 4:
+the error-exploration training
+(dynamic-oracle) on dev set accuracy in English and Chi-
+nese. RAND: random initialization. EXT: pre-trained ex-
+ternal embeddings.
+
+When training without error-exploration (that is,
+
+the parser follows only correct actions during train-
+ing and not using the dynamic aspect of the ora-
+cle), accuracies of unseen sentences drop by be-
+tween 0.4 and 0.8 accuracy points (average 0.58).
+This is consistent with previous work on training
+with error-exploration and dynamic oracles (Gold-
+berg and Nivre, 2013b), showing that the technique
+is not restricted to models trained with sparse linear
+models.
+
+Comparison to other state-of-the-art parsers
+Our main point of comparison is the model of Dyer
+et al, which was chosen because it is (a) a very strong
+parsing model; and (b) is the closest to ours in the lit-
+erature: a greedy parsing model making heavy use
+of LSTMs. To this end, we tried to make the com-
+parison to Dyer et al as controlled as possible, using
+the same dependency annotation schemes, as well
+as the same predicted POS-tags and the pre-trained
+embeddings (when applicable).
+
+It is also informative to position our results with
+respect to other state-of-the-art parsing results re-
+ported in the literature, as we do in Table 5. Here,
+some of the comparisons are less direct:
+some
+of the results use different dependency annotation
+schemes5, as well as different predicted POS-tags,
+and different pre-trained word embeddings. While
+the numbers are not directly comparable, they do
+give a good reference as to the expected range of
+state-of-the-art parsing results. Our system’s En-
+glish parsing results are in range of state-of-the-art
+and the Chinese parsing results surpass it. These
+numbers are achieved while using a greedy, bottom
+up parsing method without any search, and while
+relying solely on the compositional tree representa-
+tions.
+8 Related Work
+We survey two lines of related work: methods for
+encoding trees as vectors, and methods for parsing
+with vector representations.
+
+The popular approach for encoding trees as vec-
+
+5Our English parsing experiments use the Stanford Depen-
+dencies scheme, while other work use less informative depen-
+dency relations which are based on the Penn2Malt converter,
+using the Yamada and Matsumoto head rules. From our expe-
+rience, this conversion is somewhat easier to parse, resulting in
+numbers which are about 0.3-0.4 points higher than Stanford
+Dependencies.
+
+PTB-YM PTB-SD CTB
+86.0
+
+–
+
+System
+ZhangNivre11
+Martins13
+Pei15
+This Work
+Weiss15
+Weiss15
+Pei15
+LeZuidema14
+Zhu15
+This Work
+
+Method
+
+transition (beam)
+graph, 3rd order+
+graph, 2nd order
+EasyFirst (greedy)
+transition (greedy)
+transition (beam)
+graph, 2nd order
+reranking /blend
+reranking /blend
+EasyFirst (greedy)
+
+Representation
+
+Emb
+
+–
+–
+–
+–
+
+large feature set (sparse)
+large feature set (sparse)
+large feature set (dense)
+Rec-LSTM encoding
+large feature set (dense)
+large feature set (dense)
+large feature set (dense)
+
+YES
+YES
+YES
+inside-outside recursive net YES
+YES
+YES
+
+recursive conv-net
+Rec-LSTM encoding
+
+92.9
+92.8
+92.99
+
+–
+–
+–
+
+93.29
+93.12
+93.83
+
+–
+
+–
+–
+
+–
+–
+–
+–
+
+93.07
+
+–
+
+92.6
+93.19
+93.99
+
+–
+
+93.84
+
+–
+
+93.0
+
+Runtime
+O(n)+
+O(n4)
+O(n3)
+
+O(n)
+O(n)+
+O(n3)
+O(n3)
+O(n)+
+
+86.1 O(n log n)
+
+85.71
+87.1 O(n log n)
+
+Table 5: Parsing results (UAS) of various state-of-the-art parsing systems on the English and Chinese datasets. The systems
+that use embeddings use different pre-trained embeddings. English results use predicted POS tags (different systems use different
+taggers), while Chinese results use gold POS tags. PTB-YM: English PTB, Yamada and Matsumoto head rules. PTB-SD: English
+PTB, Stanford Dependencies (different systems may use different versions of the Stanford converter. CTB: Chinese Treebank.
+reranking /blend in method column indicates a reranking system where the reranker score is interpolated with the base-parser’s
+score. The reranking systems’ runtimes are those of the base parsers they use. O(n)+ indicates a linear-time system with a large
+multiplicative constant. The different systems and the numbers reported from them are taken from: ZhangNivre11: (Zhang and
+Nivre, 2011); Martins13: (Martins et al., 2013); Weiss15 (Weiss et al., 2015); Pei15: (Pei et al., 2015); LeZuidema14 (Le and
+Zuidema, 2014); Zhu15: (Zhu et al., 2015).
+
+tors is using recursive neural networks (Goller and
+Küchler, 1996; Socher et al., 2010; Tai et al., 2015).
+Recursive neural networks represent the vector of
+a parent node in a tree as a function of its chil-
+dren nodes. However, the functions are usually re-
+stricted to having a ﬁxed maximum arity (usually
+two) (Socher et al., 2010; Tai et al., 2015; Socher,
+2014). While trees can be binarized to cope with the
+arity restriction, doing so result in deep trees which
+in turn lead to the vanishing gradient problem when
+training. To cope with the vanishing gradients, (Tai
+et al., 2015) enrich the composition function with
+a gating mechanism similar to that of the LSTM,
+resulting in the so-called Tree-LSTM model. An-
+other approach is to allow arbitrary arities but ignor-
+ing the sequential nature of the modiﬁers, e.g. by
+using a bag-of-modiﬁers representation or a convo-
+lutional layer (Tai et al., 2015; Zhu et al., 2015). In
+contrast, our tree encoding method naturally allows
+for arbitrary branching trees by relying on the well
+established LSTM sequence model, and using it as a
+black box.
+
+In terms of parsing with vector representations,
+there are four dominant approaches: search based
+parsers that use local features that are fed to a
+neural-network classiﬁer (Pei et al., 2015; Durrett
+and Klein, 2015); greedy transition based parsers
+that use local features that are fed into a neural-
+network classiﬁer (Chen and Manning, 2014; Weiss
+
+et al., 2015), sometimes coupled with a node com-
+position function (Dyer et al., 2015; Watanabe and
+Sumita, 2015); bottom up parsers that rely solely
+on recursively combined vector encodings of sub-
+trees (Socher et al., 2010; Stenetorp, 2013; Socher
+et al., 2013a); and parse-reranking approaches that
+ﬁrst produced a k-best list of parses using a tradi-
+tional parsing technique, and then scores the trees
+based on a recursive vector encoding of each node
+(Le and Zuidema, 2014; Le and Zuidema, 2015; Zhu
+et al., 2015).
+
+Our parser is a greedy, bottom up parser that rely
+on compositional vector encodings of subtrees as
+its sole set of features. Unlike the re-ranking ap-
+proaches, we do not rely on an external parser to
+provide k-best lists. Unlike the bottom-up parser in
+(Socher et al., 2010) who only parses sentences of up
+to 15 words and the parser of (Stenetorp, 2013) who
+achieves very low parsing accuracies, we parse ar-
+bitrary sentences with state-of-the-art accuracy. Un-
+like the bottom up parser in (Socher et al., 2013a)
+we do not make use of a grammar. The parser of
+(Weiss et al., 2015) obtains exceptionally high re-
+sults using local features and no composition func-
+tion. Their secret sauce seems to be a very extensive
+tuning of hyper-parameters in order to squeeze every
+possible bit of accuracy. Due to our much more lim-
+ited resources, we did not perform a methodologi-
+cal search over hyper-parameters, and explored only
+
+a tiny space of the possible hyper-parameters. Fi-
+nally, perhaps closest to our approach is the greedy,
+transition-based parser of (Dyer et al., 2015) that
+also works in a bottom-up fashion, and incorporates
+and LSTM encoding of the input tokens and hier-
+archical vector composition into its scoring mech-
+anism.
+Indeed, that parser obtains similar scores
+to ours, although we obtain somewhat better results
+when not using pre-trained embeddings. We differ
+from the parser of Dyer et al by having a more elab-
+orate vector-composition function, relying solely on
+the compositional representations, and performing
+fully bottom-up parsing without being guided by a
+stack-and-buffer control structure.
+
+9 Conclusions and Future Work
+
+We suggest a compositional vector representation of
+parse trees that relies on a recursive combination of
+recurrent-neural network encoders, and demonstrate
+its effectiveness by integrating it in a bottom-up
+easy-ﬁrst parser. Future extensions in terms of pars-
+ing include the addition of beam search, handling
+of unknown-words using character-embeddings, and
+adapting the algorithm to constituency trees. We
+also plan to establish the effectiveness of our Hierar-
+chical Tree-LSTM encoder by applying it to more
+semantic vector representation tasks, i.e.
+training
+tree representation for capturing sentiment (Socher
+et al., 2013b; Tai et al., 2015), semantic sentence
+similarity (Marelli et al., 2014) or textual inference
+(Bowman et al., 2015).
+
+Acknowledgements This research is supported by
+the Intel Collaborative Research Institute for Com-
+putational Intelligence (ICRI-CI) and the Israeli Sci-
+ence Foundation (grant number 1555/15).
+
+References
+
+Yoshua Bengio, Ian J. Goodfellow, and Aaron Courville.
+2015. Deep Learning. Book in preparation for MIT
+Press.
+
+Samuel R. Bowman, Gabor Angeli, Christopher Potts,
+and Christopher D. Manning. 2015. A large anno-
+tated corpus for learning natural language inference.
+In Proceedings of the 2015 Conference on Empirical
+Methods in Natural Language Processing (EMNLP).
+Association for Computational Linguistics.
+
+Danqi Chen and Christopher Manning. 2014. A Fast and
+Accurate Dependency Parser using Neural Networks.
+In Proceedings of the 2014 Conference on Empirical
+Methods in Natural Language Processing (EMNLP),
+pages 740–750, Doha, Qatar, October. Association for
+Computational Linguistics.
+
+Kyunghyun Cho.
+
+2015.
+
+Natural Language Un-
+Representation.
+
+derstanding
+arXiv:1511.07916 [cs, stat], November.
+
+Distributed
+
+with
+
+Michael Collins. 1997. Three Generative, Lexicalised
+Models for Statistical Parsing. In Proceedings of the
+35th Annual Meeting of the Association for Computa-
+tional Linguistics, pages 16–23, Madrid, Spain, July.
+Association for Computational Linguistics.
+
+Marie-Catherine de Marneffe and Christopher D. Man-
+ning. 2008. Stanford dependencies manual. Techni-
+cal report, Stanford University.
+
+Greg Durrett and Dan Klein. 2015. Neural CRF Pars-
+ing. In Proceedings of the 53rd Annual Meeting of the
+Association for Computational Linguistics and the 7th
+International Joint Conference on Natural Language
+Processing (Volume 1: Long Papers), pages 302–312,
+Beijing, China, July. Association for Computational
+Linguistics.
+
+Chris Dyer, Miguel Ballesteros, Wang Ling, Austin
+Matthews, and Noah A. Smith. 2015. Transition-
+Based Dependency Parsing with Stack Long Short-
+In Proceedings of the 53rd Annual
+Term Memory.
+Meeting of the Association for Computational Linguis-
+tics and the 7th International Joint Conference on Nat-
+ural Language Processing (Volume 1: Long Papers),
+pages 334–343, Beijing, China, July. Association for
+Computational Linguistics.
+
+Jason M. Eisner. 1996. Three New Probabilistic Models
+for Dependency Parsing: An Exploration. In COLING
+1996 Volume 1: The 16th International Conference on
+Computational Linguistics.
+
+J. Eisner. 2000. Bilexical grammars and their cubic-
+time parsing algorithms. Advances in Probabilistic
+and Other Parsing Technologies.
+
+Jeffrey L. Elman. 1990. Finding Structure in Time. Cog-
+
+nitive Science, 14(2):179–211, March.
+
+Yoav Goldberg and Michael Elhadad. 2010. An Ef-
+ﬁcient Algorithm for Easy-First Non-Directional De-
+pendency Parsing. In Human Language Technologies:
+The 2010 Annual Conference of the North American
+Chapter of the Association for Computational Linguis-
+tics, pages 742–750, Los Angeles, California, June.
+Association for Computational Linguistics.
+
+Yoav Goldberg and Joakim Nivre. 2012. A dynamic or-
+In Proc. of COLING
+
+acle for the arc-eager system.
+2012.
+
+Yoav Goldberg and Joakim Nivre.
+
+Train-
+ing deterministic parsers with non-deterministic ora-
+cles. Transactions of the association for Computa-
+tional Linguistics, 1.
+
+2013a.
+
+Yoav Goldberg and Joakim Nivre.
+
+2013b. Training
+Deterministic Parsers with Non-Deterministic Oracles.
+Transactions of the Association for Computational
+Linguistics, 1(0):403–414, October.
+
+Yoav Goldberg.
+
+A Primer on Neural
+Network Models for Natural Language Processing.
+arXiv:1510.00726 [cs], October.
+
+2015.
+
+Christoph Goller and Andreas Küchler. 1996. Learning
+Task-Dependent Distributed Representations by Back-
+In In Proc. of the
+propagation Through Structure.
+ICNN-96, pages 347–352. IEEE.
+
+Sepp Hochreiter and Jürgen Schmidhuber. 1997. Long
+short-term memory. Neural computation, 9(8):1735–
+1780.
+
+Ozan Irsoy and Claire Cardie. 2014. Opinion Mining
+In Proceed-
+with Deep Recurrent Neural Networks.
+ings of the 2014 Conference on Empirical Methods in
+Natural Language Processing (EMNLP), pages 720–
+728, Doha, Qatar, October. Association for Computa-
+tional Linguistics.
+
+Mohit Iyyer, Varun Manjunatha, Jordan Boyd-Graber,
+and Hal Daumé III. 2015. Deep Unordered Com-
+position Rivals Syntactic Methods for Text Classiﬁca-
+tion. In Proceedings of the 53rd Annual Meeting of the
+Association for Computational Linguistics and the 7th
+International Joint Conference on Natural Language
+Processing (Volume 1: Long Papers), pages 1681–
+1691, Beijing, China, July. Association for Computa-
+tional Linguistics.
+
+Diederik Kingma and Jimmy Ba.
+
+2014. Adam: A
+Method for Stochastic Optimization. arXiv:1412.6980
+[cs], December.
+
+Phong Le and Willem Zuidema.
+
+Sandra Kübler, Ryan McDonald, and Joakim Nivre.
+2008. Dependency Parsing. Synthesis Lectures on Hu-
+man Language Technologies, 2(1):1–127, December.
+2014. The Inside-
+Outside Recursive Neural Network model for Depen-
+dency Parsing. In Proceedings of the 2014 Conference
+on Empirical Methods in Natural Language Process-
+ing (EMNLP), pages 729–739, Doha, Qatar, October.
+Association for Computational Linguistics.
+
+Phong Le and Willem Zuidema. 2015. The Forest Con-
+volutional Network: Compositional Distributional Se-
+mantics with a Neural Chart and without Binarization.
+In Proceedings of the 2015 Conference on Empiri-
+cal Methods in Natural Language Processing, pages
+1155–1164, Lisbon, Portugal, September. Association
+for Computational Linguistics.
+
+Wang Ling, Chris Dyer, Alan W Black, and Isabel
+2015. Two/Too Simple Adaptations of
+
+Trancoso.
+
+In Proceedings of
+Word2Vec for Syntax Problems.
+the 2015 Conference of the North American Chapter
+of the Association for Computational Linguistics: Hu-
+man Language Technologies, pages 1299–1304, Den-
+ver, Colorado. Association for Computational Linguis-
+tics.
+
+Ji Ma, Tong Xiao, Jingbo Zhu, and Feiliang Ren. 2012.
+Easy-First Chinese POS Tagging and Dependency
+In Proceedings of COLING 2012, pages
+Parsing.
+1731–1746, Mumbai, India, December. The COLING
+2012 Organizing Committee.
+
+Ji Ma, Jingbo Zhu, Tong Xiao, and Nan Yang. 2013.
+Easy-First POS Tagging and Dependency Parsing with
+In Proceedings of the 51st Annual
+Beam Search.
+Meeting of the Association for Computational Linguis-
+tics (Volume 2: Short Papers), pages 110–114, Soﬁa,
+Bulgaria, August. Association for Computational Lin-
+guistics.
+
+Mitchell P. Marcus, Beatrice Santorini, and Mary Ann
+Marchinkiewicz. 1993. Building a large annotated
+corpus of English: The penn Treebank. Computa-
+tional Linguistics, 19.
+
+Marco Marelli, Luisa Bentivogli, Marco Baroni, Raf-
+faella Bernardi, Stefano Menini, and Roberto Zampar-
+elli. 2014. Semeval-2014 task 1: Evaluation of com-
+positional distributional semantic models on full sen-
+tences through semantic relatedness and textual entail-
+ment. In Proceedings of the 8th International Work-
+shop on Semantic Evaluation (SemEval 2014), pages
+1–8, Dublin, Ireland, August. Association for Compu-
+tational Linguistics and Dublin City University.
+
+Andre Martins, Miguel Almeida, and Noah A. Smith.
+2013. Turning on the turbo: Fast third-order non-
+In Proceedings of the 51st
+projective turbo parsers.
+Annual Meeting of the Association for Computational
+Linguistics (Volume 2: Short Papers), pages 617–622,
+Soﬁa, Bulgaria, August. Association for Computa-
+tional Linguistics.
+
+Ryan McDonald. 2006. Discriminative Training and
+Spanning Tree Algorithms for Dependency Parsing.
+Ph.D. thesis, University of Pennsylvania.
+
+Tomas Mikolov, Martin Karaﬁát, Lukas Burget, Jan
+Re-
+Cernocky, and Sanjeev Khudanpur.
+current neural network based language model.
+In
+INTERSPEECH 2010, 11th Annual Conference of
+the International Speech Communication Association,
+Makuhari, Chiba, Japan, September 26-30, 2010,
+pages 1045–1048.
+
+2010.
+
+Wenzhe Pei, Tao Ge, and Baobao Chang. 2015. An Ef-
+fective Neural Network Model for Graph-based De-
+pendency Parsing. In Proceedings of the 53rd Annual
+Meeting of the Association for Computational Linguis-
+tics and the 7th International Joint Conference on Nat-
+ural Language Processing (Volume 1: Long Papers),
+
+David Weiss, Chris Alberti, Michael Collins, and Slav
+Petrov. 2015. Structured Training for Neural Network
+Transition-Based Parsing. In Proceedings of the 53rd
+Annual Meeting of the Association for Computational
+Linguistics and the 7th International Joint Conference
+on Natural Language Processing (Volume 1: Long Pa-
+pers), pages 323–333, Beijing, China, July. Associa-
+tion for Computational Linguistics.
+
+Yue Zhang and Stephen Clark.
+
+2008. A tale of
+two parsers: investigating and combining graph-based
+and transition-based dependency parsing using beam-
+search. In Proc. of EMNLP.
+
+Yue Zhang and Joakim Nivre. 2011. Transition-based
+dependency parsing with rich non-local features.
+In
+Proceedings of the 49th Annual Meeting of the Asso-
+ciation for Computational Linguistics: Human Lan-
+guage Technologies, pages 188–193.
+
+Chenxi Zhu, Xipeng Qiu, Xinchi Chen, and Xuanjing
+Huang. 2015. A Re-ranking Model for Dependency
+Parser with Recursive Convolutional Neural Network.
+In Proceedings of the 53rd Annual Meeting of the As-
+sociation for Computational Linguistics and the 7th
+International Joint Conference on Natural Language
+Processing (Volume 1: Long Papers), pages 1159–
+1168, Beijing, China, July. Association for Computa-
+tional Linguistics.
+
+pages 313–322, Beijing, China, July. Association for
+Computational Linguistics.
+
+M. Schuster and Kuldip K. Paliwal. 1997. Bidirectional
+recurrent neural networks. IEEE Transactions on Sig-
+nal Processing, 45(11):2673–2681, November.
+
+Richard Socher, Christopher Manning, and Andrew Ng.
+2010. Learning Continuous Phrase Representations
+and Syntactic Parsing with Recursive Neural Net-
+In Proceedings of the Deep Learning and
+works.
+Unsupervised Feature Learning Workshop of {NIPS}
+2010, pages 1–9.
+
+Richard Socher, John Bauer, Christopher D. Manning,
+and Ng Andrew Y. 2013a. Parsing with Composi-
+In Proceedings of the 51st
+tional Vector Grammars.
+Annual Meeting of the Association for Computational
+Linguistics (Volume 1: Long Papers), pages 455–465,
+Soﬁa, Bulgaria, August. Association for Computa-
+tional Linguistics.
+
+Richard Socher, Alex Perelygin, Jean Wu, Jason Chuang,
+Christopher D. Manning, Andrew Ng, and Christo-
+pher Potts. 2013b. Recursive Deep Models for Se-
+mantic Compositionality Over a Sentiment Treebank.
+In Proceedings of the 2013 Conference on Empiri-
+cal Methods in Natural Language Processing, pages
+1631–1642, Seattle, Washington, USA, October. As-
+sociation for Computational Linguistics.
+
+Richard Socher. 2014. Recursive Deep Learning For
+Natural Language Processing and Computer Vision.
+Ph.D. thesis, Stanford University, August.
+
+Pontus Stenetorp. 2013. Transition-based Dependency
+In Deep
+Parsing Using Recursive Neural Networks.
+Learning Workshop at the 2013 Conference on Neural
+Information Processing Systems (NIPS), Lake Tahoe,
+Nevada, USA, December.
+
+2015.
+
+Kai Sheng Tai, Richard Socher, and Christopher D. Man-
+ning.
+Improved Semantic Representations
+From Tree-Structured Long Short-Term Memory Net-
+In Proceedings of the 53rd Annual Meet-
+works.
+ing of the Association for Computational Linguistics
+and the 7th International Joint Conference on Natu-
+ral Language Processing (Volume 1: Long Papers),
+pages 1556–1566, Beijing, China, July. Association
+for Computational Linguistics.
+
+Stephen Tratz and Eduard Hovy. 2011. A fast, effective,
+non-projective, semantically-enriched parser. In Proc.
+of EMNLP.
+
+Taro Watanabe and Eiichiro Sumita. 2015. Transition-
+based Neural Constituent Parsing. In Proceedings of
+the 53rd Annual Meeting of the Association for Com-
+putational Linguistics and the 7th International Joint
+Conference on Natural Language Processing (Volume
+1: Long Papers), pages 1169–1179, Beijing, China,
+July. Association for Computational Linguistics.
+
+Appendix: Training Algorithm Pseudocode
+
+Algorithm 3 Training on annotated corpus
+1: Input: Sentences w1, . . . , wm
+2: Input: Tree annotations T 1, . . . , T m
+3: Input: Number of epochs to train
+4: V ← InitializeV ectors()
+5: Loss ← []
+6: for epoch ∈ {1, . . . , Epochs} do
+7:
+8:
+
+for S, T ∈ {(w1, T 1), . . . , (wm, T m)} do
+
+Loss ← T rainSentence (S, V [w1, . . . , wn], T, Loss)
+if |Loss| > 50 then
+
+SumLoss ← sum(Loss)
+Call ADAM to minimize SumLoss
+Loss ← []
+
+9:
+10:
+11:
+12:
+
+(See Algorithm 4, training of a single sentence, on next page.)
+
+Algorithm 4 Training on a single sentence with dynamic oracle algorithm
+1: function TRAINSENTENCE(w, v, T, Loss)
+2:
+3:
+4:
+5:
+
+Input: Sentence w = w1, . . . , wn
+Input: Vectors vi corresponding to inputs wi
+Input: Annotated tree T in the form of (h, m, rel) triplets
+Input: List Loss to which loss expressions are added
+for i ∈ 1, . . . , n do
+unassigned[i] ← |Children(wi)|
+pend[i].id ← i
+pend[i].el ← RN NL.init().append(vi)
+pend[i].er ← RN NR.init().append(vi)
+
+while |pend| > 1 do
+G, W ← {} ,{}
+for (i, d, rel) ∈ {1 ≤ i < |pend|, d ∈ {l, r}, rel ∈ Relations} do
+
+if d = l then m, h ← pend[i], pend[i + 1]
+else m, h ← pend[i + 1], pend[i]
+
+if unassigned[m.id] (cid:54)= 0 ∨ ∃(cid:96)(cid:54)=rel(h, m, (cid:96)) ∈ T then
+
+W.append((h, m, rel))
+
+else G.append((h, m, rel))
+
+hG, mG, relG ← argmax(i,d,(cid:96))∈GScore(pend, i, d, (cid:96))
+hW , mW , relW ← argmax(i,d,(cid:96))∈W Score(pend, i, d, (cid:96))
+scoreG ← Score(hG, mG, relG)
+scoreW ← Score(hW , mW , relW )
+if scoreG − scoreW < 0 then
+else if scoreG − scoreW > 1 ∨ random() < paug then
+
+h, m, rel, score ← hW , mW , relW , scoreW
+h, m, rel, score ← hG, mG, relG, scoreG
+h, m, rel, score ← hW , mW , relW , scoreW
+Loss.append(1 − scoreG + score)
+
+else
+
+if scoreG − score < 1 then
+
+6:
+7:
+8:
+9:
+10:
+
+11:
+12:
+
+13:
+14:
+15:
+
+16:
+17:
+18:
+
+19:
+20:
+21:
+22:
+
+23:
+24:
+25:
+26:
+27:
+28:
+29:
+30:
+
+31:
+32:
+33:
+34:
+
+m.c = m.el ◦ m.er
+m.enc = g(W (m.c ◦ rel) + b)
+if h.id < m.id then h.el.append(m.enc)
+else h.er.append(m.enc)
+unassigned[TP arent(m).id] ← unassigned[TP arent(m).id] − 1
+pend.remove(m)
+
+35:
+36:
+37: return Loss
+
+

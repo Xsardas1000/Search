@@ -1,0 +1,1365 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+8
+
+ 
+
+ 
+ 
+]
+S
+D
+.
+s
+c
+[
+ 
+ 
+
+3
+v
+9
+5
+7
+0
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+BPTree: an ℓ2 heavy hitters algorithm using constant memory
+
+Vladimir Braverman∗
+
+Stephen R. Chestnut†
+
+Nikita Ivkin‡
+
+Jelani Nelson§
+
+Zhengyu Wang¶
+
+David P. Woodruﬀk
+
+March 9, 2016
+
+Abstract
+
+The task of ﬁnding heavy hitters is one of the best known and well studied problems in the area of data
+streams. In sub-polynomial space, the strongest guarantee available is the ℓ2 guarantee, which requires
+ﬁnding all items that occur at least εkf k2 times in the stream, where the ith coordinate of the vector f
+is the number of occurrences of i in the stream. The ﬁrst algorithm to achieve the ℓ2 guarantee was the
+CountSketch of [CCF04], which for constant ε requires O(log n) words of memory and O(log n) update
+time, and is known to be space-optimal if the stream allows for deletions. The recent work of [BCIW16]
+gave an improved algorithm for insertion-only streams, using only O(log log n) words of memory.
+
+In this work, we give an algorithm BPTree for ℓ2 heavy hitters in insertion-only streams that achieves
+O(1) words of memory and O(1) update time for constant ε, which is optimal. In addition, we describe an
+algorithm for tracking kf k2 at all times with O(1) memory and update time. Our analyses rely on bound-
+ing the expected supremum of a Bernoulli process involving Rademachers with limited independence,
+which we accomplish via a Dudley-like chaining argument that may have applications elsewhere.
+
+1
+
+Introduction
+
+The streaming model of computation is well-established as one important model for processing massive
+datasets. In this model, a massive sequence of data is seen, and the system must be able to answer some
+pre-deﬁned types of queries, such as distinct element counts, quantiles, and frequent items, to name a few. It
+is typically assumed that the stream being processed is so large that explicitly storing it is either impossible
+or undesirable. Ideally streaming algorithms should use space sublinear, or even exponentially smaller than,
+the size of the data, to allow the algorithm’s memory footprint to ﬁt in cache for fast stream processing.
+The reader is encouraged to read [BBD+02, Mut05] for further background on the streaming model of
+computation.
+
+Within the study of streaming algorithms, the problem of ﬁnding frequent items is one of the most
+well-studied and core problems, with work on the problem beginning in 1981 [BM81, BM91]. Stated simply,
+given a stream of items with IDs (such as destination IP addresses of packets, or terms in search queries),
+the goal is to report the list of items that appear as a constant fraction of the stream. Aside from being an
+interesting problem in its own right, algorithms for ﬁnding frequent items are used as subroutines to solve
+many other streaming problems, such as moment estimation [IW05], entropy estimation [CCM10, HNO08],
+ℓp-sampling [MW10], ﬁnding duplicates [GR09], and several others.
+
+∗vova@cs.jhu.edu. Supported in part by NSF grant 1447639, by a Google Faculty Award.
+†stephenc@ethz.ch.
+‡nivkin1@jhu.edu. Supported in part by NSF grant 1447639 and by DARPA grant N660001-1-2-4014.
+§minilek@seas.harvard.edu. Supported by NSF grant IIS-1447471 and CAREER CCF-1350670, ONR Young Investigator
+
+award N00014-15-1-2388, and a Google Faculty Research Award.
+
+¶zhengyuwang@g.harvard.edu. Supported in part by NSF grant CCF-1350670.
+kdpwoodru@us.ibm.com.
+
+1
+
+1.1 Previous work
+
+Work on the heavy hitters problem began in 1981 with the MJRTY algorithm of [BM81, BM91], which
+gave an algortihm using only two machine words of memory that could identify an item whose frequency
+was strictly more than half the stream. This result was generalized by the MisraGries algorithm in [MG82],
+which uses 2(⌈1/ε⌉− 1) counters to identify all items that occur strictly more than an ε-fraction of the time
+in the stream, for any 0 < ε ≤ 1/2. This data structure was rediscovered at least two times afterward
+[DLM02, KSP03] and became also known as the Frequent algorithm, with implementations that use O(1/ε)
+words of memory, O(1) expected update time to process a stream item (using hashing), and O(1/ε) query
+time to report all the frequent items. Similar space requirements and running times for ﬁnding ε-frequent
+items were later achieved by the SpaceSaving [MAE05] and LossyCounting [MM12] algorithms. A later
+analysis of these algorithms in [BCIS09] showed that they not only identify the heavy hitters, but when
+using O(k/ε) counters, for each heavy hitter i ∈ {1, . . . , n} they provide an estimate ˜fi of the frequency fi
+such that | ˜fi − fi| ≤ (ε/k)·kftail(k)k1 (we call this the “((ε/k), k)-tail guarantee”). Here ftail(k) is the vector
+f but in which the top k entries have been replaced by zeros (and thus the norm of ftail(k) can never be
+larger than that of f ). A recent work of [BDW16] shows that for 0 < α < ε ≤ 1/2, all ε-heavy hitters can
+be found together with approximate for them ˜fi such that | ˜fi − fi| ≤ αkfk1, and the space complexity is
+O(α−1 log(1/ε) + ε−1 log n + log log kfk1) bits.
+All the works in the previous paragraph work in the insertion-only model, also known as the cash-register
+model [Mut05], where deletions from the stream are not allowed. Subsequently, many works provided
+algorithms that work in more general models such as the strict turnstile and general turnstile models. In
+the turnstile model, a vector f ∈ Rn receives updates of the form update(i, ∆), which triggers the change
+fi ← fi + ∆. The value ∆ is assumed to be some bounded precision integer ﬁtting in a machine word1, which
+can be either positive or negative. In the strict turnstile model, we are given the promise that fi ≥ 0 at all
+times in the stream. That is, items cannot be deleted if they were never inserted in the ﬁrst place. In the
+general turnstile model, no such restriction is promised (i.e. entries in f are allowed to be negative). This
+can be useful when tracking diﬀerences or changes across streams. For example, if f 1 is the query stream
+vector with (f 1)i being the number of times word i was queried to a search engine yesterday, and f 2 is the
+similar vector corresponding to today, then ﬁnding heavy coordinates in the vector f = f 1 − f 2 can be used
+to track big changes across time. Note then f receives a sequence of updates with ∆ = +1 (from yesterday)
+followed by updates with ∆ = −1 (from today).
+In the general turnstile model, an ε-heavy hitter in the ℓp norm is deﬁned as an index i ∈ [n] such
+that |fi| ≥ εkfkp. Recall kfkp is deﬁned as (Pn
+i=1 |fi|p)1/p. The CountMin sketch treats the case of p = 1
+and uses O(ε−1 log n) memory to ﬁnd all ε-heavy hitters and achieve the (ε, 1/ε)-tail guarantee for its
+estimates ˜fi [CM05]. The CountSketch treats the case of p = 2 and uses O(ε−2 log n) memory, achieving
+the (ε, 1/ε2)-tail guarantee. It was later showed in [JST11] that the CountSketch actually solves ℓp-heavy
+hitters for all 0 < p ≤ 2 using O(ε−p log n) memory and achieving the (ε, 1/εp)-tail guarantee. In fact they
+showed something stronger: that any ℓ2 heavy hitters algorithm with error parameter εp/2 achieving the
+tail guarantee automatically solves the ℓp heavy hitters problem with error parameter ε for any p ∈ (0, 2].
+In this sense, solving the heavy hitters for p = 2 with tail error provides the strongest guarantee amongst
+all p ∈ (0, 2].
+It is worth pointing out that both the CountMin sketch and CountSketch are randomized
+algorithms, and with small probability 1/nc for an arbitrarily large constant c > 0, they can fail to achieve
+their stated guarantees. The work [JST11] also showed that the CountSketch algorithm is optimal: they
+showed that any algorithm, even in the strict turnstile model, solving ℓp heavy hitters even with 1/3 failure
+probability must use Ω(ε−p log n) memory.
+
+The reader may also recall the Pick-and-Drop algorithm of [BO13] for ﬁnding ℓp heavy hitters, p ≥ 3,
+in insertion-only streams. Pick-and-Drop uses O(n1−2/p) words, so it’s natural to wonder whether the same
+approach would work for ℓ2 heavy hitters in O(1) memory. However, Pick-and-Drop breaks down in multiple,
+fundamental ways that seem to prevent any attempt to repair it, as we describe in Appendix A. In particular,
+
+1Henceforth, unless explicitly stated otherwise, space is always measured in machine words. It is assumed a machine word
+has at least log n bits, to store any ID in the stream, and also at least log(m∆) bits for m the length of the stream, to be able
+to store the total mass of items seen so far.
+
+2
+
+for certain streams it has only polynomially small probability to correctly identify an ℓ2 heavy hitter.
+
+Of note is that the MisraGries and other algorithms in the insertion-only model solve ℓ1 heavy hitters
+using (optimal) O(1/ε) memory, whereas the CountMin and CountSketch algorithms use a larger Θ(ε−1 log n)
+memory in the strict turnstile model, which is optimal in that model. Thus there is a gap of log n between the
+space complexities of ℓ1 heavy hitters in the insertion-only and strict turnstile models. [BCIW16] recently
+studied whether this gap also exists for ℓ2 heavy hitters. They showed that it does: whereas the CountSketch
+uses Θ(log n) memory for ℓ2 heavy hitters for constant ε, they gave an algorithm CountSieve which uses only
+Θ(log log n) memory: an exponential improvement!
+
+1.2 Our contributions
+
+We provide a new algorithm, BPTree, which in the insertion-only model solves ℓ2 heavy hitters and achieves
+the (ε, 1/ε2)-tail guarantee. For any constant ε our algorithm only uses a constant O(1) words of memory,
+which is optimal. This is the ﬁrst optimal-space algorithm for ℓ2 heavy hitters in the insertion-only model
+for constant ε. The algorithm is described in Corollary 7.
+
+En route to describing BPTree and proving its correctness we describe another result that may be of
+independent interest. Theorem 4 gives a more advanced analysis of the AMS algorithm, showing that for
+constant ε one can achieve the same (additive) error as the AMS algorithm at all points in the stream with
+only a constant increase in storage over AMS and a change from 4-wise independence to 6-wise independence.
+Note that [BCIW16] describes an algorithm using O(log log n) words that does F2 tracking in an insertion
+only stream with a multiplicative error (1 ± ε). The multiplicative guarantee is stronger, albeit with more
+space for the algorithm, but the result can be recovered as a corollary to our additive F2 tracking theorem,
+which has a much simpliﬁed algorithm and analysis compared to [BCIW16].
+
+After some preliminaries, Section 3 presents both algorithms and their analyses. The description of
+BPTree is split into three parts. Section 4 states and proves the chaining inequality. Appendix A describes
+a counter example where Pick-and-Drop fails to ﬁnd an ℓ2 heavy hitter with probability 1 − 1/ poly(n) and
+explains why simple modiﬁcations of the algorithm also fail for ℓ2 heavy hitters.
+
+1.3 Overview of approach
+Here we describe the intuition for our heavy hitters algorithm in the case of a single heavy hitter H ∈ [n]
+such that f 2
+2. The reduction from multiple heavy hitters to this case is standard. Suppose also
+for this discussion we knew a constant factor approximation to F2 = kfk2
+2. Our algorithm and its analysis
+use several of the techniques developed in [BCIW16]. We brieﬂy review that algorithm for comparison.
+
+H ≥ 9
+
+10kfk2
+
+Both CountSieve and BPTree share the same basic building block, which is a subroutine that tries to
+identify one bit of information about the identity of H. The subroutine hashes the elements of the stream
+into two buckets, computes one Bernoulli process in each bucket, and then compares the two values. The
+Bernoulli process is just the inner product of the frequency vector with a vector of Rademacher (i.e. uniform
+±1) random variables. The hope is that the Bernoulli process in the bucket with H grows faster than
+the other one, so the larger of the two processes reveals which bucket contains H. In order to prove that
+the process with H grows faster, [BCIW16] introduce a chaining inequality for insertion-only streams that
+bounds the supremum of the Bernoulli processes over all times. The subroutine essentially gives us a test
+that H will pass with probability, say, at least 9/10 and that every other items passes with probability at
+most 6/10. The high-level strategy of both algorithms is to repeat this test sequentially over the stream.
+
+CountSieve uses the subroutine in a two part strategy to identify ℓ2 heavy hitters with O(log log n)
+poly(log n) )kfk2 and (2) identify H with
+memory. The two parts are (1) amplify the heavy hitter so fH ≥ (1−
+independent repetitions of the subroutine. First it winnows the stream from, potentially, n distinct elements
+to at most n/ poly(log n) elements. The heavy hitter remains and, furthermore, it becomes poly(log n)-heavy
+because many of the other elements are removed. CountSieve accomplishes this by running Θ(log log n)
+independent copies of the subroutine in parallel, and discarding elements that do not pass a super-majority
+of the tests. A standard Chernoﬀ bound implies that only n/2O(log log n) = n/ poly(log n) items survive. The
+
+1
+
+3
+
+second part of the strategy identiﬁes Θ(log n) ‘break-points’ where kfk2 of the winnowed stream increases
+by approximately a (1 + 1/ log n) factor from one break-point to the next. Because H already accounts for
+nearly all of the value of kfk2 it is still a heavy hitter within each of the Θ(log n) intervals. CountSieve learns
+one bit of the identity of H on each interval by running the subroutine.
+BPTree merges the two parts of the above strategy. As above, the algorithm runs a series of Θ(log n)
+rounds where the goal of each round is to learn one bit of the identity of H. The diﬀerence from CountSieve
+is that BPTree discards more items after every round, then recurses on learning the remaining bits. As the
+algorithm proceeds, it discards more and more items and H becomes heavier and heavier in the stream.
+This is reminiscent of work on adaptive compressed sensing [IPW11], but here we are able to do everything
+in a single pass given the insertion-only property of the stream. Given that the heavy hitter is even heavier,
+it allows us to weaken our requirement on the two counters at the next level in the recursion tree: we now
+allow their suprema to deviate even further from their expectation, and this is precisely what saves us from
+having to worry that one of the O(log n) Bernoulli processes that we encounter while walking down the tree
+will have a supremum which is too large and cause us to follow the wrong path. The fact that the heavy
+hitter is even heavier also allows us to “use up” even fewer updates to the heavy hitter in the next level of
+the tree, so that overall we have enough updates to the heavy hitter to walk to the bottom of the tree.
+
+2 Preliminaries
+An insertion only stream is a list of items p1, p2, . . . , pm ∈ [n]. The frequency of j at time t is f (t)
+:= #{i ≤
+)2, F2 =Pn
+j=1 f 2
+t | pi = j}, f (t) ∈ Zn
+j ,
+j = α2(F2 − f 2
+and F0 = #{j ∈ [n] : fj > 0}. An item H ∈ [n] is a α-heavy hitter2 if f 2
+H ). In
+a case where the stream is semi-inﬁnite (it has no deﬁned end) m should be taken to refer to the time of a
+query of interest. When no time is speciﬁed, quantities like F2 and f refer to the same query time m.
+
+≥0 is called the frequency vector, we denote f := f (m), F (t)
+
+2 =Pn
+H ≥ α2Pj6=H f 2
+
+i=1(f (t)
+
+j
+
+i
+
+Our algorithms make use of 2-universal (pairwise independent) and 6-wise independent hash functions.
+We will commonly denote such a function h : [n] → [p] where p is a prime larger than n, or we may use
+h : [n] → {0, 1}R, which may be taken to mean a function of the ﬁrst type for some prime p ∈ [2R−1, 2R).
+We use h(x)i to denote the ith bit, with the ﬁrst bit most signiﬁcant (big-endian). A crucial step in our
+algorithm involves comparing the bits of two values a, b ∈ [p]. Notice that, for any 0 ≤ r ≤ ⌈log2 p⌉, we have
+ai = bi, for all 1 ≤ i ≤ r, if and only if |a − b| < 2⌈log2 p⌉−r. Therefore, the test ai = bi, for all 1 ≤ i ≤ r, can
+be performed with a constant number of operations.
+We will use, as a subroutine, and also compare our algorithm against CountSketch [CCF04]. To under-
+stand our results, one needs to know that CountSketch has two parameters, which determine the number of
+“buckets” and “repetitions” or “rows” in the table it stores. The authors of [CCF04] denote these parameters
+b and r, respectively. The algorithm selects, independently, r functions h1, . . . , hr from a 2-universal family
+with domain [n] and range [b] and r functions σ1, . . . , σr from a 2-universal family with domain [n] and range
+
+{−1, 1}. CountSketch stores the value Pj:ht(j)=i σ(j)fj , in cell (t, i) ∈ [r] × [b] of the table.
+
+In our algorithm we use the notation 1(A) denote the indicator function of the event A. Namely, 1(A) = 1
+
+if A is true and 0 otherwise.
+
+3 Algorithm and analysis
+
+We ﬁrst describe HH1, formally Algorithm 1, that ﬁnds a single O(1)-heavy hitter supposing we have an
+
+estimate √F2 ≤ σ ≤ 2√F2 of the second moment of the stream. HH2, Algorithm 2, ﬁnds a single O(1)-
+
+heavy hitter without assuming an estimate of F2. It repeatedly “guesses” values for σ and restarts HH1 as
+more items arrive. Finally, Corollary 7 describes BPTree, an algorithm that employs HH2 and a standard
+hashing technique to ﬁnd ε-heavy hitters with the same guarantee as CountSketch [CCF04], but requiring only
+
+2This deﬁnition is in a slightly diﬀerent form from the one given in the introduction, but this form is more convenient when
+
+f 2
+H is very close to F2.
+
+4
+
+Algorithm 1 Identify a heavy hitter given σ ∈ [√F2, 2√F2].
+
+procedure HH1(σ, p1, p2, . . . ,pm)
+
+R ← 3⌊log2(min{n, σ2} + 1)⌋
+Sample h : [n] → {0, 1}R ∼ 2-wise independent family
+Initialize b = b1b2 ··· bR = 0 ∈ [2R], r ← 1,
+Sample Z ∈ {−1, 1}n 6-wise independent, X0, X1 ← 0
+β ← 3/4, c ← 1/32, H ← −1
+for t = 1, 2, . . . , m and r < R do
+
+if h(pt)i = bi, for all i ≤ r − 1 then
+
+H ← pt
+Xh(pt)r ← Xh(pt)r + Zpt
+if |X0 + X1| ≥ cσβr then
+
+Record one bit br ← 1(|X1| > |X0|)
+Refresh (Zi)n
+r ← r + 1
+
+i=1, X0, X1 ← 0
+
+end if
+
+end if
+
+end for
+return H
+
+end procedure
+
+O(ε−2 log ε−1) words of space and O(log ε−1) update time. In comparison, CountSketch uses O(ε−2 log n)
+words and has O(log n) update time.3 Note that the authors of [CCF04] call the parameter k (as in Top-
+k) whereas we use ε2 for the same value. The present algorithm is also more eﬃcient than CountSieve
+of [BCIW16], which uses O(ε−2(log ε−1)(log log n)) words and O(eO((log log n)2)) update time (owing to their
+use of the JL generator from [KMN11]) for the same guarantee.
+
+The algorithm begins with randomizing the item labels by replacing them with pairwise independent
+values on R = Θ(log min{n, σ2}) bits, via the hash function h. Since n and σ2 ≥ F2 are both upper bounds
+for the number of distinct items in the stream, R can be chosen so that every item recieves a distinct hash
+value. We recommend choosing a prime p ≈ min{n, F2}2 and assigning the labels h(i) = a0 + a1i mod p,
+for a0 and a1 randomly chosen in {0, 1, . . . , p − 1} and a1 6= 0. We can always achieve this with R =
+3 log2(min{n, F2} + 1), which is convenient for the upcoming analysis. This distribution on h is known to
+be a 2-wise independent family [CW79]. Note computing h(i) for any i takes O(1) time. It is also simple to
+invert: namely x = a−1
+1 (h(x) − a0) mod p, so x can be computed quickly from h(x) when p > n. Inverting
+requires computing the inverse of a1 modulo p, which takes O(log min{n, F2}) time via repeated squaring,
+however this computation can be done once, for example during initialization of the algorithm, and the
+result stored for all subsequent queries. Thus, the time to compute a−1
+1 mod p is negligible in comparison to
+reading the stream.
+
+Once the labels are randomized, HH1 proceeds in rounds wherein one bit of the randomized label of
+the heavy hitter is determined during each round. As the rounds proceed, items are discarded from the
+stream. The remaining items are called active. When the algorithm discards an item it will never reconsider
+it (unless the algorithm is restarted). In each round, it creates two Bernoulli processes X0 and X1. In the
+rth round, X0 will be determined by the active items whose randomized labels have their rth bit equal to 0,
+and X1 determined by those with rth bit 1. Let f (t)
+≥0 be the frequency vectors of the active items
+in each category, respectively, initialized to 0 at the beginning of the round. Then the Bernoulli processes
+are X (t)
+1 i, where Z is a vector of 6-wise independent Rademacher random
+variables (i.e. the Zi are marginally uniformly random in {−1, 1}).
+
+0 i and X (t)
+
+1 = hZ, f (t)
+
+0 = hZ, f (t)
+
+0 , f (t)
+
+1 ∈ Zn
+
+3This assumes O(1) time for dictionary look-up, insert, and delete, which can be achieved in expectation using e.g. hashing
+
+with chaining [CLRS09, Section 11.2].
+
+5
+
+The rth round ends when |X0 + X1| > cσβr−1, for speciﬁed4 constants c and β. At this point, the
+algorithm compares the values |X0| and |X1| and records the identity of the larger one as the rth bit of
+the candidate heavy hitter. All those items with rth bit corresponding to the smaller counter are discarded
+(made inactive), and the next round is started.
+
+After R rounds are completed, if there is a heavy hitter then its randomized label will be known with
+good probability. The identity of the item can be determined selecting an item in the stream that passes
+all of the R bit-wise tests, or by inverting the hash function used for the label, as described above. If it is
+a O(1)-heavy hitter then the algorithm will ﬁnd it with probability at least 2/3. The algorithm is formally
+presented in Algorithm 1.
+
+The key idea behind the algorithm is that as we learn bits of the heavy hitter and discard other items,
+it becomes easier to learn additional bits of the heavy hitter’s identity. With fewer items in the stream as
+the algorithm proceeds, the heavy hitter accounts for a larger and larger fraction of the remaining stream as
+time goes on. As the heavy hitter gets heavier the discovery of the bits of its identity can be sped up. When
+the stream does not contain a heavy hitter this acceleration of the rounds might not happen, though that
+is not a problem because when there is no heavy hitter the algorithm is not required to return any output.
+Early rounds will each use a constant fraction of the updates to the heavy hitter, but the algorithm will be
+able to ﬁnish all R = Θ(log n) rounds because of the speed-up. The parameter β controls the speed-up of
+the rounds. Any value of β ∈ ( 1
+2 , 1) can be made to work (possibly with an adjustment to c), but the precise
+value aﬀects the heaviness requirement and the failure probability.
+
+The ﬁnal algorithm, which removes the assumption of knowing a value σ ∈ [√F 2, 2√F 2], is described in
+
+Algorithm 2. It proceeds by sequentially guessing σ, and it requires about a factor 2 increase in the heaviness
+because it will lose some items before arriving at good value of σ. We also describe an algorithm that hashes
+the items into O(1/ε2) buckets, like a CountSketch does, for log(1/ε) repetitions. This brings the heaviness
+requirement down to f 2
+
+H ≥ ε2F2 and leads to the space bound given in Corollary 7.
+
+Identifying a single heavy hitter given an approximation to F2
+
+3.1
+In this section we use H ∈ [n] to stand for the identity of the most frequent item in the stream. It is not
+assumed to be a heavy hitter unless explicitly stated. For each r ≥ 0, let
+
+Hr := {i ∈ [n] \ {H} | h(i)k = h(H)k for all 1 ≤ k ≤ r},
+
+and let ¯Hr := Hr−1 \ Hr, with ¯H0 = ∅ for convenience. By deﬁnition, HR ⊆ HR−1 ⊆ ··· ⊆ H0 = [n] \ {H},
+and, in round r ∈ [R], our hope is that the active items are those in Hr−1 so that one of the variables X0, X1
+depends on the frequencies of items in Hr, while the other depends on ¯Hr.
+For W ⊆ [n], denote by f (t)(W ) ∈ Zn
+≥0 the frequency vector at time t of the stream restricted to the
+items in W , that is, a copy of f (t) with the ith coordinate replaced by 0 for every i /∈ W . We also deﬁne
+f (s:t)(W ) := f (t)(W ) − f (s)(W ) and F2(W ) =Pj∈W f 2
+Lemma 1. For any r ∈ {0, 1, . . . , R} and K > 0, the events
+
+j . In our notation F2 − f 2
+
+H = F2(H0).
+
+E2r−1 :=(cid:26) max
+E2r :=(cid:26) max
+have respective probabilities at least 1 − 4C∗
+
+s,t≤m|DZ, f (s:t)( ¯Hr)E| ≤ KF2(H0)1/2(cid:27)
+s,t≤m|DZ, f (s:t)(Hr)E| ≤ KF2(H0)1/2(cid:27) .
+
+K2r of occurring, where C∗ < 34 is the constant from Theorem 10.
+
+4c = 1/32 and β = 3/4 would suﬃce.
+
+6
+
+Proof. By the Law of Total Probability and Theorem 10 with Markov’s Inequality we have
+
+1
+2
+
+KF2(H0)1/2(cid:19)
+
+t≤m |hZ, f (t)(Hr)i| ≥
+
+1
+2
+
+KF2(H0)1/2(cid:12)(cid:12)(cid:12)(cid:12)
+
+Hr(cid:19)(cid:27)
+
+Pr(cid:18)max
+t≤m |hZ, f (t)(Hr)i| ≥
+= E(cid:26)Pr(cid:18)max
+≤ E(cid:26) 2C∗F2(Hr)1/2
+KF2(H0)1/2 (cid:27)
+2C∗F2(H0)1/2
+≤
+KF2(H0)1/22r ,
+
+where the last inequality is Jensen’s. The same holds if Hr is replaced by ¯Hr.
+P (E2r) ≥ 1 − 4C∗
+
+K2r . A similar argument proves P (E2r−1) ≥ 1 − 4C∗
+K2r .
+
+Applying the triangle inequality to get |hZ, f (s:t)(Hr)i| ≤ |hZ, f (s)(Hr)i| + |hZ, f (t)(Hr)i| we then ﬁnd
+
+1
+
+2
+
+1
+
+8
+
+min{F2,n}2 −
+
+2 ≤ σ ≤ 2F 1/2
+
+Pr(U ) ≥ 1−F02−R ≥ 1−
+before time m.
+
+K ′c(2β−1) the algorithm HH1 returns H.
+
+Let U be the event {h(j) 6= h(H) for all j 6= H, fj > 0} which has, by pairwise independence, probability
+min{n,F2}2 , recalling that F0 ≤ min{n, F2} is the number of distinct items appearing
+Lemma 2. Let K′ ≥ 100. If F 1/2
+and fH > 2K′C∗pF2(H0) then, with probability at least
+1 −
+Proof. Recall that H is active during round r if it happens that h(H)i = bi, for all 1 ≤ i ≤ r − 1, which
+implies that updates from H are not discarded by the algorithm during round r. Let K = K(r) = K′cC∗βr
+in Lemma 1, and let E be the event that U and ∩2R
+r=1Er both occur. We prove by induction on r that if E
+occurs then either br = h(H)r, for all r ∈ [R] or H is the only item appearing in the stream. In either case,
+the algorithm correctly outputs H, where in the former case it follows because E ⊆ U .
+Let r ≥ 1, be such that H is still active in round r, i.e., bi = h(H)i for all 1 ≤ i ≤ r − 1. Note that all
+items are active in round 1. Since H is active, the remaining active items are exactly Hr−1 = Hr ∪ ¯Hr. Let
+tr denote the time of the last update received during the rth round, and deﬁne t0 = 0. At time tr−1 ≤ t < tr
+we have
+
+cσβr > |X0 + X1|
+
+= |hZ, f (tr−1:t)(Hr ∪ ¯Hr)i + ZHf (tr−1:t)
+≥ f (tr−1:t)
+
+− K(r − 1)F2(H0)1/2,
+
+H
+
+H
+
+|
+
+where the last inequality follows from the deﬁnition of E2(r−1). Rearranging and using the heaviness as-
+
+sumption on fH , we get 2 max C∗pF2(H0) < √F2 ≤ σ which implies the bound
+
+K(r − 1)F2(H0)1/2 <
+
+K(r − 1)
+2K′C∗
+
+σ =
+
+cσβr−1.
+
+1
+2
+
+(1)
+
+Therefore, by rearranging we see f (tr−1:tr)
+
+H
+
+r
+
+H
+
+≤ 1 + f (tr−1:t)
+Xk=1
+
+< r +
+
+3
+2
+
+cσ
+
+r
+
+f (tr)
+H =
+
+f (tk−1:tk)
+H
+
+Xk=1
+
+< 1 + 3
+
+2 cσβr−1. That implies
+
+βk−1 ≤ r +
+
+3c
+
+1 − βpF2.
+
+1−β√F2 then round r ≤ R is guaranteed to be completed and a further update to H
+Thus, if fH > R + 3c
+2√F2, where the
+appears after the round. Suppose, that is not the case, and rather R ≥ fH − 3c
+last inequality follows from our choices K′ ≥ 100, β = 3/4, and c = 1/32. Then, by the deﬁnition of R,
+9(1 + log2 4F2)2 ≥ R2 ≥ 1
+4 F2. One can check that this inequality implies that F2 ≤ 104, hence fH < 100.
+
+1−β√F2 ≥ 1
+
+7
+
+Now K′ ≥ 100 and the heaviness requirement of H implies that F2(H0) = 0. Therefore, H is the only item
+in the stream, and, in that case the algorithm will always correctly output H.
+Furthermore, at the end of round r, |X0 + X1| ≥ cσβr, so we have must have either |X0| ≥ cσβr/2 or
+|X1| ≥ cσβr/2. Both cannot occur for the following reason. The events E2r−1 and E2r occur, recall these
+govern the non-heavy items contributions to X0 and X1, and these events, with the inequality (1), imply
+
+|hZ, f (tr−1:tr)(Hr)i| ≤ K(r)F2(H0)1/2 <
+
+1
+2
+
+cσβr
+
+and the same holds for ¯Hr. Therefore, the Bernoulli process not including H has its value smaller than
+cσβr/2, and the other, larger process identiﬁes the bit h(H)r. By induction, the algorithm completes every
+round r = 1, 2, . . . , R and there is at least one update to H after round R. This proves the correctness of
+the algorithm assuming the event E occurs.
+
+It remains to compute the probability of E. Lemma 1 provides the bound
+
+Pr(U and ∩2R
+
+i=1 Ei) ≥ 1 −
+
+= 1 −
+
+> 1 −
+
+1
+
+1
+
+min{n, F2}2 −
+min{n, F2}2 −
+min{n, F2}2 −
+
+1
+
+R
+
+R
+
+8
+
+8C∗
+K(r)2r
+
+Xr=0
+Xr=0
+K′c(2β − 1)
+
+K′cβr2r
+
+8
+
+.
+
+Theorem 3 (HH1 Correctness). There is a constant K such that if H is a K-heavy hitter and √F2 ≤ σ ≤
+2√F2, then with probability at least 2/3 algorithm HH1 returns H. HH1 uses O(1) words of storage.
+Proof. The Theorem follows immediately from Lemma 2 by setting c = 1/32, β = 3/4, and K′ = 211, which
+allows K = 212C∗ ≤ 140, 000.
+
+3.2 F2 Tracking
+The step in HH2 that “guesses” an approximation σ for √F2 works as follows. We create an estimator ˆF2
+to (approximately) track F2. We set a series of increasing thresholds and restart HH1 each time ˆF2 crosses
+a threshold with the value σ depending on the threshold. At least one of the thresholds will be the “right”
+one, in the sense that HH1 gets initialized with σ in the interval [√F2, 2√F2], so we expect the corresponding
+instance of HH1 to identify the heavy hitter, if one exists.
+
+Algorithm HH1 could fail if ˆF2 is wildly inaccurate at the time it crosses the right threshold, because
+it might be initialized . It is not hard to guarantee that ˆF2 & F2 when the threshold is crossed—that can
+be achieved using the AMS F2 estimator [AMS99]—but the reverse inequality is nontrivial. We will use a
+modiﬁed version of the AMS estimator given below.
+
+Let N ∈ N, Z j be a vector of 6-wise independent Rademacher random variables for j ∈ N , and deﬁne
+
+Xj,t = hZ j, f (t)i. Let Yt = 1
+Theorem 4. Let 0 < ε < 1. There is a streaming algorithm that outputs at each time t a value ˆF (t)
+that
+
+j,t, obviously Yt can be computed by a streaming algorithm.
+
+j=1 X 2
+
+such
+
+2
+
+N PN
+Pr(| ˆF (t)
+ε2 log n log 1
+
+The algorithm use O( 1
+
+2 − F (t)
+δε ) bits of storage and has O( 1
+
+2 | ≤ εF2, for all 0 ≤ t ≤ m) ≥ 1 − δ.
+
+ε2 log 1
+
+δε ) update time.
+
+The proof of Theorem 4 uses the following technical lemma that bounds the divergence the estimate over
+
+an entire interval of updates. It follows along the lines of Lemma 22 from the full version of [BCIW16].
+
+8
+
+Lemma 5. Let ε < 1, N ≥ 12/ε2, and ∆ > 0. If F (v)
+
+2 − F (u)
+
+2 ≤ (
+
+ε
+
+20N C∗
+
+)2F2, then
+
+Pr(cid:16)Yt − F (t)
+
+2 ≤ 2εF2, ∀t ∈ [u, v](cid:17) ≥
+
+2
+3
+
+.
+
+Proof. We denote ∆ = (F (v)
+
+)/F2 and split the expression above as follows
+
+2
+
+2 − F (u)
+Yt − F (t)
+
+2 = (Yt − Yu) + (Yu − F (u)
+
+2
+
+) + (F (t)
+
+2 − F (u)
+
+2
+
+).
+
+Let b1 > 0. For the second term, and it is shown in [AMS99] that
+
+Pr(Yu − F (u)
+
+2 ≥ b1) ≤
+
+2
+
+2(F (u)
+N b2
+1
+
+)2
+
+.
+
+Let X (t) = 1√N
+we have
+
+so
+
+(X1,t, X2,t, . . . , XN,t) and X (u:t) = Xt − Xu, in particular Yt = kX (t)k2
+
+2. For the ﬁrst term,
+
+Yt = kX (u) + X (u:t)k2
+
+2 ≤(cid:16)kX (u)k2 + kX (u:t)k2(cid:17)2
+
+,
+
+Now from Theorem 10 and a union bound it follows that for b2 > 0
+
+Yt − Yu ≤ 2pYukX (u:t)k2 + kX (u:t)k2
+j∈[N ],u≤t≤v |Xj,t − Xj,u| ≥ b2! ≤
+
+sup
+
+2.
+
+N C∗kf (u:v)k2
+
+,
+
+b2
+
+P 
+
+so P (supt≥u kX (u:t)k2 ≥ b2) ≤ N C∗kf (u:v)k2/b2.
+
+With probability at least 1 − 2(F (u)
+Yt − F (t)
+
+N b2
+
+)2
+
+2
+
+Now we set b1 = εF2 and b2 = 6N C∗
+
+1
+
+b2
+
+we get, for all t ≥ u
+2 b2 + b2
+
+1 − N C∗kf (u:v)k2
+2 ≤ 2(F (u)
+2 + b1)
+√∆F2 and the above expression is bounded by
+2 ≤ 12√2N C∗F2√∆ + εF2 + 2∆
+
+2 + b1 + ∆F2.
+
+Yt − F (t)
+
+≤ 20N C∗F2√∆ + εF2,
+≤ 2εF2
+since ∆ ≤ F2. The probability of success is at least
+
+2(F (u)
+)2
+N ε2F 2
+
+2
+
+2 − kf (u:m)k2
+
+6√∆ ≤ 1 −
+
+1
+3
+
+.
+
+1 −
+
+We now proceed to describe the F2 estimation algorithm and prove Theorem 4.
+
+of Theorem 4. The algorithm returns at each time t the value
+
+ˆF2(t) = max
+s≤t
+
+median(Y1,t, Y2,t, . . . , YM,t),
+
+which are M = Θ(log 1
+and tk = max{t ≤ m | F (tk)
+
+δε ) independent copies of Yt with N = 12( 3
+2 ≤ F (tk−1)
+
+)2 and deﬁne t0 = 0
++ ∆F2}, for k ≥ 1. These times separate the stream into no more than
+
+ε )2. Let ∆ = (
+
+20N C∗
+
+2
+
+ε/3
+
+9
+
+Algorithm 2 Identify a heavy hitter by guessing σ.
+
+procedure HH2(p1, p2, . . . ,pm)
+
+Run ˆF2 from Theorem 4 with ε = 1/100 and δ = 1/20
+Start HH1 (1, p1,. . . , pm)
+Let t0 = 1 and tk = min{t | ˆF (t)
+for each time tk do
+Start HH1(( ˆF (tk)
+)1/2, ptk , ptk+1, . . . pm)
+Let Hk denote its ouput if it completes
+Discard Hk−2 and the copy of HH1 started at tk−2
+
+2 ≥ 2k}, for k ≥ 1.
+
+2
+
+end for
+return Hk−1
+end procedure
+
+2/∆ intervals during which the second moment increases no more than ∆F2. Lemma 5 and an application
+of Chernoﬀ’s Inequality imply that for each interval k
+
+Pr(cid:18)medianj∈[M](Yj,t) − F (t)
+2 ≤
+≥ 1 − poly(δε).
+
+2
+3
+
+εF2, ∀t ∈ [tk−1, tk)(cid:19)
+
+The original description of the AMS algorithm [AMS99] implies that, for all k,
+
+Pr(cid:16)medianj∈[M](Yj,tk ) ≥ (1 − ε/3)F (t)
+
+2 (cid:17) ≥ 1 − poly(δε).
+
+By choosing the constants appropriately and applying a union bound over all O(ε−2) intervals and endpoints
+we achieve all of these events events occur with probability at least 1 − δ. One easily checks that this gives
+the desired guarantee.
+
+Let us remark that using O(ε−2(log log n + log ε−1)) words one can achieve a (1 ± ε) multiplicative ap-
+proximation to F2 at all points in the stream, in contrast to the additive εF2 approximation of Theorem 4.
+The only change needed is to increase M to Θ(log log(n) + log 1
+ε ) independent copies of Yt. The proof that
+this works runs along the lines of the proof of Theorem 4, but instead of breaking the stream into O(1/ε2)
+intervals with equal change in F2, break the stream into O( 1
+ε2 log n) intervals of where the change in F2 is
+geometrically increasing size. That is also the approach taken by [BCIW16], which also achieves the same
+space, up to constant factors, for a (1 ± ε)-approximation at all times, but the details of the Bernoulli
+processes presented here, i.e., with 6-wise independence, are much simpler to implement.
+
+3.3 The complete heavy hitters algorithm
+
+This section describes BPTree, our main heavy hitters algorithm. We ﬁrst prove the correctness of HH2,
+formally given in Algorithm 2, which accomplishes the guessing step. The algorithm sets thresholds at
+1, 2, . . . , 2k, . . . and starts a new instance of HH1 each time the estimate ˆF2 described in the previous section
+crosses one of the thresholds. Each new instance is initialized with the current value of √F2 as the value for
+σ. It maintains only the two most recent copies of HH1, so even though overall it may instantiate Ω(log n)
+copies of HH1 at most two will running concurrently and the total storage remains O(1) words.
+
+Theorem 6. There exists a constant K > 0 and a 1-pass streaming algorithm HH2, Algorithm 2, such that
+if the stream contains a K-heavy hitter then with probability at least 0.6 HH2 returns the identity of the heavy
+hitter. The algorithm uses O(1) words of memory and O(1) update time.
+
+Proof. The space and update time bounds are immediate from the description of the algorithm. The success
+probability follows by a union bound over the failure probabilities in Theorems 3 and 4, which are 1/3 and
+
+10
+
+δ = 0.05 respectively. It remains to prove that there is a constant K such that conditionally given the success
+of the F2 estimator, the hypotheses of Theorem 3 are satisﬁed by the penultimate instance of HH1 by HH2.
+Let K′ denote the constant from Theorem 3 and set K = 12K′, so if H is a K-heavy hitter then for any
+
+α > 0 such that α√F2 ≥ 2 and in any interval (t, t′] where (F (t′)
+
+2
+
+)1/2 − (F (t)
+
+2 )1/2 ≥ α√F2 we will have
+
+If follows with in the stream pt, pt+1, . . . , pt′ the heaviness of H is at least
+
+f (t:t′)
+
+H + F2(H0)1/2 > kf (t:t′)k2 > kf (t′)k2 − kf (t)k2 ≥ αpF2.
+
+(αpF2 −pF2(H0))/pF2(H0) ≥ 6K′α.
+
+(2)
+
+1
+
+2
+
+Let k be the last iteration of HH2. By the deﬁnition of tk, we have ( ˆF (tk−1)
+
+4 ( ˆF2)1/2 ≥
+4p(1 − ε)F2. Similar calculations show that there exists a time t∗ > tk−1 such that (F (t∗)
+)1/2 ≥
+F2/6 and kf tk−1:t∗k2 ≤ ( ˆF (tk−1)
+)1/2 ≤ 2kf tk−1:t∗k2. Furthermore, H is a K′ heavy hitter on the substream
+ptk−1 , ptk−1+1, . . . , pt∗ by (2). This proves that the hypotheses of Theorem 3 are satisﬁed. It follows that
+from Theorem 3 that HH1 correctly identiﬁes Hk−1 = H on that substream and the remaining updates in
+the interval (t∗, tm] do not aﬀect the outcome.
+Corollary 7. For any ε > 0 there is 1-pass streaming algorithm BPTree that, with probability at least (1− δ),
+returns a set of ε
+2 -heavy hitters containing every ε-heavy hitter and an approximate frequency for every item
+returned satisfying the (ε, 1/ε2)-tail guarantee. The algorithm uses O( 1
+εδ )(log n + log m)) bits of space
+and has O(log 1
+
+)1/2 ≥ 1
+)1/2−(F (tk−1)
+
+ε2 (log 1
+
+εδ ) update and O(ε−2 log 1
+
+εδ ) retrieval time.
+
+2
+
+2
+
+2
+
+Proof. The algorithm BPTree constructs a hash table in the same manner as CountSketch where the items
+are hashed into b = O(1/ε2) buckets for r = O(log 1/εδ) repetitions. On the stream fed into each bucket
+we run an independent copy of HH2. A standard r × b CountSketch is also constructed. The constants are
+chosen so that when an ε-heavy hitter in the stream is hashed into a bucket it becomes a K-heavy hitter
+with probability at least 0.95. Thus, in any bucket with a the ε-heavy hitter, the heavy hitter is identiﬁed
+with probability at least 0.55 by Theorem 6 and the aforementioned hashing success probability.
+
+At the end of the stream, all of the items returned by instances of HH2 are collected and their frequencies
+checked using the CountSketch. Any items that cannot be ε-heavy hitters are discarded. The correctness of
+this algorithm, the bound on its success probability, and the (ε, 1/ε2)-tail guarantee follow directly from the
+correctness of CountSketch and the fact that no more than O(ε−2 log(1/δε)) items are identiﬁed as potential
+heavy hitters.
+
+Remark 8. We can amplify the success probability of HH2 to any 1 − δ by running O(log(1/δ)) copies in
+parallel and taking a majority vote for the heavy hitter. This allows one to track O(1)-heavy hitters at all
+points in the stream with an additional O(log log m) factor in space and update time. The reason is because
+there can be a succession of at most O(log m) 2-heavy hitters in the stream, since their frequencies must
+increase geometrically, so setting δ = Θ(1/ log m) is suﬃcient. The same scheme works for BPTree tree, as
+well, and if one replaces each of the counters in the attached CountSketch with an F2-at-all-times estimator
+of [BCIW16] then one can track the frequencies of all ε-heavy hitters at all times as well. The total storage
+becomes O( 1
+
+ε )) words and the update time is O(log log n + log 1
+
+ε2 (log log n + log 1
+
+ε ).
+
+4 Chaining
+
+Let Z ∈ {−1, 1}n be random. We are interested in upper-bounding E supt |hf (t), Zi|.
+It was shown in
+[BCIW16] that if each entry in Z is drawn independently and uniformly from {−1, 1}, then E supt |hf (t), Zi| .
+kf (m)k2. We show that this inequality still holds if the entries of Z are drawn from a 6-wise independent
+family, which is used both in our analyses of HH1 and our F2 tracking algorithm.
+
+The following is implied by [Haa82].
+
+11
+
+Lemma 9 (Khintchine’s inequality). Let Z ∈ {−1, 1}n be chosen uniformly at random, and x ∈ Rn a ﬁxed
+vector. Then for any even integer p, EhZ, xip ≤ √pp · kxkp
+2.
+
+We now prove the main theorem of this section.
+
+Theorem 10. If Z ∈ {−1, 1}n is drawn from a 6-wise independent family, E supt |hf (t), Zi| < 34 · kf (m)k2.
+Proof. To simplify notation, we ﬁrst normalize the vectors in {f (0) = 0, f (1), . . . , f (m)} (i.e., divide by
+kf (m)k2). Denote the set of these normalized vectors by T = {v0, . . . , vm}, where kvmk2 = 1. For every
+k ∈ N, we can ﬁnd a 1/2k-net of T in ℓ2 with size |Sk| ≤ 22k by a greedy construction as follows. (Recall: an
+ε-net of some set of points T under some metric d is a set of point T ′ such that for each t ∈ T , there exists
+some t′ ∈ T ′ such that d(t, t′) ≤ ε.)
+To construct an ε-net for T , we ﬁrst take v0, then choose the smallest i such that kvi − v0k2 > ε, and
+so on. To prove the number of elements selected is upper bounded by 1/ε2, let u0, u1, u2, . . . , ut denote the
+vectors we selected accordingly, and note that the second moments of u1 − u0, u2 − u1, . . . , ut − ut−1 are
+greater than ε2. Because the vectors ui − ui−1 have non-negative coordinates, kutk2
+2 is lower bounded by the
+summation of these moments, while on the other hand kutk2
+even integer. By Markov and Khintchine’s inequality,
+
+Let S be a set of vectors. Let Z ∈ {−1, 1}n be drawn from a p-wise independent family, where p is an
+
+2 ≤ 1. Hence the net is of size at most 1/ε2.
+
+Pr(|hx, Zi| > λ · |S|1/p · kxk2) <
+
+E|hx, Zi|p
+λp · |S| · kxkp
+
+2
+
+<
+
+1
+
+|S| ·(cid:18)√p
+λ (cid:19)p
+
+.
+
+Hence,
+
+E sup
+
+x∈S |hx, Zi| =Z ∞
+
+0
+
+Pr(sup
+
+= |S|1/p · sup
+
+Z ∞
+
+0
+
+Pr(sup
+
+x∈S |hx, Zi| > u)du
+x∈S kxk2·
+x∈S |hx, Zi| > λ · |S|1/p · sup
+x∈S kxk2)dλ
+√p (cid:18)√p
+x∈S kxk2 · √p +Z ∞
+λ (cid:19)p
+p − 1(cid:19)
+x∈S kxk2 · √p ·(cid:18)1 +
+
+dλ!
+
+1
+
+< |S|1/p · sup
+
+(union bound)
+
+= |S|1/p · sup
+
+Now we apply a similar chaining argument as in the proof of Dudley’s inequality (cf. [Dud67]). For x ∈ T ,
+let xk denote the closest point to x in Sk. Then kxk− xk−1k2 ≤ kxk− xk2 +kx− xk−1k2 ≤ (1/2k) + (1/2k−1).
+Note that the size of {xk − xk−1|x ∈ T} is upper bounded by |Sk| · |Sk−1| ≤ 24k. Therefore for p = 6,
+
+E sup
+
+x∈T |hx, Zi| ≤
+
+E sup|hxk − xk−1, Zi|
+
+∞
+
+Xk=1
+< 3√p(cid:18)1 +
+
+< 34.
+
+1
+
+p − 1(cid:19) ∞
+Xk=1
+
+(24k)1/p · (1/2k)
+
+12
+
+References
+
+[AMS99] Noga Alon, Yossi Matias, and Mario Szegedy. The space complexity of approximating the fre-
+
+quency moments. J. Comput. Syst. Sci., 58(1):137–147, 1999.
+
+[BBD+02] Brian Babcock, Shivnath Babu, Mayur Datar, Rajeev Motwani, and Jennifer Widom. Models
+and issues in data stream systems. In Proceedings of the Twenty-ﬁrst ACM SIGACT-SIGMOD-
+SIGART Symposium on Principles of Database Systems (PODS), pages 1–16, 2002.
+
+[BCIS09] Radu Berinde, Graham Cormode, Piotr Indyk, and Martin J. Strauss. Space-optimal heavy
+hitters with strong error bounds. In Proceedings of the Twenty-Eigth ACM SIGMOD-SIGACT-
+SIGART Symposium on Principles of Database Systems (PODS), pages 157–166, 2009.
+
+[BCIW16] Vladimir Braverman, Stephen R. Chestnut, Nikita Ivkin, and David P. Woodruﬀ. Beating
+CountSketch for Heavy Hitters in Insertion Streams. In Proceedings of the 48th Annual ACM Sym-
+posium on Theory of Computing (STOC), to appear, 2016. Full version at arXiv abs/1511.00661.
+
+[BDW16] Arnab Bhattacharyya, Palash Dey, and David P. Woodruﬀ. An optimal algorithm for ℓ1-heavy
+
+hitters in insertion streams and related problems. CoRR, abs/1511.00661, 2016.
+
+[BM81]
+
+[BM91]
+
+[BO13]
+
+Robert S. Boyer and J. Strother Moore. A fast majority vote algorithm. Technical Report
+Technical Report ICSCA-CMP-32, Institute for Computer Science, University of Texas, 1981.
+
+Robert S. Boyer and J. Strother Moore. MJRTY: A fast majority vote algorithm. In Automated
+Reasoning: Essays in Honor of Woody Bledsoe, pages 105–118, 1991.
+
+Vladimir Braverman and Rafail Ostrovsky. Approximating large frequency moments with pick-
+and-drop sampling. In Approximation, Randomization, and Combinatorial Optimization. Algo-
+rithms and Techniques, pages 42–57. Springer, 2013.
+
+[CCF04] Moses Charikar, Kevin C. Chen, and Martin Farach-Colton. Finding frequent items in data
+
+streams. Theor. Comput. Sci., 312(1):3–15, 2004.
+
+[CCM10] Amit Chakrabarti, Graham Cormode, and Andrew McGregor. A near-optimal algorithm for
+
+estimating the entropy of a stream. ACM Transactions on Algorithms, 6(3), 2010.
+
+[CLRS09] Thomas H. Cormen, Charles E. Leiserson, Ronald L. Rivest, and Cliﬀord Stein. Introduction to
+
+Algorithms. MIT Press, 3rd edition, 2009.
+
+[CM05]
+
+[CW79]
+
+Graham Cormode and S. Muthukrishnan. An improved data stream summary: the count-min
+sketch and its applications. J. Algorithms, 55(1):58–75, 2005.
+
+Larry Carter and Mark N. Wegman. Universal classes of hash functions. J. Comput. Syst. Sci.,
+18(2):143–154, 1979.
+
+[DLM02] Erik D. Demaine, Alejandro L´opez-Ortiz, and J. Ian Munro. Frequency estimation of Internet
+packet streams with limited space. In Proceedings of the 10th Annual European Symposium on
+Algorithms (ESA), pages 348–360, 2002.
+
+[Dud67] Richard M. Dudley. The sizes of compact subsets of Hilbert space and continuity of Gaussian
+
+processes. J. Functional Analysis, 1:290–330, 1967.
+
+[GR09]
+
+Parikshit Gopalan and Jaikumar Radhakrishnan. Finding duplicates in a data stream. In Pro-
+ceedings of the Twentieth Annual ACM-SIAM Symposium on Discrete Algorithms (SODA), pages
+402–411, 2009.
+
+[Haa82]
+
+Uﬀe Haagerup. The best constants in the Khintchine inequality. Studia Math., 70(3):231–283,
+1982.
+
+13
+
+[HNO08] Nicholas J. A. Harvey, Jelani Nelson, and Krzysztof Onak. Sketching and streaming entropy via
+approximation theory. In 49th Annual IEEE Symposium on Foundations of Computer Science
+(FOCS), pages 489–498, 2008.
+
+[IPW11] Piotr Indyk, Eric Price, and David P. Woodruﬀ. On the power of adaptivity in sparse recovery.
+In IEEE 52nd Annual Symposium on Foundations of Computer Science (FOCS), pages 285–294,
+2011.
+
+[IW05]
+
+[JST11]
+
+Piotr Indyk and David P. Woodruﬀ. Optimal approximations of the frequency moments of data
+streams. In Proceedings of the 37th Annual ACM Symposium on Theory of Computing (STOC),
+pages 202–208, 2005.
+
+Hossein Jowhari, Mert Sa˘glam, and G´abor Tardos. Tight bounds for Lp samplers, ﬁnding du-
+plicates in streams, and related problems. In Proceedings of the 30th ACM SIGMOD-SIGACT-
+SIGART Symposium on Principles of Database Systems (PODS), pages 49–58, 2011.
+
+[KMN11] Daniel Kane, Raghu Meka, and Jelani Nelson. Almost optimal explicit Johnson-Lindenstrauss
+In Approximation, Randomization, and Combinatorial Optimization. Algorithms and
+
+families.
+Techniques, pages 628–639. Springer, 2011.
+
+[KSP03] Richard M. Karp, Scott Shenker, and Christos H. Papadimitriou. A simple algorithm for ﬁnding
+
+frequent elements in streams and bags. ACM Trans. Database Syst., 28:51–55, 2003.
+
+[MAE05] Ahmed Metwally, Divyakant Agrawal, and Amr El Abbadi. Eﬃcient computation of frequent and
+top-k elements in data streams. In Proceedings of the 10th International Conference on Database
+Theory (ICDT), pages 398–412, 2005.
+
+[MG82]
+
+Jayadev Misra and David Gries. Finding repeated elements. Sci. Comput. Program., 2(2):143–
+152, 1982.
+
+[MM12] Gurmeet Singh Manku and Rajeev Motwani. Approximate frequency counts over data streams.
+
+PVLDB, 5(12):1699, 2012.
+
+[Mut05]
+
+S. Muthukrishnan. Data streams: Algorithms and applications. Foundations and Trends in
+Theoretical Computer Science, 1(2), 2005.
+
+[MW10] Morteza Monemizadeh and David P. Woodruﬀ. 1-pass relative-error Lp-sampling with applica-
+tions. In Proceedings of the Twenty-First Annual ACM-SIAM Symposium on Discrete Algorithms
+(SODA), pages 1143–1160, 2010.
+
+A Pick-and-Drop counter example
+
+We begin with a brief description of the Pick-and-Drop algorithm and refer the reader to [BO13] for the full
+details. Afterwards we will describe a stream where the algorithm fails, with probability at least 1 − n−1/8,
+to ﬁnd a ℓ2 heavy hitter and give some intuition about why the algorithm has this behavior. That is, the
+probability the algorithm succeeds is inverse polynomially small.
+
+There is a parameter to the algorithm t and the algorithm begins by partitioning the stream into m/t
+consecutive intervals of t updates each. The value of t is chosen such that m/t is roughly the smallest
+frequency of a heavy hitter that we wish to ﬁnd. Hence, the average number of heavy hitter updates per
+interval is Ω(1). In each interval, independently, a position T ∈ {1, 2, . . . , t} is chosen at random and the
+item in the T th position within the interval is sampled. We also count how many times the sampled item it
+appears within {T, T + 1, . . . , t}. Next, the following “competition” is performed. We traverse the intervals
+sequentially from the ﬁrst to the last and maintain a global sample and counter. Initially, the global sample
+is the sample from the ﬁrst interval and the global counter is the counter from the ﬁrst interval. For each
+
+14
+
+future interval i, two options are possible: (1) the global sample is replaced with the sample from i and the
+global counter is replaced with the counter from interval i, or (2) the global sample remains unchanged and
+the global counter is increased by the number of times the global sample item appears in interval i. Also,
+the algorithm maintains X which is the current number of intervals for which the current global counter has
+not been replaced. If the maximum between X and the counter from the ith interval is greater than the
+global counter then (1) is executed, otherwise (2) is executed.
+
+Consider the following counter example that shows Pick-and-Drop cannot ﬁnd ℓ2 heavy hitters in O(1)
+words. f ∈ R2n is a frequency vector where one coordinate H has frequency √n, n elements have frequency
+1, and √n elements have frequency n1/4, call the latter “pseudo-heavy”. The remaining coordinates of f
+are 0. Consider the stream that is split into t intervals B1, . . . , Bt where t = √n and each interval has size
+Θ(t). The items are distributed as follows.
+
+appearing n1/4 times and appearing in no other interval.
+
+• Each interval w where w = qn1/4 for q = 1, 2, . . . , n1/4, is ﬁlled with n1/4 pseudo-heavy elements each
+• Each interval w + h, for h = 1, 2, . . . , n1/8 contains n1/8 appearances of H and remaining items that
+• Each interval w + h, for h = n1/8 + 1, . . . , n1/4 − 1 contains items that appear only once in the stream.
+Obviously, a pseudo-heavy element will be picked in every “w interval”. In order for it to be beaten by H, its
+count must be smaller than n1/8 and H must be picked from one of the n1/8 intervals immediately following.
+
+appear only once in the stream.
+
+The intersection of these events happens with probability no more than n−1/8(cid:16)n1/8 · n1/8
+
+n1/2(cid:17) = n−3/8. As
+Note that the algorithm cannot be ﬁxed by choosing other values of t in the above example. If t ≫ √n
+
+there are only n1/4 “w intervals”, the probability that the algorithm outputs H is smaller than n−1/8.
+
+then H might be sampled with higher probability but the pseudo-heavy elements will also have higher
+probabilities and the above argument can be repeated with a diﬀerent distribution in the intervals.
+If
+
+t ≪ √n then the probability to sample H in any of the rounds becomes too small.
+
+This counterexample is not contrived—it shows why the whole Pick-and-Drop sampling algorithm fails
+to shed any light on the ℓ2 heavy hitters problem. Let us explain why the algorithm will not work in
+polylogarithmic space for k = 2. Consider the case when the global sample is h 6= H and the global counter
+In this case, the global sample can “kill” fh appearances of H in the next fh intervals, by the
+is fh.
+description of the algorithm. The probability to sample h is fh/t, so the expected number of appearances of
+h/t = F3/t. In the algorithm, we typically choose t = √F1.
+H that will be killed is upper bounded by Ph f 3
+Consider the case when F1 = Θ(n), F2 = Θ(n) but F2 = o(F3). In this case the algorithm needs fH to be
+at least CF3/√F2 for a constant C. This is impossible if f 2
+H = Θ(F2). For t = o(√n) the probability that
+H is sampled becomes o(1). For t = ω(√n) we need a smaller decay for H to survive until the end in which
+case the above analysis can be repeated with the new decay factor for pseudo-heavy elements.
+
+15
+
+

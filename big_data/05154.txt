@@ -1,0 +1,740 @@
+2D Discrete Fourier Transform with Simultaneous
+Edge Artifact Removal for Real-Time Applications
+
+Faisal Mahmood∗†, M¨art Toots†, Lars-G¨oran ¨Ofverstedt and Ulf Skoglund∗
+
+Structural Cellular Biology Unit, Okinawa Institute of Science & Technology (OIST), Okinawa, Japan.
+
+Email: {faisal.mahmood, mart.toots, lg.ofverstedt, ulf.skoglund}@oist.jp
+
+†Equal Contribution, ∗ Corresponding Authors
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+6
+1
+
+ 
+ 
+]
+
+V
+C
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+4
+5
+1
+5
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Abstract—Two-Dimensional (2D) Discrete Fourier Transform
+(DFT) is a basic and computationally intensive algorithm, with
+a vast variety of applications. 2D images are, in general, non-
+periodic, but are assumed to be periodic while calculating their
+DFTs. This leads to cross-shaped artifacts in the frequency
+domain due to spectral leakage. These artifacts can have critical
+consequences if the DFTs are being used for further processing.
+In this paper we present a novel FPGA-based design to calcu-
+late high-throughput 2D DFTs with simultaneous edge artifact
+removal. Standard approaches for removing these artifacts using
+apodization functions or mirroring, either involve removing
+critical frequencies or a surge in computation by increasing image
+size. We use a periodic-plus-smooth decomposition based artifact
+removal algorithm optimized for FPGA implementation, while
+still achieving real-time (≥23 frames per second) performance for
+a 512×512 size image stream. Our optimization approach leads
+to a signiﬁcant decrease in external memory utilization thereby
+avoiding memory conﬂicts and simpliﬁes the design. We have
+tested our design on a PXIe based Xilinx Kintex 7 FPGA system
+communicating with a host PC which gives us the advantage to
+further expand the design for industrial applications.
+
+Keywords—2D FFT, Discrete Fourier Transform, Fast Fourier
+Transform, Edge Artifact Removal, FPGA, High-level synthesis,
+Boundary Effect
+
+I.
+
+INTRODUCTION
+
+Discrete Fourier Transform (DFT) is a commonly used
+and vitally important function for a vast variety of appli-
+cations including, but not limited to digital communication
+systems, image processing, and biomedical imaging. Fourier
+image analysis simpliﬁes computations by converting complex
+convolution operations in the spatial domain to simple multi-
+plications in the frequency domain. Due to their computational
+complexity, DFTs often become a computational constraint
+for applications requiring high throughput and near real-time
+operations. The Cooley-Tukey Fast Fourier Transform (FFT)
+algorithm [1], ﬁrst proposed in 1965, reduces the complexity
+of DFTs from O(N 2) to O(N logN ) for a 1D DFT. However,
+in the case of 2D DFTs, 1D FFTs have to be computed in two-
+dimensions, increasing the complexity to O(N 2logN ), thereby
+making 2D DFTs a signiﬁcant bottleneck for real-time machine
+vision applications [2].
+
+There are several resource-efﬁcient, high-throughput im-
+plementations of 2D DFTs. Most FPGA based 2D FFT im-
+plementations rely upon repeated invocations of 1D FFTs by
+row and column decomposition (RCD) with efﬁcient use of
+external memory [2][3][4]. Many of these achieve real-time
+or near real-time performance (≥23 frames per second for a
+standard 512 × 512 image).
+
+978-1-4673-9091-0/15/$31.00 c(cid:13)2015 IEEE.
+
+While calculating 2D DFTs it is assumed that the image is
+periodic, which is usually not the case. The non-periodic nature
+of the image leads to artifacts in the Fourier transform, usually
+known as edge artifacts or series termination errors. These ar-
+tifacts appear as several crosses of high-amplitude coefﬁcients
+in the frequency domain, as seen in [6]. Such edge artifacts can
+be passed to subsequent stages of processing and in biomedical
+applications they may lead to critical misinterpretations of
+results. No current 2D FFT FPGA implementation addresses
+this problem directly. These artifacts may be removed during
+pre-processing, using mirroring, windowing, zero padding or
+post-processing, e.g., ﬁltering techniques; however, these tech-
+niques are usually computationally intensive and often tend
+to modify the transform. The most common approach is by
+ramping the image at corner pixels to slowly attenuate the
+edges. Ramping is usually accomplished by an apodization
+function such as a Tukey (tapered cosine) or a Hamming
+window, which smoothly reduces the intensity to zero. Such
+an approach can be implemented on an FPGA as a pre-
+processing operation by storing the window function in a
+Look-up Table (LUT) and multiplying it with the image stream
+before calculating the FFT [5]. Although, this approach is
+not extremely computationally intensive for small images, it
+inadvertently removes necessary information from the image.
+Loss of this information may have serious consequences if the
+image is being further processed with several other images to
+reconstruct a ﬁnal image that is used for diagnostics or other
+decision-critical applications. Another common method is by
+mirroring the image from N ×N to 2N ×2N. Doing so makes
+the image periodic, thereby removing edge artifacts. However,
+this not only increases the size of the image by 4x, but also
+makes the transform symmetric, which generates an inaccurate
+phase component.
+
+Most RCD-based 2D FFT FPGA implementations have two
+major design challenges: 1) The 1D FFT implementation needs
+to have a reasonably high-throughput and needs to be resource
+efﬁcient. 2) External DRAM needs to be efﬁciently addressed
+and have a high-bandwidth because images are usually large
+and intermediate storage is required between row and column
+1D FFT operations.
+
+Periodic plus smooth decomposition (PSD) [6], described
+in section II, provides an efﬁcient solution for edge artifact
+removal from 2D DFTs with minimal amputation of useful
+information from the image. In section III, we describe an
+optimization of PSD for FPGA implementation, which reduces
+the number of 1D FFT invocations and requires less frequent
+access to external DRAM. In section IV we further describe
+the hardware set-up and propose an architecture for optimized
+
+PSD and suggest means for generalizing it. Section V presents
+experimental results and conclusions.
+
+II. PERIODIC PLUS SMOOTH DECOMPOSITION FOR EDGE
+
+ARTIFACT REMOVAL
+
+Periodic plus smooth decomposition (PSD) involves de-
+composing the image into a periodic and smooth component.
+The smooth component is calculated from the boundary of
+the image and is then subtracted from the image to derive the
+periodic component [6].
+
+Let us have discrete n by m gray-scale image I on a ﬁnite
+domain Ω = {0, 1, . . . , n−1}×{0, 1, . . . , m−1}. The discrete
+Fourier transform (DFT) of I is deﬁned as
+
+(cid:88)
+
+(i,j)∈Ω
+
+(cid:18)
+
+(cid:19)(cid:19)
+
+(cid:18) si
+
+n
+
++
+
+tj
+m
+
+ˆI(s, t) =
+
+I(i, j) exp
+
+−i2π
+
+This is equivalent to a matrix multiplication W IV , where
+
+
+
+1
+w
+w2
+. . .
+
+1
+w2
+w4
+. . .
+
+1
+1
+1
+. . .
+1 wn−2 w2(n−2)
+1 wn−1 w2(n−1)
+
+1
+
+wn−1
+w2(n−1)
+
+. . .
+. . .
+. . .
+. . .
+. . . w(n−2)(n−1)
+. . . w(n−1)(n−1)
+
+. . .
+
+(cid:18)
+
+(cid:19)k
+
+(cid:18)
+
+(cid:19)
+
+W =
+
+and
+
+(1)
+
+ (2)
+
+Fig. 1.
+1a) An image with non-periodic boundary. 1b) 2D DFT of 1a. 1c)
+DFT of the Smooth Component i.e. the removed artifacts from 1a. 1d) Periodic
+Component i.e DFT of 1a with Edge Artifacts removed.
+
+
+
+It is obvious that the structure of the border image B is simple
+with nonzero values only in the edges as shown below:
+
+b11
+b21
+. . .
+
+bn−1,1
+
+bn1
+
+b12
+0
+. . .
+0
+−b12
+
+b1,m−1
+
+. . .
+b1m
+−b21
+. . .
+. . .
+. . .
+−bn−1,1
+. . .
+. . . −b1,m−1 −bnm
+
+0
+. . .
+0
+
+(6)
+The DFT of the smooth component S can be then found by
+the following formula:
+
+ .
+
+ˆS(s, t) =
+
+ˆB(s, t)
+
+2 cos 2πs
+
+n + 2 cos 2πt
+
+m − 4
+
+,
+
+∀(s, t) ∈ Ω\{(0, 0)}.
+(7)
+
+The DFT of the image I with edge artifacts removed is
+then ˆP = ˆI − ˆS. Figures 1c and 1d show the DFT of the
+smooth and periodic components, respectively.
+
+III. PSD OPTIMIZATION FOR FPGA IMPLEMENTATION
+
+In this section we optimize the original PSD algorithm
+so that it can be effectively conﬁgured on an FPGA. This is
+accomplished by using inherent symmetry between rows and
+columns to reduce the number of 1D FFT invocations and min-
+imizie utilization of external DRAM. On inspecting equation
+(6) we realize that the boundary image B is symmetrical in
+the sense that boundary rows and columns are an algebraic
+negation of each other. An FFT of a column vector v with
+length n is W v, where W is given in eq. (4). The column-
+wise FFT of the matrix B is then
+
+ˆB = W B.
+
+(8)
+
+wk = exp
+
+−i
+
+2π
+n
+
+= exp
+
+−i
+
+2πk
+n
+
+.
+
+(3)
+
+B = R+C =
+
+V has the same structure as W but is m-dimensional. Since
+wk has period n which means that wk = wk+ln , ∀k, l ∈ N
+and therefore,
+1
+1
+w2
+1
+w4
+1
+. . .
+. . .
+1 wn−2 wn−4
+1 wn−1 wn−2
+
+. . .
+. . . wn−2 wn−1
+. . . wn−4 wn−2
+. . .
+. . .
+w2
+. . .
+w1
+. . .
+
+ (4)
+
+
+
+1
+w
+w2
+. . .
+
+. . .
+w4
+w2
+
+W =
+
+1
+
+1
+
+Since in general I is not (n, m)-periodic, there will be high
+amplitude edge artifacts present in the DFT stemming from
+sharp discontinuities between the opposing edges of the image
+as shown in ﬁgure 1b. Moisan [6] proposed a decomposition
+of I into a periodic component P , that is periodic and captures
+the essence of the image with all high frequency details,
+and a smoothly varying background S,
+that recreates the
+discontinuities at the borders. So, I = P + S. Periodic plus
+smooth decomposition can be computed by ﬁrst constructing a
+border image B = R + C, where R represents the boundary
+discontinuities when transitioning row-wise and C when going
+column-wise
+
+(cid:26)I(n − 1 − i, j) − I(i, j),
+(cid:26)I(i, m − 1 − j) − I(i, j),
+
+0,
+
+R(i, j) =
+
+C(i, j) =
+
+0,
+
+i = 0 or i = n − 1
+otherwise
+j = 0 or j = m − 1
+otherwise
+
+(5)
+
+(a)(b)(c)(d)TABLE I.
+
+COMPARING MIRRORING, PSD AND OPSD
+
+Algorithm
+
+DRAM Access
+
+Points
+
+DFT
+
+Points
+
+Mirroring
+P+S Decomposition (PSD)
+Optimized PSD (Proposed)
+
+8NM
+4NM
+3NM + N + M − 1
+
+8NM
+4NM
+3NM + M
+
+Fig. 3. Block diagram of a PXIe based multi-FPGA system with a host PC
+controller connected through a high-speed bus on a PXIe chassis.
+
+IV. FPGA IMPLEMENTATION OF OPTIMIZED PSD
+
+A. Hardware Conﬁguration
+
+Since 2D DFTs are usually used for simplifying convo-
+lution operations in complex image processing and machine
+vision systems we needed to prototype our design on a system
+that is expandable for next levels of processing. For rapid-
+prototyping of our proposed optimized periodic-plus-smooth
+decomposition algorithm we used a PXIe (PCI eXtentions
+for Industry express)-based reconﬁgurable system. PXIe is an
+industrial extension of a PCI system with an enhanced bus
+structure that gives each connected device dedicated access to
+the bus with a maximum throughput of 4 GB/s. This allows
+a high-speed dedicated link between a host PC and several
+FPGAs. We used a National Instruments FlexRIO (Flexible
+Reconﬁgurable I/O) PXIe-7976R FPGA board plugged into
+a PXIe chassis. PXIe-7976R is equipped with a Kintex 7
+FPGA and 2 GB external DRAM with data bandwidth upto
+10.5 GB/s. PXIe FlexRIO FPGA boards are very adaptable
+and can be used to achieve high-throughput since they allow
+direct data transfer between multiple FPGA at rates as high as
+1.5 GB/s. This can signiﬁcantly simplify multi-FPGA systems,
+which often communicate via a host PC. This feature allows
+expansion of our system to further processing stages, making
+it ﬂexible for a variety of applications. Figure 3 shows a basic
+overview of a PXIe-based, multi-FPGA system with a host
+PC controller connected through a high-speed bus on a PXIe
+chassis.
+
+B. Basic Architecture
+
+Most 2D FFT implementations on FPGAs use row and col-
+umn decomposition (RCD) with intermediate external DRAM
+storage. Acceleration of RCD-based 2D FFTs is usually de-
+pendent on the throughput of the 1D FFT used for column-
+by-column and row-by-row 1D FFT computations. This RCD
+for a N × M image requires computation of N row-wise
+and M column-wise 1D FFTs. This means M N (or N 2
+if M = N) values must be stored after the ﬁrst (row
+or column)-wise computations. Since 2D FFTs are usually
+calculated for large images, which cannot be stored on the
+limited embedded-block RAM, external memory must be used.
+Hence, acceleration also depends on bandwidth and efﬁcient
+
+Fig. 2.
+Graphs showing DRAM access and number of DFT points to
+be computed with increasing image size for Mirroring (black), Periodic
+Plus Smooth Decomposition (blue) and our proposed Optimized Period Plus
+Smooth Decomposition (red).
+
+It can be shown that
+{2, 3, . . . , m − 1} is
+
+the 1D FFT of the column j ∈
+
+
+
+ = b1jν ,
+
+0
+
+ˆB·j = W B·j =b1j
+
+1 − wn−1
+1 − wn−2
+. . .
+1 − w2
+1 − w
+The 1D FFT of the last column B·m is
+ˆB·m = W B·m
+
+(9)
+
+(10)
+
+(11)
+
+ˆB·m = − ˆB·1 + (b11 + b1m)ν .
+So, the column-wise FFT of the matrix B is
+
+b1,m−1ν − ˆB·1 + (b11 + b1m)ν(cid:1) .
+
+ˆB =(cid:0) ˆB·1
+
+b12ν . . .
+
+(12)
+To compute the column-by-column 1D FFT of the matrix,
+B, we only have to compute the FFT of the ﬁrst vector
+and then use the appropriately scaled vector, ν, to derive
+the remainder of the columns. The row-by-row FFT has to
+be calculated normally. By reducing column-by-column 1D
+FFT computations for the boundary image, this method can
+signiﬁcantly reduce the number of 1D FFT invocations and
+reduce DRAM access for an FPGA-based implementation.
+This can be implemented by temporarily storing the initial
+vector ˆB·1 and scaling factors b1j in the block RAM/register
+memory, drastically reducing DRAM access and lowering the
+number of required 1D FFT invocations.
+
+For a N × M image, this can reduce DRAM access from
+4N M points to 3N M + N + M − 1 points and can reduce
+the number of 1D FFT invocations from to 1 column vector
+rather than M column vectors while calculating the column-by-
+column component of the 2D FFT. In other words, the number
+of DFT points to be computed can be reduced from 4N M to
+3N M +M. Table I shows a comparison of Mirroring, PSD and
+our proposed Optimized PSD (OPSD) with respect to DRAM
+access points and DFT points. Figure 2 graphically shows that
+our optimized PSD method can signiﬁcantly reduce reading
+from external memory and can reduce the overall number of
+DFT computations required.
+
+External I/OPXIe Host PC ControllerDisplay DevicePXIe FPGA Board 1…High-throughput PXIe BUSPXIe ChassisExternal I/OPXIe FPGA Board 2External I/OPXIe FPGA Board 3External I/Oaddressing of external memory. For small images block RAM
+or memory implemented via registers may be used as opposed
+to external memory. Register memory is usually faster and
+easier to use. Unlike external memory,
+it does not have
+limitations in terms of the number of available channels and
+bandwidth. However, such an approach is resource-intensive if
+the image is large. Uzun [3] presented an architecture for real-
+time 2D FFT computations using several 1D FFT processors
+with shared external RAM. For our 2D FFT implementation
+we also used an approach based on RCD with multi-core
+1D FFTs. We needed a 1D FFT implementation which did
+not require signiﬁcant resources to achieve reasonably high
+throughput. After comparing several 1D FFT implementations
+including LabView FPGA’s own standard implementation, we
+used an Inner Loop Unrolling Technique (ILUT) [2]. A 1D
+FFT of length N has logN FFT stages and each stage has N/2
+butterﬂy units. ILUT unrolls a single FFT stage by executing
+several butterﬂy units in parallel. Figure 4 shows a basic
+ﬂow of a 2D FFT implementation using ILUT. Local memory
+shown in Figure 4 is used to buffer data between external
+memory and 1D FFT cores. This local memory is divided
+into read and write components and is implemented using
+FPGA slices. This reserves block RAM (BRAM) for temporary
+storage of vectors required for calculating the 2D FFT of the
+boundary image. The Control Unit (CU) organizes scheduling
+of transferring data between local and external memory.
+
+As shown mathematically in the previous section, the initial
+row-wise FFTs for the boundary image can be calculated by
+computing the 1D FFT of the ﬁrst (boundary) vector and the
+FFTs of reaming vectors can be computed by appropriate
+scaling of this vector. The boundary image is calculated in
+the host PC. The entire boundary image does not need to be
+transferred to the FPGA, we only need the boundary column
+vector for 1D FFT calculation of the ﬁrst and last column.
+We also need the boundary row vector for appropriate scaling
+of ˆv for the 1D FFT of every column between the ﬁrst and
+last columns. To minimize data transfer between the host and
+the FPGA we associate an extra row and a column vector
+at the end of each image frame being transferred. So when
+transferring a N × M image frame, the number of data points
+sent from the host PC is N M + N + M. Row and column
+vectors of the boundary image are stored in block RAM
+(BRAM) while the image frame is directly stored in external
+DRAM. This allows column-by-column 1D FFT calculations
+of the boundary image to be processed in parallel with FFT
+computations of the actual image. A control unit schedules all
+read-write operations between external and local memories.
+
+V. RESULTS
+
+Table II compares several different RCD-based 2D FFT
+hardware implementations. None of the previous implemen-
+tations use periodic-plus-smooth decomposition to simultane-
+ously remove edge artifacts. Our implementation effectively
+performs twice the number of 1D FFT computations (for
+the original and boundary image) for each image frame, but
+requires only a fraction of higher run time. As demonstrated
+above, this acceleration has been achieved by parallelization
+of 2D FFT calculations for the original and boundary images
+and by reducing the external DRAM access by optimizing the
+original periodic-plus-smooth decomposition algorithm. Our
+
+Fig. 4. Block diagarm of 2D FFT with ILUT showing data transfer between
+external memory and local memory schaduled via a Control Unit (CU)
+
+TABLE II.
+
+COMPARISON OF OPSD1 2D FFT WITH REGULAR RCD-BASED
+
+IMPLEMENTATIONS
+
+Platform
+
+SEAR 2
+Yes/No
+
+Precision
+
+Runtime
+
+bits
+
+512x512(ms)
+
+1024x1024(ms)
+
+16 (ﬁxed)
+Kintex 7, 28nm (ours)
+32 (single)
+Vertex-5, 65nm (BEE 3)[4]
+16 (ﬁxed)
+Vertex-E, 180nm [3]
+32 (single)
+ASIC, 180nm [8]
+1 Optimized Periodic + Smooth Decomposition (PCD)
+2 Simultaneous Edge Artifact Removal
+
+Yes
+No
+No
+No
+
+32.4
+24.9
+28.6
+21.0
+
+116.7
+102.6
+76.9
+-
+
+methods were tested using extensive synthesis and benchmark-
+ing using a Xilinx Kintex 7 FPGA communicating with a host
+PC on a high-speed PXIe bus.
+
+VI. ACKNOWLEDGEMENTS
+
+The authors would like to thank National Instruments Re-
+search for technical help and Shizuka Kuda for her invaluable
+support with logistical arrangements.
+
+REFERENCES
+
+[1] Cooley, James W., and John W. Tukey. An algorithm for the machine
+calculation of complex Fourier series. Mathematics of computation 19.90
+(1965): 297-301.
+
+[2] Kee, H., Bhattacharyya, S. S., Petersen, N., & Kornerup, J. Resource-
+efﬁcient acceleration of 2-dimensional Fast Fourier Transform computa-
+tions on FPGAs. Distributed Smart Cameras, 2009. ICDSC 2009. Third
+ACM/IEEE International Conference on. IEEE, 2009.
+
+[3] Uzun, Isa Servan, Abbes Amira, and Ahmed Bouridane. FPGA imple-
+mentations of fast Fourier transforms for real-time signal and image
+processing. Vision, Image and Signal Processing, IEE Proceedings-. Vol.
+152. No. 3. IET, 2005.
+
+[4] Yu, Chi-Li, et al. Multidimensional DFT IP generator for FPGA plat-
+forms. Circuits and Systems I: Regular Papers, IEEE Transactions on
+58.4 (2011): 755-764.
+
+[5] Bailey, Donald G. Design for embedded image processing on FPGAs.
+
+John Wiley and Sons, 2011: 323-324.
+
+[7]
+
+[6] Moisan, Lionel. Periodic plus smooth image decomposition. Journal of
+
+Mathematical Imaging and Vision 39.2 (2011): 161-179.
+Jung, Hyunuk, and Soonhoi Ha. Hardware synthesis from coarse-grained
+dataﬂow speciﬁcation for fast HW/SW cosynthesis. Proceedings of the
+2nd IEEE/ACM/IFIP international conference on Hardware/software
+codesign and system synthesis. ACM, 2004.
+
+[8] Eonic PowerFFT ASIC [Online]. Available: http://www.eonic.com/
+
+CameraHost PCExternal MemoryFPGA Board 1FPGADMA FIFOFIFO IN (Local Memory - Write)FIFO OUT (Local Memory – Read)1D FFT1 1D FFT2 .. 1D FFTnTransposeTransposeTransposeTransposeTransposeTransposeTransposeTransposeTransposePXIe BUSCU

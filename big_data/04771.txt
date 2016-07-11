@@ -1,0 +1,920 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+5
+1
+
+ 
+ 
+]
+
+V
+C
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+1
+7
+7
+4
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+A Neural Approach to Blind Motion Deblurring
+
+Ayan Chakrabarti
+
+Toyota Technological Institute at Chicago
+
+ayanc@ttic.edu
+
+Abstract. We present a new method for blind motion deblurring that
+uses a neural network trained to compute estimates of sharp image
+patches from observations that are blurred by an unknown motion ker-
+nel. Instead of regressing directly to patch intensities, this network learns
+to predict the complex Fourier coeﬃcients of a deconvolution ﬁlter to be
+applied to the input patch for restoration. For inference, we apply the
+network independently to all overlapping patches in the observed image,
+and average its outputs to form an initial estimate of the sharp image.
+We then explicitly estimate a single global blur kernel by relating this
+estimate to the observed image, and ﬁnally perform non-blind deconvo-
+lution with this kernel. Our method exhibits accuracy and robustness
+close to state-of-the-art iterative methods, while being much faster when
+parallelized on GPU hardware.
+
+Keywords: Blind deconvolution, motion deblurring, deep learning.
+
+1 Introduction
+
+Photographs captured with long exposure times using hand-held cameras are of-
+ten degraded by blur due to camera shake. The ability to reverse this degradation
+and recover a sharp image is attractive to photographers, since it allows rescuing
+an otherwise acceptable photograph. Moreover, if this ability is consistent and
+can be relied upon post-acquisition, it gives photographers more ﬂexibility at
+the time of capture, for example, in terms of shooting with a zoom-lens without
+a tripod, or trading oﬀ exposure time with ISO in low-light settings. Beginning
+with the seminal work of Fergus et al. [1], the last decade has seen considerable
+progress [2,3,4,5,6,7,8] in the development of eﬀective blind motion deblurring
+methods that seek to estimate camera motion in terms of the induced blur kernel,
+and then reverse its eﬀect. This progress has been helped by the development of
+principled evaluation on standard benchmarks [3,9], that measure performance
+over a large and diverse set of images.
+
+Some deblurring algorithms [4,5] emphasize eﬃciency, and use inexpensive
+processing of image features to quickly estimate the motion kernel. Despite their
+speed, these methods can yield remarkably accurate kernel estimates and achieve
+high-quality restoration for many images, making them a practically useful post-
+processing tool for photographers. However, due to their reliance on relatively
+simple heuristics, they also have poor outlier performance and can fail on a
+signiﬁcant fraction of blurred images. Other methods are iterative—they reason
+
+2
+
+Ayan Chakrabarti
+
+Fig. 1. Neural Blind Deconvolution. Our method uses a neural network trained for
+per-patch blind deconvolution. Given an input patch blurred by an unknown motion
+blur kernel, this network predicts the Fourier coeﬃcients of a ﬁlter to be applied to
+that input for restoration. For inference, we apply this network independently on all
+overlapping patches in the input image, and compose their outputs to form an initial
+estimate of the sharp image. We then infer a single global blur kernel that relates the
+input to this initial estimate, and use that kernel for non-blind deconvolution.
+
+with parametric prior models for natural images and motion kernels, and use
+these priors to successively improve the algorithm’s estimate of the sharp image
+and the motion kernel. The two most successful deblurring algorithms fall [2,3]
+in this category, and while they are able to outperform previous methods by a
+signiﬁcant margin, they also have orders of magnitude longer running times.
+
+In this paper, we explore whether discriminatively trained neural networks
+can match the performance of traditional methods that use generative natural
+image priors, and do so without multiple iterative reﬁnements. Our work is
+motivated by recent successes in the use of neural networks for other image
+restoration tasks (e.g., [10,11,12,13]). This includes methods [12,13] for non-blind
+deconvolution, i.e., restoring a blurred image when the blur kernel is known.
+While the estimation problem in blind deconvolution is signiﬁcantly more ill-
+posed than the non-blind case, these works provide insight into the design process
+of neural architectures for deconvolution.
+
+Recently, Schuler et al. [14] tackled the problem of blind motion deblurring
+using a neural architecture designed to mimic the computational steps of tradi-
+tional iterative deblurring methods. They designed learnable layers to carry out
+extraction of salient local image features and kernel estimation based on these
+features, and stacked multiple copies of these layers to enable iterative reﬁne-
+ment. Remarkably, they were able to train this multi-stage network with relative
+success. However, while their initial results are very encouraging, their current
+
+A Neural Approach to Blind Motion Deblurring
+
+3
+
+performance still signiﬁcantly lags behind the state of the art—especially when
+the unknown blur kernel is large.
+
+In this paper, we propose a new approach to blind deconvolution. At the core
+of our algorithm is a neural network trained to restore individual image patches
+degraded by an unknown motion blur kernel. This network diﬀers from previous
+architectures in two signiﬁcant ways:
+
+1. Rather than formulate the prediction task as blur kernel estimation through
+iterative reﬁnement (as in [14]), or as direct regression to deblurred intensity
+values (as in [10,11,12,13]), we train our network to output the complex
+Fourier coeﬃcients of a deconvolution ﬁlter to be applied to the input patch.
+2. We use a multi-resolution frequency decomposition to encode the input
+patch, and limit the connectivity of initial network layers based on locality
+in frequency (analogous to convolutional layers that are limited by locality
+in space). This leads to a signiﬁcant reduction in the number of weights to
+be learned during training, which proves crucial since it allows us to suc-
+cessfully train a network that operates on large patches, and therefore can
+reason about large blur kernels (e.g., in comparison to [14]).
+
+For whole image restoration, the network is independently applied to every
+overlapping patch in the input image, and its outputs are composed to form an
+initial estimate of the latent sharp image. Despite reasoning with patches inde-
+pendently and not sharing information about a common global motion kernel, we
+ﬁnd that this procedure by itself performs surprisingly well. We show that these
+results can be further improved by using the restored image to compute a global
+blur kernel estimate, which is ﬁnally used for non-blind deconvolution. Evalua-
+tion on a standard benchmark [3] demonstrates that our approach is competitive
+when considering accuracy, robustness, and running time.
+
+2 Patch-wise Neural Deconvolution
+
+Let y[n] be the observed image of a scene blurred due to camera motion, and
+x[n] the corresponding latent sharp image that we wish to estimate, with n ∈
+Z2 indexing pixel location. The degradation due to blur can be approximately
+modeled as convolution with an unknown blur kernel k:
+
+(cid:88)
+
+y[n] = (x ∗ k)[n] + [n],
+
+k[n] ≥ 0,
+
+k[n] = 1,
+
+(1)
+
+n
+
+where ∗ denotes convolution, and [n] is i.i.d. Gaussian noise.
+
+As shown in Fig. 1, the central component of our algorithm is a neural
+network that carries out restoration locally on individual patches in y[n]. For-
+mally, our goal is to design a network that is able to recover the sharp inten-
+sity values xp = {x[n] : n ∈ p} of a patch p, given as input a larger patch
+yp+ = {x[n] : n ∈ p+}, p+ ⊃ p from the observed image. The larger input is
+necessary since values in xp[n], especially near the boundaries of p, can depend
+on those outside yp[n]. In practice, we choose p+ to be of size 65 × 65, with its
+
+4
+
+Ayan Chakrabarti
+
+central 33× 33 patch corresponding to p. In this section, we describe our formu-
+lation of the prediction task for this network, its architecture and connectivity,
+and our approach to training it.
+
+2.1 Restoration by Predicting Deconvolution Filter Coeﬃcients
+
+As depicted in Fig. 1, the output of our network are the complex Fourier co-
+eﬃcients Gp+[z] ∈ C of a deconvolution ﬁlter, where z ∈ Z2 indexes spatial
+frequency. This ﬁlter is then applied to the discrete Fourier transform (DFT)
+Yp+[z] of the input patch yp+[n]:
+
+ˆXp+[z] = Gp+[z] × Yp+[z].
+
+(2)
+
+Our estimate ˆxp[n] of the sharp image patch is computed by taking the inverse
+discrete Fourier transform (IDFT) of ˆXp+[z], and then cropping out the central
+patch p ⊂ p+. Since x[n] and y[n] are both real valued and k is unit sum, we
+p+[−z], and Gp+[0] = 1. Therefore, the network only needs
+have that Gp+[z] = G∗
+to output (|p+| − 1)/2 unique complex numbers to characterize Gp+, where |p+|
+is the number of pixels in p+.
+
+Our training objective is that the output coeﬃcients Gp+[z] be optimal with
+respect to the quality of the ﬁnal sharp intensities ˆxp[n]. Speciﬁcally, the loss
+function for the network is deﬁned as the mean square error (MSE) between the
+predicted and true sharp intensity values ˆxp[n] and xp[n]:
+(ˆxp[n] − xp[n])2.
+
+L(ˆxp, xp) =
+
+(3)
+
+(cid:88)
+
+n∈p
+
+1
+|p|
+
+Note both the IDFT and the ﬁltering in (2) are linear operations, and therefore
+it is trivial to back-propagate the gradients of (3) to the outputs Gp+[z], and
+subsequently to all layers within the network.
+
+Motivation. As with any neural-network based method, the validation of the
+design choices in our approach ultimately has to be empirical. However, we at-
+tempt to provide the reader with some insight into our motivation for making
+these choices. We begin by considering the diﬀerences between predicting de-
+convolution ﬁlter coeﬃcients and regressing directly to pixel intensities xp[n], as
+was done in most prior neural restoration methods [10,11,12,13]. Indeed, since
+we use the predicted coeﬃcients to estimate xp[n] and deﬁne our loss with re-
+spect to the latter, our overall formulation can be interpreted as a regression to
+xp[n]. However, our approach enforces a speciﬁc parametric form being enforced
+on the learned mapping from yp+[n] to xp[n]. In other words, the notion that the
+sharp and blurred image patches are related by convolution is “baked-in” to the
+network’s architecture. Additionally, providing Yp+[z] separately at the output
+alleviates the need for the layers within our network to retain a linear encoding
+of the input patch all the way to the output.
+
+A Neural Approach to Blind Motion Deblurring
+
+5
+
+Another alternative formulation could have been to set-up the network to
+predict the blur kernel k itself like in [14], which also encodes the convolutional
+relationship between the network’s input and output. However, remember that
+our network works on local patches independently. For many patches, inferring
+the blur kernel may be impossible from local information alone—for example, a
+patch with only a vertical edge would have no content in horizontal frequencies,
+making it impossible to infer the horizontal structure of the kernel. But in these
+cases, it would still be possible to compute an optimal deconvolution ﬁlter and
+restored image patch (in our example, the horizontal frequency values of Gp+[z]
+would not matter). Moreover, our goal is to recover the restored image patch
+and estimating the kernel solves only a part of the problem, since non-blind
+deconvolution is not trivial. In contrast, our predicted deconvolution ﬁlter can
+be directly applied for restoration, and because it is trained with respect to
+restoration quality, the network learns to generate these predictions by reasoning
+both about the unknown kernel and sharp image content.
+
+It may be helpful to consider what the optimal values of Gp+[z] should
+be. One interpretation for these values can be derived from Wiener deconvo-
+lution [15], in which ideal restoration is achieved by applying a ﬁlter using (2)
+with coeﬃcients given by
+
+(cid:16)|K[z]|2 Sp+[z] + σ2
+
+
+
+(cid:17)−1
+
+Gp+[z] =
+
+K∗[z]Sp+[z].
+
+(4)
+
+Here, K[z] is the DFT of the kernel k, and Sp+[z] is the spectral proﬁle of xp+[n]
+(i.e., a DFT of its auto-correlation function). Note that in blind deconvolution,
+both Sp+[z] and K[z] are unknown and iterative algorithms can be interpreted as
+explicitly estimating these quantities through sequential reﬁnement. In contrast,
+our network is discriminatively trained to directly predict the ratio in (4).
+
+2.2 Network Architecture
+
+Our network needs to work with large input patches in order to successfully
+handle large blur kernels. This presents a challenge in terms of the number of
+weights to be learned and the feasibility of training since, as observed by [13] and
+by us in our own experiments, the traditional strategy of making the initial lay-
+ers convolutional with limited support performs poorly for deconvolution. This
+why the networks for blind deconvolution in [12,13] have either used only fully
+connected layers [12], or large oriented on-dimensional convolutional layers [13].
+We adopt a novel approach to parameterizing the input patch and deﬁning
+the connectivity of the initial layers in our network. Speciﬁcally, we use a multi-
+resolution decomposition strategy (illustrated in Fig. 2 (a)) where higher spatial
+frequencies are sampled with lower resolution. We compute DFTs at three dif-
+ferent levels, corresponding to patches of three diﬀerent sizes (17 × 17, 33 × 33,
+and 65 × 65) centered on the input patch, and from each retain the coeﬃcients
+corresponding to 4 < max|z| ≤ 8. Here, max|z| represents the larger magnitude
+of the two components (horizontal and vertical) of the frequency indices in z.
+
+6
+
+Ayan Chakrabarti
+
+Fig. 2. Network Architecture. (a) To limit the number of weights in the network, we
+use a multi-resolution decomposition to encode the input patch into four “bands”,
+containing low-pass (L), band-pass (B1, B2), and high-pass H frequency components.
+Higher frequencies are sampled at a coarser resolution, and computed from a smaller
+patch centered on the input. (b) Our network regresses from this input encoding to
+the complex Fourier coeﬃcients of a restoration ﬁlter, and contains seven hidden layers
+(each followed by a ReLU activation). The connectivity of the initial layers is limited
+to adjacent frequency bands. (c) Our network is trained with randomly generated
+synthetic motion blur kernels of diﬀerent sizes.
+
+This decomposition gives us 104 independent complex coeﬃcients (or 208
+scalars) from each DFT level that we group into “bands”. Note that the indices
+z correspond to diﬀerent spatial frequencies ω for diﬀerent sized DFTs, with
+coeﬃcients from the smaller-size DFTs representing a coarser sampling in the
+frequency domain. Therefore, the three bands above correspond to high- and
+band-pass components of the input patch. We also construct a low-pass band by
+including the coeﬃcients corresponding to max|z| ≤ 4 from the largest (i.e., ,
+65 × 65) decomposition. This band only has 81 scalar components (40 com-
+plex coeﬃcients and a scalar DC coeﬃcient). As suggested in [16], we apply a
+de-correlating linear transform to the coeﬃcients of each band, based on their
+empirical covariance on input patches in the training set.
+
+Note that our decomposition also entails a dimensionality reduction—the
+total number of coeﬃcients in the four bands is lower than the size of the input
+patch. Such a reduction may have been problematic if the network were directly
+
+A Neural Approach to Blind Motion Deblurring
+
+7
+
+regressing to patch intensities. However, we ﬁnd this approximate representation
+suﬃces for our task of predicting ﬁlter coeﬃcients, since the full input patch
+yp+[n] (in the form of its DFT) is separately provided to (2) for the computation
+of the ﬁnal output ˆxp[n].
+
+As depicted in Fig. 2 (b), we use a feed-forward network architecture with
+seven hidden layers to predict the coeﬃcients Gp+[z] from our encoding of the
+observed blurry input patch. Units in the ﬁrst layer are only connected to input
+coeﬃcients from pairs of adjacent frequency bands—with groups of 1024 units
+connected to each pair. Note that these groups do not share weights. We adopt
+a similar strategy for the next layer, connecting units to pairs of adjacent groups
+from the ﬁrst layer. Each group in this layer has 2048 units. Restricting connec-
+tivity in this way, based on locality in frequency, reduces the number of weights
+in our network, while still allowing good prediction in practice. This is not en-
+tirely surprising, since many iterative algorithms (including [2,3]) also divide the
+inference task into sequential coarse-to-ﬁne reasoning at individual scales. All
+remaining layers in our network are fully connected with 4096 units each. Units
+in all hidden layers have ReLU activations [17].
+
+2.3 Training
+
+Our network is trained on a synthetic dataset that is entirely disjoint from the
+evaluation benchmark [3]. This training set is constructed by extracting sharp
+image patches from images in the Pascal VOC 2012 dataset [18], blurring them
+with synthetically generated kernels, and adding Gaussian noise. We set the
+noise standard deviation to 1% to match the noise level in the benchmark [3].
+
+The synthetic motion kernels are generated by randomly sampling six points
+in a limited size grid (we generate an equal number of kernels from grid sizes of
+8 × 8, 16 × 16, and 24 × 24), ﬁtting a spline through these points, and setting
+the kernel values at each pixel on this spline to a value sampled from a Gaussian
+distribution with mean one and standard deviation of half. We then clip these
+values to be positive, and normalize the kernel to be unit sum. Note that the
+above procedure above is as likely to generate a kernel as a translated version of
+itself, which makes it it impossible for the network to predict the phase values
+of Gp+[z] appropriate for both versions. As a ﬁnal crucial step, we ensure that
+the kernels have a “canonical” translation by centering them in a larger window
+of size 41 × 41, so that each kernel’s center of mass (weighted by kernel values)
+is at the center of the window. Figure 2 (c) shows some of the kernels generated
+using this approach.
+
+We construct separate training and validation sets with diﬀerent sharp patches
+and randomly generated kernels. We use about 520,000 and 3,000 image patches
+and 100,000 and 3,000 kernels for the training and validation sets respectively.
+While we extract multiple patches from the same image, we ensure that the
+training and validation patches are drawn from diﬀerent images. To minimize
+disk access, we load the entire set of sharp patches and kernels into memory.
+Training data is generated on the ﬂy by selecting random pairs of patches and
+kernels, and convolving the two to create the input patch. We also use rotated
+
+8
+
+Ayan Chakrabarti
+
+and mirrored versions of the sharp patches. This gives us a near inexhaustible
+supply of training data. Validation data is also generated on the ﬂy, but we
+always choose the same pairs of patches and kernels to ensure that validation
+error can be compared across iterations.
+
+We use stochastic gradient descent for minimizing the loss function (3), with
+a batch-size of 512 and a momentum value of 0.9. We train the network for a
+total of 1.8 million iterations, which takes about 3 days using an NVIDIA Titan
+X GPU. We use a learning rate of 32 for the ﬁrst 800,000 iterations, and then
+2 every 100,000 iterations. We keep track of the validation
+drop it by a factor of
+error across iterations, and at the end of training, use the weights that yielded
+the lowest value of that error.
+
+√
+
+3 Whole Image Restoration
+
+Given an observed blurry image y[n], we consider all overlapping patches yp+ in
+the image, and use our trained network to compute estimates ˆxp of their latent
+sharp versions. We then combines these restored patches to form an initial an
+estimate xN [n] of the sharp image, by setting xN [n] to the average of its estimates
+ˆxp[n] from all patches p (cid:51) n that contain it, using a Hanning window to weight
+the contributions from diﬀerent patches.
+
+While this feed-forward and purely local procedure achieves reasonable restora-
+
+tion, we have so far not taken into account the fact that the entire image has
+been blurred by the same motion kernel. To do so, we compute an estimate of
+the global kernel k[n], by relating the observed image y[n] to our neural-average
+estimate xN [n]. Formally, we estimate this kernel k[n] as
+
+(cid:107)(k ∗ (fi ∗ xN )) − (fi ∗ y)(cid:107)2,
+
+(5)
+
+(cid:88)
+
+i
+
+(cid:88)
+
+k = arg min
+
+subject to the constraint that k[n] > 0 and (cid:80)
+
+n k[n] = 1. We do not assume
+that the size of the kernel is known, and always estimate k[n] within a ﬁxed-size
+support (51 × 51 as is standard for the benchmark [3]). Here, fi[n] are various
+derivative ﬁlters (we use ﬁrst and second order derivatives at 8 orientations).
+Like in [3], we only let strong gradients participate in the estimation process by
+setting values of (fi ∗ xN ) to zero except those at the two percent pixel locations
+with the highest magnitudes.
+
+This approach to estimating a global kernel from an estimate of the latent
+sharp image is fairly standard. But while it is typically used repeatedly within an
+iterative procedure that reﬁnes the estimates of the sharp image as well (e.g., in
+[2,3]), we estimate the kernel only once from the neural average output.
+
+We adopt a relatively simple and fast approach to optimizing (5) under the
+positivity and unit sum constraints on k. Speciﬁcally, we minimize L1 regularized
+versions of the objective:
+
+kλ = arg min
+
+(cid:107)(k ∗ (fi ∗ xN )) − (fi ∗ y)(cid:107)2 + λ
+
+|k[n]|,
+
+(6)
+
+i
+
+n
+
+(cid:88)
+
+A Neural Approach to Blind Motion Deblurring
+
+9
+
+Fig. 3. Examples of per-patch restoration using our network. Shown here are diﬀer-
+ent patches extracted from a blurred image from [3]. For each patch, we show the
+observed blurry patch in the spatial domain, its DFT coeﬃcients Y [z] (in terms of
+log-magnitude), the predicted ﬁlter coeﬃcients G[z] from our network, the DFT of the
+resulting restored patch X[z], and the restored patch in the spatial domain. As com-
+parison, we also show the ground truth sharp image patch and its DFT, as well as the
+common ground truth kernel of the network and its DFT.
+
+for a small range of values for the regularization weight λ. This optimization, for
+each value of λ, can be done very eﬃciently in the Fourier domain using half-
+quadratic splitting [19]. We clip each kernel estimate kλ[n] to be positive, set very
+small or isolated values to zero, and normalize the result to be unit sum. We then
+pick the kernel kλ[n] which yields the lowest value of the original un-regularized
+cost in (5). Given this estimate of the global kernel, we use EPLL [20]—a state-
+of-the-art non-blind deconvolution algorithm—to deconvolve y[n] and arrive at
+our ﬁnal estimate of the sharp image x[n].
+
+4 Experiments
+
+We evaluate our approach on the benchmark dataset of Sun et al. [3], which
+consists of 640 blurred images generated from 80 high quality natural images,
+and 8 real motion blur kernels acquired by Levin et al. [9]. We begin by ana-
+lyzing patch-wise predictions from our neural network, and then compare the
+performance of our overall algorithm to the state of the art.
+
+4.1 Local Network Predictions
+
+Figure 3 illustrates the typical behavior of our trained neural network on indi-
+vidual patches. All patches in the ﬁgure are taken from the same image from [3],
+which means that they were all blurred by the same kernel (the kernel, and its
+
+10
+
+Ayan Chakrabarti
+
+Fourier coeﬃcients, are also shown). However, we see that the predicted restora-
+tion ﬁlter coeﬃcients are qualitatively diﬀerent across these patches.
+
+While some of this variation is due to the fact that the network is reasoning
+with these patches independently, remember from Sec. 2.1 that we expect the
+ideal restoration ﬁlter to vary based on image content. The predicted ﬁlters in
+Fig. 3 can be understood in that context as attempting to amplify diﬀerent sub-
+sets of the frequencies attenuated by the blur kernel, based on which frequencies
+the network believes were present in the original image. Comparing the Fourier
+coeﬃcients of the ground truth sharp patch to our restored outputs, we see that
+our network restores many frequency components attenuated in the observed
+patch, without amplifying noise.
+
+These examples also validate our decision to estimate a restoration ﬁlter
+instead of the blur kernel from individual patches. Most patches have no content
+in entire ranges of frequencies even in their ground-truth sharp versions (most
+notably, the patch in the last row that is nearly ﬂat), which makes estimating
+the corresponding frequency components of the kernel impossible. However, we
+are still able to restore these patches since that just requires identifying that
+those frequency components are absent.
+
+Looking at the restored patches in the spatial domain, we note that while
+they are sharper than the input, they still have a lot of high-frequency infor-
+mation missing. However, remember that even our direct neural estimate xN [n]
+of the sharp image is composed by pooling information from multiple patches
+at each pixel (see Fig. 1, and the supplementary material for examples of these
+estimates). Moreover, our ﬁnal estimates are computed by ﬁtting a global kernel
+estimate to these locally restored outputs.
+
+4.2 Performance Evaluation
+
+Next, we evaluate our overall method and compare it to several recent state-
+of-the-art algorithms [2,3,4,5,6,7,8,14] on the Sun et al. benchmark [3]. Deblur-
+ring quality is measured in terms of the MSE between the estimated and the
+ground truth sharp image, ignoring a ﬁfty pixel wide boundary on all sides in
+the latter, and after ﬁnding the crop of the restored estimate that aligns best
+with this ground truth. Performance on the benchmark is evaluated [2,3] us-
+ing quantiles of the error ratio r between the MSE of the estimated image and
+that of the deconvolving the observed image with the ground truth kernel us-
+ing EPLL [20]. Moreover, images with r ≤ 5 are considered to correspond to
+“successful” restoration [2].
+
+Figure 4 shows the cumulative distribution of the error-ratio for all methods
+on the benchmark. We also report speciﬁc quantiles of the error ratio—mean,
+and outlier performance in terms of 95%-ile and maximum value—as well as the
+success rate of each method in Table 1. The results for [2] and [14] were provided
+by their authors, while those for all other methods are from [3]. Results for all
+methods were obtained using EPLL for blind-deconvolution based on their kernel
+estimates, and are therefore directly comparable to those of our overall method.
+We also report the performance of our initial estimates from just the direct
+
+A Neural Approach to Blind Motion Deblurring
+
+11
+
+x
+≤
+r
+h
+
+t
+i
+
+w
+s
+e
+g
+a
+m
+
+I
+
+%
+
+Fig. 4. Cumulative distributions of the error ratio r for diﬀerent methods on the Sun
+et al. [3] benchmark. These errors were computed after using EPLL [20] for blind de-
+convolution using the global kernel estimates from each algorithm. The only exception
+is the “neural average” version of our method, where the errors correspond to those of
+our initial estimates computed by directly averaging per-patch neural network outputs,
+without reasoning about a global kernel.
+
+Table 1. Quantiles of error-ratio r and success rate (r ≤ 5) for diﬀerent methods
+
+Proposed (Neural Avg.)
+Proposed (Full)
+Michaeli & Irani [2]
+Sun et al. [3]
+Xu & Jia [4]
+Cho & Lee [5]
+Levin et al. [6]
+Schuler et al. [14]
+Krishnan et al. [7]
+Cho et al. [8]
+
+Method Mean
+4.92
+3.01
+2.57
+2.38
+3.63
+8.69
+6.56
+11.78
+11.65
+28.13
+
+95%-ile
+
+9.39
+5.76
+4.49
+5.98
+9.97
+40.59
+15.13
+36.37
+34.93
+89.67
+
+Max
+19.11
+11.04
+9.31
+23.07
+65.33
+111.19
+40.87
+98.95
+133.21
+164.94
+
+Success Rate
+
+61%
+92%
+96%
+93%
+86%
+66%
+47%
+45%
+25%
+12%
+
+neural averaging step in Fig. 4 and Table 1, which did not involve any global
+kernel estimation or the use of non-blind deconvolution with EPLL.
+
+We ﬁnd that the full version of our method performs nearly comparably to
+the two state-of-the-art methods of Michaeli and Irani [2] and Sun et al. [3].
+While our mean errors are higher than those of both and [2] and [3], we have
+a near identical success rate and better outlier performance than [3]. Note that
+our method outperforms the remaining algorithms by a signiﬁcant margin on
+all metrics. The best amongst these is the eﬃcient approach of Xu and Jia [4]
+which is able to perform well on many individual images, but has higher errors
+and succeeds less often on average than our approach and that of [2,3].
+
+Also note that our method signiﬁcantly outperforms the previous neural ap-
+proach of Schuler et al. [14]. In fact, even our direct neural-average estimates are
+
+12.557.51012.51517.52022.52527.53032.53537.5400102030405060708090100Proposed (Full)Proposed (Neural Avg.)Michaeli & IraniSun et al.Xu & JiaCho & LeeLevin et al.Schuler et al.Krishnan et al.Cho et al.12
+
+Ayan Chakrabarti
+
+Fig. 5. Success rates of diﬀerent methods, evaluated over the entire Sun et al. [3]
+dataset, and separately over images blurred with each of the 8 kernels. The kernels are
+sorted according to size (noted on the x-axis).
+
+often better than those from [14]. This is however expected since, as noted in
+[14], their current approach performs poorly on images blurred by large motion
+kernels. This fact is illustrated in Fig. 5, where we compare the success rate of
+diﬀerent methods over individual kernels. We see that [14] actually outperforms
+all other methods at estimating the smallest kernel in the benchmark, but that
+its accuracy drops rapidly with increasing kernel size. In contrast, our method’s
+performance is more consistent across the whole range of kernels in [3] (albeit,
+our worst performance is with the largest kernel in the dataset).
+
+In Fig. 6, we show some examples of estimated kernels and deblurred outputs
+from our method and those from [2,3,4]. In general, we ﬁnd that most of the
+failure cases of [2,3,4] correspond to scenes that are a poor ﬁt to their hand-
+crafted generative image priors—e.g., most of [3,4]’s failure cases correspond to
+images that lack well-separated strong edges. In contrast, our discriminatively
+trained neural network has relatively consistent performance across diﬀerent
+scene types. Please see the supplementary material for more examples, including
+examples of the preliminary estimates from the direct neural averaging step of
+our method.
+
+Running Time. While our method has nearly comparable performance to the
+two state-of-the-art methods [2,3], it oﬀers a signiﬁcant advantage over them
+in terms of speed. For a 1024 × 800 image, a MATLAB implementation of our
+method takes a total of only 65 seconds for kernel estimation using an NVIDIA
+Titan X GPU. The majority of this time, 45 seconds, is taken to compute the ini-
+tial neural-average estimate xN . On the other hand, [2] and [3] take 91 minutes
+and 38 minutes respectively. These times are on an Intel I-7 3.3GHz CPU with
+6 cores with AVX2 SIMD instructions, using the MATLAB/C implementations
+of these methods provided by their authors.
+
+While [2,3]’s running times could potentially be improved if they are reimple-
+mented to use a GPU, their ability to beneﬁt from parallelism is limited by the
+fact that both are iterative techniques whose computations are largely sequen-
+
+All13x1315x1517x1719x1921x2123x2323x2327x270102030405060708090100Success RateProposed (Full)Michaeli & IraniSun et al.Xu & JiaSchuler et al.A Neural Approach to Blind Motion Deblurring
+
+13
+
+Observed
+
+Proposed
+
+M & I [2]
+
+Sun et al. [3]
+
+Xu & Jia [4]
+
+r =1.22
+
+r =3.03
+
+r =11.68
+
+r =19.41
+
+r =2.66
+
+r =1.89
+
+r =8.85
+
+r =6.06
+
+r =2.96
+
+r =5.02
+
+r =1.65
+
+r =1.55
+
+r =3.24
+
+r =1.79
+
+r =1.83
+
+r =18.11
+
+r =3.40
+
+r =2.93
+
+r =4.96
+
+r =3.04
+
+r =10.22
+
+r =5.19
+
+r =2.38
+
+r =1.51
+
+Fig. 6. Example deblurred results from diﬀerent methods. The estimated kernels are
+shown inset, with the ground truth kernel shown with the observed images in the ﬁrst
+column. This ﬁgure is best viewed in the electronic version.
+
+14
+
+Ayan Chakrabarti
+
+tial (in fact, we only saw speed-ups of 1.4X and 3.5X in [2] and [3], respectively,
+when going from one to six CPU cores). In contrast, our method maps naturally
+to parallel architectures and is able to fully saturate the available cores on a
+GPU. Batched forward passes through a neural network are especially eﬃcient
+on GPUs, which is what the bulk of our computation involves—applying the
+local network independently and in-parallel on all patches in the input image.
+
+5 Conclusion
+
+In this paper, we introduced a neural network-based method for blind image
+deconvolution. The key component of our method was a neural network that
+was discriminatively trained to carry out restoration of individual blurry image
+patches. We used intuitions from a frequency-domain view of non-blind decon-
+volution to formulate the prediction task for the network and to design its archi-
+tecture. For whole image restoration, we averaged the per-patch neural outputs
+to form an initial estimate of the sharp image, and then estimated a global blur
+kernel from this estimate. Our approach was found to yield comparable per-
+formance to state-of-the-art iterative blind deblurring methods, while oﬀering
+signiﬁcant advantages in terms of speed.
+
+We believe that our network can serve as a building block for other ap-
+plications that involve reasoning with blur. Given that it operates on local re-
+gions independently, it is likely to be useful for reasoning about spatially-varying
+blur—e.g., arising out of defocus and subject motion. We are also interested in
+exploring architectures and pooling strategies that allow eﬃcient sharing of infor-
+mation across patches. We expect that such sharing can be used to communicate
+information about a common blur kernel, to exploit “internal” statistics of the
+image (which forms the basis of the method of [2]), and also to identify and adapt
+to texture statistics of diﬀerent scene types (e.g., [14] demonstrated improved
+performance when training and testing on diﬀerent image categories).
+
+Acknowledgments
+
+The author was supported by a gift from Adobe Systems, and by the donation
+of a Titan X GPU from NVIDIA Corporation that was used for this research.
+
+References
+
+1. Fergus, R., Singh, B., Hertzmann, A., Roweis, S.T., Freeman, W.T.: Removing
+
+camera shake from a single photograph. SIGGRAPH (2006)
+
+2. Michaeli, T., Irani, M.: Blind deblurring using internal patch recurrence.
+
+In:
+
+Proc. ECCV. (2014)
+
+3. Sun, L., Cho, S., Wang, J., Hays, J.: Edge-based blur kernel estimation using patch
+
+priors. In: Proc. ICCP. (2013)
+
+4. Xu, L., Jia, J.: Two-phase kernel estimation for robust motion deblurring.
+
+In:
+
+Proc. ECCV. (2010)
+
+A Neural Approach to Blind Motion Deblurring
+
+15
+
+5. Cho, S., Lee, S.: Fast motion deblurring. In: SIGGRAPH. (2009)
+6. Levin, A., Weiss, Y., Durand, F., Freeman, W.T.: Eﬃcient marginal likelihood
+
+optimization in blind deconvolution. In: Proc. CVPR. (2011)
+
+7. Krishnan, D., Tay, T., Fergus, R.: Blind deconvolution using a normalized sparsity
+
+measure. In: Proc. CVPR, IEEE (2011)
+
+8. Cho, T.S., Paris, S., Horn, B.K., Freeman, W.T.: Blur kernel estimation using the
+
+radon transform. In: Proc. CVPR. (2011)
+
+9. Levin, A., Weiss, Y., Durand, F., Freeman, W.T.: Understanding and evaluating
+
+blind deconvolution algorithms. In: Proc. CVPR. (2009)
+
+10. Burger, H.C., Schuler, C.J., Harmeling, S.:
+
+Image denoising: Can plain neural
+
+networks compete with BM3D? In: Proc. CVPR. (2012)
+
+11. Eigen, D., Krishnan, D., Fergus, R.: Restoring an image taken through a window
+
+covered with dirt or rain. In: Proc. ICCV. (2013)
+
+12. Schuler, C.J., Burger, H.C., Harmeling, S., Scholkopf, B.: A machine learning
+
+approach for non-blind image deconvolution. In: Proc. CVPR. (2013)
+
+13. Xu, L., Ren, J.S., Liu, C., Jia, J.: Deep convolutional neural network for image
+
+deconvolution. In: NIPS. (2014)
+
+14. Schuler, C.J., Hirsch, M., Harmeling, S., Sch¨olkopf, B.: Learning to deblur. PAMI
+
+(pp. 2015)
+
+15. Brown, R.G., Hwang, P.Y.: Introduction to Random Signals and Applied Kalman
+
+Filtering. 3 edn. John Wiley & Sons (1996)
+
+16. LeCun, Y., Bottou, L., Orr, G., Muller, K.: Eﬃcient backprop. In: Neural Net-
+
+works: Tricks of the trade, Springer (1998)
+
+17. Nair, V., Hinton, G.E.: Rectiﬁed linear units improve restricted boltzmann ma-
+
+chines. In: Proc. ICML. (2010)
+
+18. Everingham, M., Eslami, S.A., Van Gool, L., Williams, C.K., Winn, J., Zisserman,
+
+A.: The pascal visual object classes challenge: A retrospective. IJCV (2014)
+
+19. Geman, D., Yang, C.: Nonlinear image recovery with half-quadratic regularization.
+
+Trans. Imag. Proc. (1995)
+
+20. Zoran, D., Weiss, Y.: From learning models of natural image patches to whole
+
+image restoration. In: Proc. ICCV. (2011)
+
+

@@ -1,0 +1,970 @@
+Decision Forests, Convolutional Networks and the Models in-Between
+
+Microsoft Research Technical Report 2015-58
+
+Yani Ioannou1
+
+Duncan Robertson2
+
+Jamie Shotton2
+Antonio Criminisi2
+1University of Cambridge, 2Microsoft Research, 3University of Bath
+
+Matthew Brown3
+
+Darko Zikic2
+
+Peter Kontschieder2
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+3
+
+ 
+
+ 
+ 
+]
+
+V
+C
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+0
+5
+2
+1
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Abstract
+
+This paper investigates the connections between two
+state of the art classiﬁers: decision forests (DFs, includ-
+ing decision jungles) and convolutional neural networks
+(CNNs). Decision forests are computationally efﬁcient
+thanks to their conditional computation property (computa-
+tion is conﬁned to only a small region of the tree, the nodes
+along a single branch). CNNs achieve state of the art accu-
+racy, thanks to their representation learning capabilities.
+We present a systematic analysis of how to fuse conditional
+computation with representation learning and achieve a
+continuum of hybrid models with different ratios of accu-
+racy vs. efﬁciency. We call this new family of hybrid models
+conditional networks. Conditional networks can be thought
+of as: i) decision trees augmented with data transformation
+operators, or ii) CNNs, with block-diagonal sparse weight
+matrices, and explicit data routing functions.
+Experimental validation is performed on the common task
+of image classiﬁcation on both the CIFAR and Imagenet
+datasets. Compared to state of the art CNNs, our hybrid
+models yield the same accuracy with a fraction of the com-
+pute cost and much smaller number of parameters.
+
+1. Introduction
+
+Machine learning has enjoyed much success in recent
+years for both academic and commercial scenarios. Two
+learning approaches have gained particular attention:
+(i)
+random forests [1, 4, 5, 22], as used e.g. in Microsoft
+Kinect [15]; and (ii) deep neural networks (DNNs) [13, 20],
+as used for speech recognition [31] and image classiﬁ-
+cation [9], among other applications. Decision trees are
+characterized by a routed behavior: conditioned on some
+learned routing function, the data is sent either to one child
+or another. This conditional computation means that at test
+time only a small fraction of all the nodes are visited, thus
+achieving high efﬁciency. Convolutional neural networks
+repeatedly transform their input through several (learned)
+
+non-linear transformations. Typically, at each layer all units
+need to perform computation. CNNs achieve state-of-the-
+art accuracy in many tasks, but decision trees have the po-
+tential to be more efﬁcient. This paper investigates the con-
+nections between these two popular models, highlighting
+differences and similarities in theory and practice.
+Related work. Decision forests were introduced in [1, 4]
+as efﬁcient models for classiﬁcation and regression. Forests
+were extended to density estimation, manifold learning
+and semi-supervised learning in [5]. The decision jungle
+variant [22] replaces trees with DAGs (directed acyclical
+graphs) to reduce memory consumption.
+
+Convolutional networks were introduced for the task of
+digit recognition in [6]. More recently they have been ap-
+plied with great success to the task of image classiﬁcation
+over 1,000 classes [2, 7, 8, 9, 13, 14, 20, 23, 27, 32].
+
+In general, decision trees and neural networks are per-
+ceived to be very different models. However, the work
+in [21, 30] demonstrates how any decision tree or DAG can
+be represented as a two-layer perceptron with a special pat-
+tern of sparsity in the weight matrices. Some recent pa-
+pers have addressed the issue of mixing properties of trees
+and convolutional networks together. For example, the two-
+routed CNN architecture in [13] is a stump (a tree with only
+two branches). GoogLeNet [27] is another example of a
+(imbalanced) tree-like CNN architecture.
+
+The work in [26, 28] combines multiple “expert” CNNs
+into one, manually designed DAG architecture. Each com-
+ponent CNN is trained on a speciﬁc task (e.g. detecting an
+object part), using a part-speciﬁc loss.
+In contrast, here
+we investigate training a single, tree-shaped CNN model by
+minimizing one global training loss. In our model the var-
+ious branches are not explicitly trained to recognize parts
+(though they may do so if this minimizes the overall loss).
+The work in [33] is a cascade [29] of CNN classiﬁers,
+each trained at a different level of recognition difﬁculty.
+Their model does not consider tree-based architectures. Fi-
+nally, the work in [11] achieves state of the art classiﬁcation
+accuracy by replacing the fully-connected layers of a CNN
+with a forest. This model is at least as expensive as the orig-
+
+1
+
+MSR Technical Report 2015-58.
+
+the matrix Λ12 (Fig. 1b) shows the joint correlations of acti-
+vations in layers 1 and 2 in a perceptron trained on the Im-
+agenet classiﬁcation task.1 Here we use the ﬁnal two layers
+of the deep CNN model of [23] with a reduced number of
+features (250) and classes (350) to aid visualization.
+
+Thanks to the ReLUs, the correlation matrix Λ12 has
+many zero-valued elements (in white in Fig. 1b), and these
+are distributed in an unstructured way. Reordering the rows
+and columns of Λ12 reveals an underlying, noisy block-
+diagonal pattern (Fig. 1c). This operation corresponds to
+ﬁnding groups of layer-1 features which are highly active
+for certain subsets of classes (indexed in layer-2). Thus, the
+darker blocks in Fig. 1c correspond to three super-classes
+(sets of ‘related’ classes). Zeroing out the off-diagonal el-
+ements (Fig. 1e) corresponds to removing connections be-
+tween corresponding unit pairs. This yields the sparse ar-
+chitecture in Fig. 1d, where selected subsets of the layer-1
+features are sent (after transformation) to the corresponding
+subsets of layer-2 units; thus giving rise to data routing.
+
+We have shown how imposing a block-diagonal pattern
+of sparsity to the joint activation correlation in a neural net-
+work corresponds to equipping the network with a tree-like,
+routed architecture. Next section will formalize this intu-
+ition further and show the beneﬁts of sparse architectures.
+
+3. Conditional Networks: Trees or Nets?
+
+This section introduces the conditional networks model,
+in comparison to trees and CNNs, and discusses their efﬁ-
+ciency and training. For clarity, we ﬁrst introduce a compact
+graphical notation for representating both trees and CNNs.
+Representing CNNs. Figure 2a shows the conventional
+way to represent an MLP, with its units (circles) connected
+via edges (for weights). Our new notation is shown in
+Fig. 2b, where the symbol Pij(cid:111) denotes the popular non-
+linear transformation vj = σ(Pvi) between two consec-
+utive layers i and j. The linear projection matrix is de-
+noted ‘P’, and ‘(cid:111)’ indicates a non-linear function σ(.) (e.g.
+a sigmoid or ReLU). In the case of CNNs the function σ
+could also incorporate e.g. max-pooling and drop-out. Deep
+CNNs are long concatenations of the structure in Fig. 2b.
+
+Representing trees and DAGs. The same graphical lan-
+guage can also represent trees and DAGs (Fig. 3). Usually,
+in a tree the data is moved from one node to another untrans-
+formed.2
+In our notation this is achieved via the identity
+matrix I (i.e. vj = Ivi). Additionally, Selecting a subset of
+features v(cid:48) from a longer vector v is achieved as v(cid:48) = Sv,
+with S non-square matrix with only one element per row
+equal to 1, and 0 everywhere else. Identity and selection
+transforms are special instances of linear projections.
+
+1The correlation matrix Λ12 is not the same as the weight matrix P12.
+2This is in contrast to representation learning approaches which esti-
+
+mate optimal data transformation processes. Exceptions are [16, 17].
+
+Figure 1. Block-diagonal correlation of activations, and data
+routing. (a) An example 2-layer preceptron with ReLU activa-
+tions. This is a portion of the ‘VGG’ model [23] trained on Im-
+(b) The correlation matrix Λ12 shows unstructured ac-
+agenet.
+tivation correlation between unit pairs. (c) Reordering the units
+reveals a noisy, block-diagonal structure. (e) Zeroing-out the off-
+diagonal elements is equivalent to removing connections between
+unit pairs. This corrsponds to the sparser, routed perceptron in (d).
+
+inal CNN since the convolutional layers (where most of the
+computation is) are not split into different branches.
+Contributions. The contributions of this paper are as
+follows:
+i) We show how DAG-based CNN architectures
+(namely conditional networks) with a rich hierarchical
+structure (e.g. high number of branches, more balanced
+trees) produce classiﬁcation accuracy which is at par with
+state of the art, but with much lower compute and mem-
+ory requirements. ii) We demonstrate how conditional net-
+works are still differentiable despite the presence of explicit
+data routing functions. iii) We show how conditional net-
+works can be used to fuse the output of CNN ensembles in
+a data driven way, yielding higher accuracy for ﬁxed com-
+pute. Validation is run on the task of image-level classiﬁca-
+tion, on both the CIFAR and Imagenet datasets.
+
+2. Structured Sparsity and Data Routing
+
+The seminal work in [13] demonstrated how introducing
+rectiﬁed linear unit activations (ReLUs) allows deep CNNs
+to be trained effectively. Given a scalar input vj, its ReLU
+activation is σ(vj) = max(0, vj). Thus, this type of non-
+linearity switches off a large number of feature responses
+within a CNN. ReLU activations induce a data-dependent
+sparsity; but this sparsity does not tend to have much struc-
+ture in it. Enforcing a special type of structured sparsity
+is at the basis of the efﬁciency gain attained by conditional
+networks. We illustrate this concept with a toy example.
+
+The output of the exemplar multi-layer perceptron
+(MLP) of Fig. 1a is computed as v2 = σ(P12v1) =
+σ(P12σ(P01v0)). Given a trained MLP we can look at the
+average correlation of activations between pairs of units in
+two successive layers, over all training data. For example,
+
+MSR Technical Report 2015-58.
+
+Figure 2. A compact graphical notation for neural networks.
+Data transformation is indicated by the projection matrix P fol-
+lowed by a non-linearity (denoted with the symbol (cid:111)). The bias
+term is not shown here as we use homogeneous coordinates.
+
+Figure 4. A generic conditional network. Conditional networks
+fuse efﬁcient data routing with accurate data transformation in a
+single model. Vector concatenations are denoted with ⊕.
+
+selection matrices S (e.g. node 1). If the routing is explicit
+and hard (like in trees), then successive operations will be
+applied to ever smaller subsets of incoming data, with the
+associated compute savings. Next we show how implicit
+conditional networks can also yield efﬁciency.
+Efﬁciency of implicit routed networks. Figures 5 com-
+pares a standard CNN with a 2-routed architecture. The
+total numbers of ﬁlters at each layer is ﬁxed for both to c1,
+c2 and c3. The number of multiplications necessary in the
+ﬁrst convolution is c2 × c1kxkyW H, with W, H the size
+of the feature map and kx, ky the kernel size (for simplicity
+here we ignore max-pooling operations). This is the same
+for both architectures. However, due to routing, the depth
+of the second set of ﬁlters is different between the two ar-
+chitectures. Therefore, for the conventional CNN the cost
+of the second convolution is c3 × c2kxkyW H, while for the
+
+branched architecture the cost is c3 ×(cid:0) c2
+
+half the cost of the standard CNN. The increased efﬁciency
+is due only to the fact that shallower kernels are convolved
+with shallower feature maps. Simultaneous processing of
+parallel routes may yield additional time savings.3
+3.2. Back-propagation Training
+
+(cid:1) kxkyW H, i.e.
+
+2
+
+Implicitly-routed conditional networks can be trained
+with the standard back-propagation algorithm [13, 27]. The
+selection functions S become extra parameters to optimize
+over, and their gradients can be derived straightforwardly.
+Now we show that explicitly-routed networks can also be
+trained using back-propagation. To do so we need to com-
+pute partial derivatives with respect to the router’s param-
+eters (all other differentiation operations are as in conven-
+tional CNNs). We illustrate this using the small network in
+Fig. 6. Here subscripts index layers and superscripts index
+
+3Feature not yet implemented in Caffe [28].
+
+Figure 3. Representing decision trees. Data routing functions
+(a.k.a. routers, in red) direct the data to one or more child nodes.
+Identity matrices copy the data without transforming it.
+
+A key operator of trees which is not present in CNNs is
+data routing. Routers send the incoming data to a selected
+sub-branch and enable conditional computation. Routers
+(red nodes in Fig. 3) are represented here as perceptrons,
+though other choices are possible. In general, a router out-
+puts real-valued weights, which may be used to select a sin-
+gle best route, multiple routes (multi-way routing), or send
+the data fractionally to all children (soft routing).
+
+A conditional network exhibits both data routing and
+non-linear data transformation within a highly branched ar-
+chitecture (Fig. 4).
+
+3.1. Computational Efﬁciency
+Efﬁciency through explicit data routing. Split nodes can
+have explicit routers where data is conditionally sent to the
+children according to the output of a routing function (e.g.
+node 2 in Fig. 4), or have implicit routers where the data
+is unconditionally but selectively sent to the children using
+
+MSR Technical Report 2015-58.
+
+Figure 5. Computational efﬁciency of implicit conditional net-
+works. (top) A standard CNN (one route). (bottom) A two-routed
+architecture with no explicit routers. The larger boxes denote fea-
+ture maps, the smaller ones the ﬁlters. Due to branching, the depth
+of the second set of kernels (in yellow) changes between the two
+architectures. The reduction in kernel size yields fewer computa-
+tions and thus higher efﬁciency in the branched network.
+
+routes (instead, in Fig. 4 the subscripts indexed the input
+and output nodes). The training loss to be minimized is
+
+1
+2
+
+(v2(θ) − v∗
+2)
+
+(cid:62)
+
+(v2(θ) − v∗
+2) ,
+
+L(θ) =
+
+(1)
+with θ = {{Pj}, PR} denoting the parameters of the net-
+work, and v∗
+2 the ground-truth assignments to the output
+units. We deﬁne this energy for a single training data point,
+though the extension to a full dataset is a trivial outer sum-
+mation. The network’s forward mapping is
+
+1 = σ(cid:0)Pjv0
+
+(cid:1)
+
+vj
+
+and v2(θ) = r(θ) V1(θ),
+
+(2)
+
+with r = σ (PRv0) the output of the router.
+In general:
+i) the routing weights r are continuous, r(i) ∈ [0, 1], and
+ii) multiple routes can be “on” at the same time. V1 is
+1)(cid:62). The update rule is
+a matrix whose j-th row is (vj
+∆θt+1 := −ρ ∂E
+pute the partial derivatives through the chain rule as follows:
+
+(cid:12)(cid:12)t , with t indexing iterations. We com-
+ ,
+ ∂r
+
+R(cid:88)
+
+V1 +
+
+∂L
+∂θ
+
+=
+
+∂L
+∂v2
+
+∂v2
+∂θ
+
+∂φj
+∂Pj
+
+∂L
+∂v2
+
+∂vj
+1
+∂φj
+
+r(j)
+
+=
+
+∂θ
+
+∂PR
+
+j=1
+
+(3)
+with φj := Pjv0, and R the number of routes. Equation (3)
+shows the inﬂuence of the soft routing weights on the back-
+propagated gradients, for each route. Thus, explicit routers
+can be trained as part of the overall back-propagation pro-
+cedure. Since trees and DAGs are special instances of con-
+ditional networks, now we have a recipe for training them
+via back-propagation (c.f . [11, 19, 25]).
+
+In summary, conditional networks may be thought of
+as: i) Decision trees/DAGs which have been enriched with
+
+Figure 6. Training a network’s routers via back-propagation.
+A toy conditional network used to illustrate how to train the
+router’s parameters PR via gradient descent back-propagation.
+
+(learned) data transformation operations, or as ii) CNNs
+with rich, DAG-shaped architectures and trainable data
+routing functions. Next, we show efﬁciency advantages of
+such branched models with comparative experiments.
+
+4. Experiments and Comparisons
+
+Conditional networks generalize decision trees, DAGs
+and CNNs, and thus could be used in all tasks where those
+are successful. Here we compare those models with one an-
+other on the popular task of image-level classiﬁcation. We
+explore the effect of different “branched” architectures on
+a joint measure of: i) classiﬁcation accuracy, ii) test-time
+compute cost and iii) model size.
+4.1. Conditional Sparsiﬁcation of a Perceptron
+
+8 and the projection matrices Pi
+
+We begin with a toy experiment, designed to illus-
+trate potential advandages of using explicit routes within
+a neural network. We take a perceptron (the last layer of
+“VGG11” [23]) and train it on the 1,000 Imagenet classes,
+with no scale or relighting augmentation [10]. Then we turn
+the perceptron into a small tree, with R routes and an addi-
+tional, compact perceptron as a router (see ﬁg. 7a). The
+router PR
+8 are trained to min-
+imize the overall classiﬁcation loss (Sec. 3.2).
+Interpolating between trees and CNNs. Given a test im-
+age we apply the convolutional layers until the beginning of
+the tree. Then we apply the router, and its R outputs are
+soft-max normalized and treated as probabilities for decid-
+ing which route/s to send the image to. We can send the
+image only to the highest probability route only (as done in
+trees) or we could send it to multiple routes, e.g. the τ most
+probable ones. For τ = 1 we reproduce the behaviour of a
+tree. This corresponds to the left-most point in the curves
+in ﬁg. 7b (lowest cost and higher error). Setting τ = R
+corresponds to sending the image to all routes. The latter
+reproduces the same behaviour as the CNN, with nearly the
+same cost (lowest error and highest compute cost point in
+the curves). Different values of τ ∈ {1, . . . , R} correspond
+to different points along the error-cost curves.
+
+MSR Technical Report 2015-58.
+
+Figure 7. Conditional sparsiﬁcation of a single-layer percep-
+tron. (a) We take the deep CNN model in [23] (‘VGG11’) and turn
+the last fully connected layer (size 4095× 1000) into a tree with R
+routes (R = 4 shown in ﬁgure). (b) The top-5-error vs. test-time-
+cost curves for six conditional networks trained with different val-
+ues of R ∈ {2, 4, 6, 8, 16, 24, 32}. Test-time cost is computed as
+number of ﬂoating point operations per image, and is hardware-
+independent. The strong sub-linear shape of the curves indicates a
+net gain in the trade-off between accuracy and efﬁciency.
+
+Dynamic accuracy-efﬁciency trade-off. The ability to se-
+lect the desired accuracy-efﬁciency operating point at run-
+time allows e.g. better battery management in mobile appli-
+cations. In contrast, a CNN corresponds to a single point in
+the accuracy-efﬁciency space (see the black point in ﬁg. 7b).
+The pronounced sub-linear behaviour of the curves in ﬁg. 7b
+suggests that we can increase the efﬁciency considerably
+with little accuracy reduction (in the ﬁgure a 4-fold efﬁ-
+ciency increase yields an increase in error of less than 1%).
+Why care about the amount of computation? Modern
+parallel architectures (such as GPUs) yield high classiﬁca-
+tion accuracy in little time. But parallelism is not the only
+way of increasing efﬁciency. Here we focus on reducing
+the total amount of computations while maintaining high
+accuracy. Computation affects power consumption, which
+is of huge practical importance in mobile applications (to
+increase battery life on a smartphone) as well as in cloud
+services (the biggest costs in data centres are due to their
+cooling). Next we extend conditional processing also to the
+expensive convolutional layers of a deep CNN.
+4.2. Comparing Various Architectures on Imagenet
+Here we validate the use of conditional networks for im-
+age classiﬁcation in the ILSVRC2012 dataset [18]. The
+dataset consists of ∼1.2M training images for 1000 classes,
+
+Figure 8. The conditional network used on the Imagenet ex-
+periments employs implicit data routing in the (usually expen-
+sive) convolutional layers to yield higher compute efﬁciency than
+the corresponding, unrouted deep CNN (here VGG11). Small red
+lines indicate “groups” of feature maps as implemented in Caffe.
+
+and 50K validation images. We base our experiments on
+the VGG network [23] on which the current best models
+are also based [9]. Speciﬁcally, we focus on the VGG11
+model as it is deep (11 layers) and relatively memory efﬁ-
+cient (trains with Caffe [10] on a single Nvidia K40 GPU).
+Global max-pooling. We found that using global max-
+pooling, after the last convolutional layer is effective in
+reducing the number of parameters while maintaining the
+same accuracy. We trained a new network (‘VGG11-GMP’)
+with such pooling, and achieved lower top-5 error than the
+baseline VGG11 network (13.3% vs. 13.8%), with a de-
+crease in the number of parameters of over 72%.
+Designing an efﬁcient conditional architecture. Then we
+designed the conditional network in Fig. 8 by starting with
+the unrouted VGG11-GMP and splitting the convolutional
+layers (the most computationally expensive layers) into a
+DAG-like, routed architecture. The hypothesis is that each
+ﬁlter should only need to be applied to a small number of
+channels in the input feature map. Data routing is imple-
+mented via ﬁlter groups [13]. Thus, at the n-th convolu-
+tional level (with n = 3 . . . 5) the ﬁlters of VGG11-GMP
+are divided into 2(n−2) groups. Each group depends only on
+the results of 128 previous ﬁlters. The feature maps of the
+last convolutional layer are concatenated together, and glob-
+ally max-pooled before the single-routed, fully-connected
+layers, which remain the same as those in VGG11-GMP.
+Training. We trained the architecture in Fig. 8 from scratch,
+with the same parameters as in [23], except for using
+the initialization of [9], and a learning schedule of γt =
+γ0(1 + γ0λt)−1, where γ0, γt and λ are the initial learning
+rate, learning rate at iteration t, and weight decay, respec-
+tively [3]. When the validation accuracy levelled out, the
+learning rate was decreased by a factor 10, twice. Our archi-
+tecture took twice as many epochs to train than VGG11, but
+
+MSR Technical Report 2015-58.
+
+Figure 9. Comparing different network architectures on Imagenet. Top-5 error as a function of test-time compute and model size, for
+various networks, validated on the Imagenet dataset. (left) A 3D view. (middle) Error vs. compute cost. (right) Error vs. model size. Our
+VGG11-GMP net (dark green) reduces model size signiﬁcantly. Conditional networks (denoted with circles) yield points closest to the
+origin, corresponding to the best accuracy-efﬁciency trade-off. The conditional architecture of ﬁg.8 is the second closest to the origin.
+
+thanks to higher efﬁciency it took roughly the same time.
+Results: accuracy vs. compute vs. size. In order to com-
+pare different network architectures as fairly as possible,
+here we did not use any training augmentation aside from
+that supported by Caffe (mirroring and random crops). Sim-
+ilarly, we report test-time accuracy based only on centre-
+cropped images, without potentially expensive data over-
+sampling. This reduces the overall accuracy (w.r.t. to state
+of the art), but constitutes a fairer test bed for teasing out
+the effects of different architectures. Applying the same
+oversampling to all networks produced a similar accuracy
+improvement in all models, without changing their ranking.
+Figure 9 shows top-5 error as a function of test-time
+compute cost and model size, for various architectures.
+Compute cost is measured as the number of multiply-
+accumulate operations. We chose this measure of efﬁ-
+ciency because it is directly related to the theoretical com-
+plexity on the testing (run-time) algorithm, and it is ma-
+chine/implementation independent. Later we will also show
+how in our parallel implementation this measure of efﬁ-
+ciency correlates well with measured timings on both CPU
+and GPU. Model size is deﬁned here as the total number
+of parameters (network weights) and it relates to memory
+efﬁciency. Larger model sizes tend to yield overﬁtting (for
+ﬁxed accuracy). Architectures closest to the axes origin are
+both more accurate and more efﬁcient.
+
+The conditional network of Fig. 8 corresponds to the
+It achieves a top-5 error of
+bright green circle in Fig. 9.
+∼13.8%, identical to that of the VGG11 network (yellow
+diamond) it is based upon. However, our conditional net-
+work requires less than half the compute (45%), and almost
+one-ﬁfth (21%) of the parameters. Our conditional architec-
+ture is the second closest to the origin after GoogLeNet [27]
+(in purple). Both [27] and [13] obtain efﬁciency by sending
+data to different branches of the network. Although they
+do not use “highly branched” tree structures they can still
+
+Figure 10. Correlation between predicted layer-wise, test-time
+compute costs and actual measured timings on CPU and GPU
+for the conditional architecture in Fig. 8. The three histograms
+have been “max normalized” to aid comparison.
+
+be thought as special instances of (implicit) conditional net-
+works. GoogLeNet achieves the best results in our joint
+three-way metric, probably thanks to their use of: i) multi-
+ple intermediate training losses, ii) learnt low-dimensional
+embeddings, and iii) better tuning of the architecture to
+the speciﬁc image dataset. Finally, the best accuracy is
+achieved by [9], but even their most efﬁcient model uses
+1.9E+10 ﬂops, and thus falls outside the plot.
+Do fewer operations correspond to faster execution?
+Figure 10 reports a layer-wise comparison between the
+predicted test-time compute cost (measured as number of
+multiply-accumulate operations in the model) and the actual
+measured timings (both on CPU and GPU) for the network
+architecture in Fig. 8. There is a strong correlation between
+the number of ﬂoating-point operations and the actual mea-
+sured times. In the GPU case, the correlation is a slightly
+less strong, due to data moving overheads. This conﬁrms
+that, indeed, fewer operations do correspond to faster execu-
+tion, by roughly the same ratio. As discussed in Section 3.1
+this extra speed (compared to conventional CNNs) comes
+
+MSR Technical Report 2015-58.
+
+classiﬁcation accuracy
+
+model size
+
+with respect
+
+to the parameters Rl =
+2i,{i ∈ N : 0 ≤ i ≤ 5}, where Rl is the number of nodes
+at layer l in the conditional network. Fig. 11 shows the re-
+sulting architecture. It turns out to be a DAG with 10 layers.
+For a fair comparison, we use Bayesian optimization on
+the NiN architecture too. We reduce the complexity of
+the unrouted NiN-64 network by learning a reduction in
+i.e. we maximize α over
+the number of per-layer ﬁlters.
+Fl = Forig/2i,{i ∈ N : 0 ≤ i ≤ 4}, where Forig is the num-
+ber of ﬁlters in layer l. All networks were trained with the
+same parameters as [14], except for using the initialization
+of [9], and a learning schedule of γt = γ0(1 + γ0λt)−1,
+where γ0, γt and λ are the initial learning rate, learning rate
+at iteration t, and weight decay, respectively [3]. Training
+was run for 400 epochs (max), or until the validation accu-
+racy had not changed in 10K iterations. We split the origi-
+nal training set into 40K training images and 10K validation
+images. The remaining 10K images are used for testing.
+Results: accuracy vs. compute vs. size. Fig. 12 shows
+test errors with respect to test-time cost and model size
+for multiple architectrues. Diamonds denote unrouted net-
+works and circles denote conditional networks. The orig-
+inal NiN is shown in red, and samples of unrouted, ﬁlter-
+reduced versions explored during the Bayesian optimization
+are shown in pink. A sample of 300 conditional variants are
+shown as grey circles. The green circle denotes one such
+conditional architecture close to the origin of the 3D space
+(test − error, test − cost, model − size). Most of the
+conditional networks proposed by the optimization are dis-
+tributed near a 3D surface with either low error, low size,
+low compute cost, or all of them. The conditional samples
+are in average closer to the origin than the unrouted coun-
+terparts. The accuracy of the best conditional network is
+almost identical to that of the NiN model, but it is about 5
+times faster and 6 times smaller.
+
+4.4. Conditional Ensembles of CNNs
+
+A key difference between CNNs and conditional net-
+works is that the latter may include (trainable) data routers.
+Here we use an explicitly-routed architecture to create an
+ensemble of CNNs where the data traverses only selected,
+component CNNs (and not necessarily all of them), thus
+saving computation.
+
+As an example, the branched network in Fig. 13 is ap-
+plied to the ILSVRC2012 image classiﬁcation task. The
+network has R = 2 routes, each of which is itself a deep
+CNN. Here, we use GoogLeNet [27] as the basis of each
+component route, although other architectures may be used.
+Generalizing to R > 2 is straightforward. The routes have
+different compute cost (denoted by different-sized rectan-
+gles), arising from differing degrees of test-time oversam-
+pling. We use no oversampling for the ﬁrst route and 10X
+oversampling for the second route. The router determines
+
+Figure 11. Automatically learned conditional architecture for
+image classiﬁcation in CIFAR. Both structure and parameters
+of this conditional network have been learned automatically via
+Bayesian optimization. Best viewed on screen.
+
+from the fact that in branched architectures successive lay-
+ers need to run convolutions with smaller shorter kernels,
+on ever smaller feature maps. All architectures tested in
+our experiments are implemented in the same Caffe frame-
+work and enjoy the same two levels of parallelism: i) par-
+allel matrix multiplications (thanks to BLAS4), and ii) data
+parallelism, thanks to the use of mini-batches. Although
+highly-branched conditional networks could in theory ben-
+eﬁt from model parallelism (computing different branches
+on different GPUs, simultaneously), this feature is not yet
+implemented in Caffe [28].
+
+4.3. Comparing Various Architectures on CIFAR
+
+We further validate our hybrid model on the task of clas-
+sifying images in the CIFAR10 [12] dataset. The dataset
+contains 60K images of 10 classes, typically divided into
+50K training images and 10K test images. We take the
+state of the art Network in Network (NiN) model as a ref-
+erence [14], and we build a conditional version of it. This
+time the optimal conditional architecture (in Fig. 11) is con-
+structed automatically, by using Bayesian search [24] on a
+parametrized family of architectures.
+Designing a family of conditional networks. The NiN
+model has a large number (192) of ﬁlters in the ﬁrst convo-
+lutional layer, representing a sizable amount of the overall
+compute.5 We build a variant (‘NiN-64’) that prepends a
+layer of 64 ﬁlters to the NiN model. While this variant is
+more complex than NiN, when routed (as described later) it
+allows us to split the larger layers into many routes and in-
+crease the efﬁciency. By changing the number of routes at
+each level of the NiN-64 model (from conv2) we can gen-
+erate a whole family of possible conditional architectures.
+Learning the optimal network architecture. Next we
+search this parametrized space of routed architectures
+by using Bayesian optimization [24].
+In the optimiza-
+tion we maximized the size-normalized accuracy α =
+
+4http://www.netlib.org/blas/
+5Most Imagenet networks typically use 64 − 96 conv1 ﬁlters.
+
+MSR Technical Report 2015-58.
+
+Figure 12. Comparing network architectures on CIFAR10. Classiﬁcation error as a function of test-time compute and model size, for
+various networks, validated on the CIFAR10 dataset. (left) A 3D view. (middle) Error vs. compute cost. (right) Error vs. model size. Our
+automatically-optimized conditional architecture (green circle) is ∼5 times faster and ∼6 times smaller than NiN, with same accuracy.
+
+Figure 13. Explicit data routing for conditional ensembles.
+An explicitly-routed conditional network that mixes existing deep
+CNNs in a learned, data-dependent fashion.
+
+which image should be sent to which route (or both). The
+router is trained together with the rest of the network via
+back-propagation (Section 3.2) to predict the accuracy of
+each route for each image. The router is itself a deep CNN,
+based on CNN1; This allows computation reuse for extra
+efﬁciency. At test time, a (dynamic) trade off can be made
+between predicted accuracy and computational cost.
+
+Figure 14 shows the resulting error-cost curve. All costs,
+including the cost of applying the router are taken into con-
+sideration here. Given our trained conditional network, we
+use dynamic, multi-way data routing (Section 4.1) to gen-
+erate a curve in the error-compute space. Each point on the
+curve shows the top-5 error on the validation set at a given
+compute cost, which is an amortized average over the vali-
+dation set. The dashed line corresponds to the trivial error
+vs. compute trade-off that could be made by selecting one
+or other base network at random, with a probability cho-
+sen so as to achieve a required average compute cost. The
+fact that the green curve lies signiﬁcantly below this straight
+line conﬁrms the much improved trade-off achieved by the
+conditional network.
+In the operating point indicated by
+the green circle we achieve nearly the same accuracy as the
+10× oversampled GoogLeNet with less than half its com-
+pute cost. A conventional CNN ensemble would incur a
+higher cost since all routes are used for all images.
+
+Figure 14. Error-accuracy results for conditional ensembles of
+CNNs. Error-accuracy results for the two GoogLeNet base net-
+works are shown in purple. The dynamic error-cost curve for our
+conditional ensemble is in green. In the green circle we achieve
+same accuracy as the most accurate GoogLeNet with half its cost.
+
+5. Discussion and Conclusion
+
+This paper has investigated similarities and differences
+between decision trees/forests and convolutional networks.
+This has led us to introduce a hybrid model (namely condi-
+tional network) which can be thought both as: i) trees which
+have been augmented with representation learning capabili-
+ties, and ii) CNNs which have been augmented with explicit
+data routers and a rich, branched architecture.
+
+Experiments on image classiﬁcation have shown that
+highly branched architectures yield improved accuracy-
+efﬁciency trade-off as compared to trees or CNNs. The de-
+sired accuracy-efﬁciency ratio can be selected at run time,
+without the need to train a new network. Finally, we have
+shown how explicit routers can improve the efﬁciency of en-
+sembles of CNNs, without loss of accuracy. We hope these
+ﬁndings will help pave the way to a more systematic explo-
+ration of efﬁcient architectures for deep learning at scale.
+
+MSR Technical Report 2015-58.
+
+References
+[1] Y. Amit and D. Geman. Shape quantization and recognition
+
+with randomized trees. Neural Computation, 9(7), 1997. 1
+
+[2] L. J. Ba and R. Caruana. Do Deep Nets Really Need to
+be Deep. In Proc. Neural Information Processing Systems
+(NIPS), 2014. 1
+
+[3] L. Bottou. Stochastic Gradient Descent Tricks. In G. Mon-
+tavon, G. B. Orr, and K.-R. M¨uller, editors, Neural Networks:
+Tricks of the Trade (2nd ed.), volume 7700 of Lecture Notes
+in Computer Science, pages 421–436. Springer, 2012. 5, 7
+
+[4] L. Breiman. Random forests. Machine Learning, 45(1),
+
+2001. 1
+
+[5] A. Criminisi and J. Shotton. Decision Forests for Computer
+
+Vision and Medical Image Analysis. Springer, 2013. 1
+
+[6] Y. L. Cun, B. Boser, J. S. Denker, D. Henderson, R. E.
+Howard, W. Hubbard, and L. D. Jackel. Hand-written digit
+recognition with a back-propagation network. Proc. Neural
+Information Processing Systems (NIPS), 1990. 1
+
+[7] M. Denil, B. Shakibi, L. Dinh, M. A. Ranzato, and N. de-
+Freitas. Predicting Parameters in Deep Learning. In Proc.
+Neural Information Processing Systems (NIPS), 2013. 1
+
+[8] E. Denton, W. Zaremba, J. Bruna, Y. LeCun, and R.Fergus.
+Exploiting Linear Structure Within Convolutional Networks
+for Efﬁcient Evaluation. In Proc. Neural Information Pro-
+cessing Systems (NIPS), 2014. 1
+
+[9] K. He, X. Zhang, and J. Sun. Delving Deep into Rectiﬁers:
+Surpassing Human-Level Performance on ImageNet Classi-
+ﬁcation. In eprint arXiv:1502.01852v1, 2015. 1, 5, 6, 7
+
+[10] Y. Jia, E. Shelhamer, J. Donahue, S. Karayev, J. Long, R. Gir-
+shick, S. Guadarrama, and T. Darrell. Caffe: Convolutional
+In Proc. of the
+Architecture for Fast Feature Embedding.
+ACM Intl Conf. on Multimedia, 2014. 4, 5
+
+[11] P. Kontschieder, M. Fiterau, A. Criminisi, and S. R. Bulo´.
+Deep neural decision forests. Proc. IEEE Intl Conf. on Com-
+puter Vision (ICCV), 2015. 1, 4
+
+[12] A. Krizhevsky. Learning multiple layers of features from
+
+tiny images. Technical report, Univ. Toronto, 2009. 7
+
+[13] A. Krizhevsky, I. Sutskever, and G. Hinton. ImageNet Clas-
+siﬁcation with Deep Convolutional Neural Networks.
+In
+Proc. Neural Information Processing Systems (NIPS), 2012.
+1, 2, 3, 5, 6
+
+[14] M. Lin, Q. Chen, and S. Yan. Network in network. Intl Conf.
+
+on Learning Representations (ICLR). 1, 7
+
+[15] Microsoft Corporation. Kinect for Windows and Xbox. 1
+[16] A. Montillo, J. Shotton, J. Winn, J. Iglesias, D. Metaxas, and
+A. Criminisi. Entangled decision forests and their applica-
+tion for semantic segmentation of CT images. In Proc. In-
+formation Processing in Medical Imaging (IPMI), 2011. 2
+
+[17] S. Rota Bul`o and P. Kontschieder. Neural decision forests
+for semantic image labelling. In Proc. IEEE Conf. Computer
+Vision and Pattern Recognition (CVPR), June 2014. 2
+
+[18] O. Russakovsky, J. Deng, H. Su, J. Krause, S. Satheesh,
+S. Ma, Z. Huang, A. Karpathy, A. Khosla, M. Bernstein,
+A. C. Berg, and L. Fei-Fei.
+ImageNet Large Scale Visual
+Recognition Challenge. International Journal of Computer
+Vision (IJCV), 2015. 5
+
+[19] S. Schulter, P. Wohlhart, C. Leistner, A. Saffari, P. M. Roth,
+and H. Bischof. Alternating decision forests. In Proc. IEEE
+Conf. Computer Vision and Pattern Recognition (CVPR),
+2013. 4
+
+[20] P. Sermanet, D. Eigen, X. Zhang, M. Mathieu, R. Fergus, and
+Y. LeCun. OverFeat: Integrated Recognition, localization
+and Detection using Convolutional Networks. In Proc. Intl
+Conf. on Learning Representations (ICLR), 2014. 1
+
+[21] I. K. Sethi. Entropy nets: from decision trees to neural net-
+works. Technical report, Dept. of Computer Science, Wayne
+State Univ., Detroit, MI, 1990. 1
+
+[22] J. Shotton, T. Sharp, P. Kohli, S. Nowozin, J. Winn, and
+A. Criminisi. Decision jungles: Compact and rich models
+In Proc. Neural Information Processing
+for classiﬁcation.
+Systems (NIPS), 2013. 1
+
+[23] K. Simonyan and A. Zisserman. Very Deep Convolutional
+networks for Large-Scale Image Recognition. In Proc. Intl
+Conf. on Learning Representations (ICLR), 2015. 1, 2, 4, 5
+[24] J. Snoek, H. Larochelle, and R. P. Adams. Practical bayesian
+optimization of machine learning algorithms. In Proc. Neu-
+ral Information Processing Systems (NIPS), 2012. 7
+
+[25] A. Su´arez and J. F. Lutsko. Globally optimal fuzzy decision
+trees for classiﬁcation and regression. IEEE Trans. on Pat-
+tern Analysis and Machine Intelligence (PAMI), 21(12), Dec.
+1999. 4
+
+[26] Y. Sun, X. Wang, and X. Tang. Deep Convolutional Network
+In Proc. IEEE Conf.
+Cascade for Facial Point Detection.
+Computer Vision and Pattern Recognition (CVPR), 2014. 1
+[27] C. Szegedy, W. Liu, Y. Jia, P. Sermanet, S. Reed,
+D. Anguelov, D. Erhan, V. Vanhoucke, and A. Rabinovich.
+Going Deeper with Convolutions. In Proc. IEEE Conf. Com-
+puter Vision and Pattern Recognition (CVPR), 2015. 1, 3, 6,
+7
+
+[28] A. Toshev and C. Szegedy. Caffe: Convolutional Architec-
+ture for Fast Feature Embedding. In Proc. IEEE Conf. Com-
+puter Vision and Pattern Recognition (CVPR), 2014. 1, 3,
+7
+
+[29] P. Viola and M. J. Jones. Robust real-time face detection. Intl
+
+Journal on Computer Vision (IJCV), 57(2), 2004. 1
+
+[30] J. Welbl. Casting Random Forests as Artiﬁcial Neural Net-
+works (and Proﬁting from It). In Proc. German Conference
+on Pattern Recognition (GCPR), 2014. 1
+
+[31] D. Yu and L. Deng. Automatic Speech Recognition: A Deep
+
+Learning Approach. Springer, 2014. 1
+
+[32] X. Zhang, J. Zou, X. Ming, K. He, and J. Sun. Efﬁcient and
+Accurate Approximations of Nonlinear Convolutional Net-
+In Proc. IEEE Conf. Computer Vision and Pattern
+works.
+Recognition (CVPR), 2015. 1
+
+[33] X. Zheng, W.Ouyang, and X. Wang. Multi-Stage Contextual
+Deep Learning for Pedestrian Detection. In Proc. IEEE Intl
+Conf. on Computer Vision (ICCV), 2014. 1
+
+

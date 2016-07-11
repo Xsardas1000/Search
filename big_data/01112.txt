@@ -1,0 +1,1121 @@
+If-Conversion Optimization using Neuro
+
+Evolution of Augmenting Topologies
+
+Reem Elkhouly
+
+Computer Science and Eng. Dept.,
+
+E-JUST, Alex., Egypt
+
+reem.elkhouly@ejust.edu.eg
+
+Keiji Kimura
+
+Dept. of Computer Science and Eng.
+
+Waseda University, Tokyo, Japan
+kimura@apal.cs.waseda.ac.jp
+
+Ahmed El-Mahdy
+
+Computer Science and Eng. Dept.,
+
+E-JUST, Alex., Egypt
+
+ahmed.elmahdy@ejust.edu.eg
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+3
+
+ 
+
+ 
+ 
+]
+
+C
+D
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+2
+1
+1
+1
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Abstract
+Control-ﬂow dependence is an intrinsic limiting factor for pro-
+gram acceleration. With the availability of instruction-level par-
+allel architectures, if-conversion optimization has, therefore, be-
+come pivotal for extracting parallelism from serial programs. While
+many if-conversion optimization heuristics have been proposed in
+the literature, most of them consider rigid criteria regardless of
+the underlying hardware and input programs. In this paper, we
+propose a novel if-conversion scheme that preforms an efﬁcient
+if-conversion transformation using a machine learning technique
+(NEAT). This method enables if-conversion customization overall
+branches within a program unlike the literature that considered in-
+dividual branches. Our technique also provides ﬂexibility required
+when compiling for heterogeneous systems. The efﬁcacy of our
+approach is shown by experiments and reported results which il-
+lustrate that the programs can be accelerated on the same archi-
+tecture and without modifying the original code. Our technique
+applies for general purpose programming languages (e.g. C/C++)
+and is transparent for the programmer. We implemented our tech-
+nique in LLVM 3.6.1 compilation infrastructure and experimented
+on the kernels of SPEC-CPU2006 v1.1 benchmarks suite running
+on a multicore system of Intel(R) Xeon(R) 3.50GHz processors.
+Our ﬁndings show a performance gain up to 8.6% over the stand-
+ard optimized code (LLVM -O2 with if-conversion included), in-
+dicating the need for If-conversion compilation optimization that
+can adapt to the unique characteristics of every individual branch.
+Keywords
+If-Conversion, ILP, Performance Enchancement, Com-
+piler Optimization, Machine Learning, NEAT, Neural Networks.
+
+Introduction
+
+1.
+Fast performing programs represent a chief goal in the ﬁelds of
+computer architecture and compilers. A key performance driver
+is providing parallel execution at various levels of granularity.
+With the multicore shift, larger parallelism granularity is gener-
+ally sought. In addition to that, single-core performance is still
+important, as it is a major scaling limiting factor. Accelerating
+single-core performance mainly relies on instruction-level paral-
+lelism (ILP) (Wall 1991), where various independent instructions
+are executed in the same processing cycle simultaneously on the
+same CPU (i.e. on different ALUs). The degree of parallelism is
+inherently limited by the data-ﬂow characteristics of the running
+program. However, control-ﬂow signiﬁcantly hinders exploiting
+the ‘true dependence’ manifested by the data-ﬂow, signiﬁcantly
+reducing the achievable degree of parallelism (Allen et al. 1983).
+
+One major approach to alleviating control-ﬂow dependence is
+branch prediction, where the target of the branch is predicted us-
+ing one of the multiple conventional branch predictors. Speciﬁcally,
+a branch predictor guesses whether the conditional branch causes
+
+a transfer of control or not (Smith 1981). It relies on the branch-
+ing outcome history of the branch and/or other spatially contiguous
+branches. The more complicated the predictor is, the better guess-
+ing it can make. That alleviates the speculative execution in modern
+pipelined processors (Division et al. 1998).
+
+However, not all branches can be easily predicted, particularly
+those with a random outcome (such as branches relying on element
+comparisons when sorting random inputs). Mispredictions come
+with high time penalty resulting from the wasted processing cycles
+in executing the wrongly predicted instructions, ﬂushing them and
+fetching the correct ones (Hennessy and Patterson 2011). Another
+argument that makes the branches undesirable is that they limit the
+instruction fetch bandwidth (Shen and Lipasti 2013) which dimin-
+ishes the instruction level parallelism (ILP), hence the number of
+instructions executed per cycle.
+
+The if-conversion approach is used to convert control-depen-
+dence into data-dependence, aiming to defeat the above perform-
+ance obstacles. In this model, instructions are guarded by ‘predic-
+ates’, if supported by the hardware otherwise conditional moves
+are used, thereby eliminating control-ﬂow (Mahlke et al. 1995).
+This approach thus relies on ‘if-conversion’ optimizations to con-
+vert conditional branches into predicated instructions, allowing for
+further potential parallelization subject to the inherent data-ﬂow de-
+pendences. However, predication comes at the extra cost of execut-
+ing ‘nulliﬁed’ instructions. That can potentially degrade perform-
+ance for large ‘if-then’ bodies. Moreover, branches interact in terms
+of allowing for different execution schedules, for which ﬁnding the
+optimal schedule is a hard combinatorial search problem where its
+complexity grows exponentially with the number of branches per
+function in the program.
+
+In this paper, we revisit the problem of deciding which bran-
+ches to convert. In particular, we implement the machine learning
+method NEAT (Stanley and Miikkulainen 2002) in the LLVM com-
+piler to replace the heuristics used in if-conversion optimization.
+The advantage of using this algorithm is the ability to evaluate the
+if-conversion for all branches in the program taking into consider-
+ation mutual inﬂuence. NEAT ﬁts for this problem because of its
+high performance in searching large spaces (exponential in num-
+ber of branches in this problem). Our system successfully achieved
+up to 8.6% performance gain transparently on the same architec-
+ture and does not require altering the original code by any mean.
+Our technique identiﬁes code features that characterize different
+branches in the program. These features are fed to the machine
+learning algorithm NEAT during the if-conversion optimization to
+customize the transformation plan.
+
+Our contributions can be summarized in three basic modules:
+
+• First, a module that analyzes the code to capture code features
+
+as a vector for each branch.
+
+PROHA’16, March 12, 2016, Barcelona, Spain
+
+1
+
+2016/3/4
+
+• Second, a module that applies the NEAT algorithm to repeatedly
+customize the if-conversion decision for all the branches as
+a vector of ones and zeros which we call the bitmask and
+eventually provides the best performing optimized program.
+
+• Third, a module that controls the if-conversion optimization in
+the LLVM according to the bitmask generated by the second
+module.
+
+We consider C/C++ kernels from the SPEC-CPU2006 v1.1 ben-
+chmarks suite (Standard Performance Evaluation Corporation) for
+the experiments. The results are comprehended in comparison to
+the LLVM’s compilation behavior on the same kernels.
+
+The rest of this paper is organized as follows; Section 2 explains
+essential background. Section 3 provides detailed description for
+our system and contributions. Section 4 presents and discusses res-
+ults. Section 5 provides related work. Finally, Section 6 concludes
+the paper and discusses future work.
+
+2. Background
+In this section, we provide the related background that is necessary
+to illustrate our system. Section 2.1 presents various if-conversion
+transformations. Section 2.2 introduces the LLVM if-conversion
+technique and how we use it to build our analysis module. Sec-
+tion 2.3 explains the machine learning algorithm we used for our
+system (NEAT).
+
+2.1 If-Conversion Optimizations
+Control-ﬂow optimizations, such as branch optimizations, relax the
+control dependences in the program in order to facilitate instruction
+parallelization and speculative execution. Conditional branches add
+control-ﬂow dependences to the program, as their outcome is not
+known until runtime. Systematically converting control depend-
+ence to data dependence was initially introduced by Allen et al. (Al-
+len et al. 1983). The if-conversion process aims to remove branches
+from a given program (Allen and Kennedy 2002). Certainly, a
+branch cannot be deleted without being replaced by another control
+that maintains program proper functionality. That could be accom-
+plished either by conditional moves (CMOVs) or guarded (predic-
+ated) execution.
+
+Conditional Moves (CMOVs): They are hardware supported
+instructions that copy a value from a source to a destination if and
+only if a speciﬁc condition is true. This condition is assessed, and
+then one of the special purpose registers (i.e. EFLAGS register in
+x86) is changed. That enables the compiler to convert a piece of
+code that contains simple branches into branch free code. Several
+processor architectures, such as the SPARC architecture starting
+from SPARC-V9 and Pentium Pro (Muchnick 1997) and more
+recent processors, support conditional moves.
+
+Guarded (Predicated) Execution: It removes forward branches
+by adding guard expressions that control the execution of the in-
+structions. The guard is a Boolean expression that is constructed by
+joining a set of conditions; each of these represents a conditional
+branch that leads to the current instruction. It is obvious that the
+guard expression may grow complex if the instruction is control-
+dependent on many conditional branches. The guard expression
+could be simpliﬁed, but the problem of simplifying a Boolean ex-
+pression is NP-Complete. Some processor architectures such as
+Intel IA-64 and ARM 32-bit support predicated execution by a
+fully predicated instruction set using special registers. To ensure the
+correctness of the program after branch removal, three constraints
+should apply (Allen and Kennedy 2002): (1) The guard expression
+of an instruction is true if and only if the corresponding statement
+in the original program is executed. (2) The order of execution of
+instructions that have true guards in the new program is the same
+as their order of execution in the original program. (3) Any expres-
+
+sion with side effects is evaluated exactly as many times in the new
+program as the original program. If-conversion optimizations are of
+surpassing importance because conditional branch instructions are
+very expensive –in terms of runtime– when mispredicted, besides,
+being obstacles in the way of ILP.
+
+We propose a technique for tunning if-conversion optimization
+- using LLVM - valid for any architecture that supports predicated
+execution. our technique uses a machine learning algorithm that
+is trained to tune if-conversion to give the best performance for
+the whole compiled program. When compiles for heterogeneous
+systems, different compilations are done for different underlying
+hardware ensuring a suitable optimization tuning for each of them.
+While the effect of branches and branch predictors differ among
+the architectures, our technique which is adaptable will be of great
+value. The following section studies the utility of these optimiza-
+tions in the LLVM if-conversion module, then, how we used it in
+our technique.
+
+2.2 LLVM If-conversion
+The LLVM (The LLVM Compiler Infrastructure) is a compiler in-
+frastructure that conducts code analysis and transformation using
+reusable modules, called passes, that support static and dynamic
+compilation. It includes a wide range of capabilities that appear
+transparent to programs. Moreover, it provides high-level inform-
+ation at compile-time, link-time, runtime and between runs. Be-
+sides, LLVM provides a large number of analysis and optimization
+tools that enable precisely generating the object code in a way that
+serves speciﬁc endeavors. In this infrastructure, a low-level Static
+Single Assignment (SSA) form is elaborated for code representa-
+tion (Lattner and Adve 2004). LLVM provides if-conversion optim-
+ization either for the architectures that support predicated instruc-
+tions or the out-of-order CPUs, where both the “then” and “else”
+bodies are executed, and the result is chosen by a cmov instruction.
+Therefore, branches that may be mis-predicted are omitted.
+
+The LLVM if-conversion transformation is included in the -O2
+optimization level and can also be separately requested using com-
+mand line options. For every function, it traverses the whole domin-
+ator tree of basic blocks post-orderly. All instructions within the ba-
+sic block should be valid for speculative execution in order to allow
+conversion. For the nested branches, the conversion starts from the
+most inner tracing back up to the outer ones. To avoid critical edges,
+the if-conversion pass handles either triangle or diamond branches
+only. Another conversion constraint is that the considered block
+should end with a convertible to “select” instruction,PHI node. All
+of these measures would assure the program’s correctness.
+
+After checking the eligibility of if-conversion for a basic block,
+a heuristics based cost model is applied to decide if the conversion
+is proﬁtable. The proﬁtability is measured in terms of multiple
+criteria: First, the critical path should not be extended by more
+than a certain limit, chosen to be half of the misprediction penalty.
+Second, if-converted trace length shortening that is limited by ILP
+resources should exceed that of the critical path in addition to
+the misprediction before conversion. Finally, the delay to “select”
+instruction by data dependence in both “then” and “else” traces
+should be considered. In our system, we replace the cost model and
+heuristics by a machine learning algorithm (NEAT) that decides
+the if-conversion proﬁtability according to the code features and a
+corresponding ﬁtness value reﬂects the performance of the whole
+program.
+
+2.3 NEAT
+Neural networks are famous for their ability to model nonlinear
+problems of high complexity. NeuroEvolution of Augmenting To-
+pologies (NEAT) is a machine learning algorithm that artiﬁcially
+evolves neural networks (NNs) using genetic algorithms tech-
+
+PROHA’16, March 12, 2016, Barcelona, Spain
+
+2
+
+2016/3/4
+
+Figure 1: System architecture that mainly consists of three modules.
+
+niques. It does not only evolve the weights of connections, but also
+evolves the structure of the network. NEAT is proved to outperform
+ﬁxed-topology techniques and showed promising performance in
+the reinforcement learning problems (Stanley and Miikkulainen
+2002).
+
+NEAT starts from an initial generation of minimal uniform
+NNs where the input nodes are connected directly to the output
+nodes with zero hidden nodes. Genetic encoding is used where
+genomes linearly represent NNs. Thus a genome is a list of con-
+nection genes, each connecting two node genes and speciﬁes the
+corresponding weight. NEAT allows a mutation that can change
+connection weights and network structure (adding/deleting nodes
+and/or connections) to generate a population of NNs. The outputs
+of these networks are evaluated through a ﬁtness function, then the
+best of them are selected to be the parents for the next generation
+of networks (Stanley and Miikkulainen 1996). This process is re-
+peated over successive generations of NNs, preserving dimension-
+ality minimization through minimal structure incremental growth,
+until the desired ﬁtness is found. In our system, we use NEAT as a
+machine intelligence technique to search the space of 2n possible
+combinations of converted and non-converted n branches in the
+program in order to ﬁnd the combination that achieves the highest
+performance.
+
+3. System Description
+Our system customizes the if-conversion optimization replacing the
+ﬁxed heuristics used in literature to estimate the proﬁtability of the
+if-conversion by a machine learning strategy based on NEAT. It
+works for any program written in any language which is supported
+by the LLVM compiler and does not require any changes or ad-
+ditions to the original code of the program. We apply NEAT to a
+set of descriptive features that precisely characterizes the code of
+Basic Blocks (BBs) that contain different branches in the program.
+For this purpose, our system is implemented in a three major mod-
+ules illustrated in Figure 1 which are implemented as plugins in the
+compiler infrastructure.
+
+Module 1 is responsible for inspecting the code to ﬁnd the
+branches that can be converted safely without affecting the cor-
+rectness of the program, then extracts the set of features listed in
+Table 1 for each one of them. These features are stored in vectors
+then forwarded to the next module.
+
+Module 2 receives the features vectors and pushes them as an
+input for the NEAT initial population of NNs. Each NN is respons-
+ible for evaluating the features of a single branch to decide whether
+it shall be if-converted. This decision is expressed as a single NN
+output (1/0). The output of all NNs - a stream of 1’s/0’s which we
+call a bitmask - is sent to the third module that controls the if-
+conversion of the corresponding branches on/off. The program is
+compiled with the customized if-conversion optimization, executed
+and evaluated against the ﬁtness function which we designed as
+
+the speedup over the program when optimized with the original if-
+conversion of the LLVM. A group of the NNs that gave the best
+performance are chosen to be the parents of the next generation
+of NNs. A new generation of NNs is generated from those parents
+using GA which enhances the structure of NNs. NEAT continues to
+iterate over new generations to maximize the ﬁtness (speedup) until
+it reaches a deﬁned limit of number of generations.
+
+Module 3 is an alternative for the original if-conversion pass in
+LLVM. This module receives the bitmask for every program com-
+pilation where the number of bits equals the number of branches
+inspected. The if-conversion for each branch is turned on/off ac-
+cording to the value of the corresponding bit. This if-conversion is
+done within the whole compilation process, the output program is
+run and the speedup is calculated. The overall system eventually re-
+ports the highest speedup, the corresponding NN, the bitmask and
+the best performing compiled version of the program.
+
+Our system is convenient for compiling for heterogeneous sys-
+tems requires consideration to its special nature. Exploiting avail-
+able resources as the hardware conﬁguration changes is essential to
+make full utilization of them. The compiler should be aware of gen-
+erating code that targets different hardware. Our technique adjusts
+if-conversion optimization to suit targets. As it does not consider ri-
+gid hardware speciﬁcations as a metric for the optimization tuning.
+On the contrary, the tunning is done through learning from several
+runnings. That allows the tuner to adapt with whatever existing un-
+derlying hardware.
+
+4. Experimentation
+We constructed a testbed for our if-conversion using NEAT to cus-
+tomize the optimization. The operating system is a server version
+of Ubuntu 14.04 LTS running on top of a multicore system of In-
+tel(R) Xeon CPU E5-2637 v3, which has a speed of 3.5 GHz per
+core. As for the memory modules, it has a capacity of 64 GB and
+access rate of 2133 MHz.
+
+For accurate measurement of time we used Intel’s Time Stamp
+Counter (Int) to count processing cycles consumed by the test pro-
+grams. The implementation of our study methodology was based
+on the LLVM compilation framework version no. 3.6.1 with our
+extension that is applicable to any programming language suppor-
+ted by LLVM, and requires no change/addition to the original code
+of the program.
+
+We set NEAT to form 30 NNs per generation and to iterate
+for 50 generations. These parameters were tuned as a trade-off
+between the training time -which is proportional to the size of the
+experiment- and the performance improvement achieved. As for
+the test subject, we considered the integer benchmarks from SPEC-
+CPU2006 v1.1 (Standard Performance Evaluation Corporation) ex-
+ecuted with reference workload.
+
+As shown in Figure 2, our system improves the performance
+with a percentage ranging from 0.74% to 8.6% for all inspec-
+
+PROHA’16, March 12, 2016, Barcelona, Spain
+
+3
+
+2016/3/4
+
+Feature
+Basic Block (BB) size
+True BB Critical Path
+False BB Critical Path
+Minimal Critical Path Minimum of the True and False Critical Paths.
+Unexploited ILP
+Branch Depth
+
+Description
+No. of instructions in the Basic Block (BB) that contains the branch.
+Critical Path length -data dependency- to the True BB.
+Critical Path length -data dependency- to the False BB.
+
+Maximum ILP achieved within the BB after if-conversion.
+The distance of the earliest issue cycle as determined by data dependences
+and latencies from the beginning of the trace.
+The nesting level of the loop that contains the BB.
+No. of Cycles the instruction can be delayed without increasing Critical Path.
+The slack of the PHI node in addition to its depth from the tail trace beginning.
+The depth of the PHI node from the True BB + PHI True Cycles.
+The depth of the PHI node from the False BB + PHI False Cycles.
+
+Loop Depth
+Slack Sum
+Maximum depth
+True BB depth
+False BB depth
+
+Table 1: Code features used by NEAT to customize if-conversion
+
+ted benchmarks over the original if-conversion optimization of
+LLVM on the same architecture. In Table 2 we listed the num-
+ber of branches inspected that can be if-converted while preserving
+the correctness of the program in every benchmark, in addition
+to the speedup achieved. As expected, the larger the number of
+candidate branches, the higher the speedup achieved. 403.gcc is
+on the top of list with 4804 branches and 1.086 speedup; on the
+contrary (429.mcf ) comes at the end with 12 branches and 1.007
+speedup. Moreover, this proportional behavior applies for all the
+benchmarks except 445.gobmk and 458.sjeng which give lower
+speedups than expected. This is an indication that most of the
+candidate branches are not part of the frequently executed code
+which keeps the speedup lower than expected. On the other hand
+462.libquantum gives a much higher speedup compared to the num-
+ber of candidate branches it contains. This is a clue that these can-
+didate branches are very effective and they have a major inﬂuence
+on the frequently executed code.
+
+5. Related Work
+The if-conversion related work in the literature is distinguishable
+by whether if-conversion is performed statically, dynamically, or
+hybrid. While the previous compiler machine learning-aided tech-
+niques target various problems such as the optimal selection of op-
+timizing transformations, their ordering and the best values for the
+transformation parameters.
+
+Static if-conversion depends principally on information such as
+the misprediction penalty and the number of cycles within the if
+body; that can be collected in an ofﬂine analysis (proﬁling) be-
+fore runtime. There are many techniques in the literature that ad-
+opt static if-conversion which are described below. A compilation
+framework that delays the if-conversion to schedule time is de-
+signed to allow the compiler to minimize runtime by balancing the
+control-ﬂow and predicated branches (August et al. 1997). The au-
+thors in (Mantripragada and Nicolau 2000) present an algorithm
+to perform if-conversion selectively on out-of-order processors that
+support dynamic speculation and guarded execution. They iden-
+tiﬁed three criteria to measure the proﬁtability of the conversion
+namely based on size, predictability and proﬁle. The effect of their
+technique on the net cycles, mispredictions and mis-speculation is
+exhibited in their paper.
+
+Another algorithm is reported in (Noah Snavely 2002) for the
+Itanium architecture; it initially operates on unpredicated code, and
+the if-conversion optimization is performed late in the compilation
+process. That generates faster (less runtime) and denser (fewer
+instructions) code.
+
+Further, an algorithm that minimizes the number of predicates
+assigned to basic blocks, which are assigned as early as possible us-
+ing dominance relations to relax dependence constraints, is shown
+in (Fang 1997). Moreover, in (August et al. 1999) the program
+control-ﬂow is represented as a graph (called program decision lo-
+gic network), then it is modeled in a Boolean equation, which is
+then minimized and used to regenerate predicated code.
+
+An algorithm that uses dynamic programming to generate code
+for different target architectures that support predicated execution is
+discussed in (Hohenauer et al. 2008). Another approach handcrafts
+well-known algorithms (i.e. sorting and searching) into a constant
+number of branch-free loops, such that a branch predictor can
+achieve O(1) mispredictions (Elmasry and Katajainen 2012).
+
+Other methods use dynamic if-conversion in which a proﬁling
+process during runtime is used to capture some characteristics (e.g.
+misprediction rate) to be used in optimization. In (Hazelwood and
+Conte 2000), runtime information is used to construct a dynamic
+optimizer that complements the static one in a previously presented
+algorithm. It can convert branches, or reverse their conversion,
+targeting the higher performance based on proﬁling the program to
+discover the highly mispredicted branches. Although this algorithm
+chooses the conversions that improve performance, it does not
+consider any correlation between the different if s which are most
+probably related to each other especially within the same function.
+Also, the authors in (Jordan Alexander 2013) present two al-
+gorithms for if-conversion: one of them targets the intermediate
+representation (IR) level and the other targets the machine code
+level. Two heuristics are used to calculate the proﬁtability of the
+conversion. The execution time (number of cycles in the basic block
+instructions) based on the sizes of basic blocks and basic blocks ex-
+ecution frequencies.
+
+Also, a hardware that uses runtime information to choose to
+convert only the hard-to-predict branches is presented in (Kim et al.
+2006). The presented system provides two versions of the code: one
+can be predicately executed and the other using a branch predictor.
+Finally, there are methods that combine both static and dynamic
+methods: A tree-based model to make predictions using predication
+and vectorization techniques are presented in (Asadi et al. 2012);
+it introduces runtime performance ranking assuming that a trained
+model already exists. Meanwhile, data is laid out in memory in an
+architecture-conscious method. Random features IDs, thresholds,
+and regression values are used to generate features values in a
+features vector.
+
+Another contribution is proposed in (Jimenez and Lin 2001),
+where a simple neural network (perceptron) hardware implement-
+ation is provided to improve branch prediction. Another method
+(Calder et al. 1997) uses program-based static branch prediction
+
+PROHA’16, March 12, 2016, Barcelona, Spain
+
+4
+
+2016/3/4
+
+p
+u
+d
+e
+e
+p
+S
+
+ 1.1
+
+ 1.08
+
+ 1.06
+
+ 1.04
+
+ 1.02
+
+ 1
+
+Reference Workload
+
+h
+
+c
+
+n
+
+e
+
+e rlb
+
+0 . p
+
+0
+
+4
+
+2
+
+zip
+
+1 . b
+
+0
+
+4
+
+c c
+
+3 . g
+
+0
+
+4
+
+cf
+
+9 . m
+
+2
+
+4
+
+k
+
+m
+
+b
+
+o
+
+5 . g
+
+4
+
+4
+
+e r
+
+m
+
+m
+
+6 . h
+
+5
+
+4
+
+2 .lib
+
+6
+
+4
+
+m
+
+n t u
+
+a
+
+u
+
+q
+
+4 r e f
+
+6
+
+2
+
+4 . h
+
+6
+
+4
+
+g
+
+n
+
+8 .sje
+
+5
+
+4
+
+p
+
+e t p
+
+n
+
+m
+
+1 . o
+
+7
+
+4
+
+st a r
+
+3 . a
+
+7
+
+4
+
+k
+
+m
+
+b
+
+c
+
+n
+
+ala
+
+3 .x
+
+8
+
+4
+
+Figure 2: Speedup of benchmarks
+
+Description (Henning 2006)
+
+No. Branches
+
+Speedup
+
+Compression software based on Julian Seward’s bzip2 version 1.0.3
+
+A cut-down version of Perl v5.8.7
+
+C Language optimizing compiler
+
+Combinatorial optimization - Singledepot vehicle scheduling
+
+Artiﬁcial Intelligence - Go game playing
+
+Search a gene sequence database - Proﬁle HMMs
+
+Artiﬁcial Intelligence (game tree search - pattern recognition)
+
+Physics - Quantum Computing Simulation
+
+Video compression
+
+Discrete Event Simulation of a large ethernet network
+Computer games - Artiﬁcial Intelligence - Path ﬁnding
+
+Processor for transforming XML documents into HTML, text, or other XML document types
+
+717
+41
+4804
+12
+1000
+166
+172
+25
+652
+102
+57
+934
+
+1.045
+1.018
+1.086
+1.007
+1.019
+1.045
+1.026
+1.078
+1.034
+1.042
+1.047
+1.071
+
+Benchmark
+400.perlbench
+401.bzip2
+403.gcc
+429.mcf
+445.gobmk
+456.hmmer
+458.sjeng
+462.libquantum
+464.h264ref
+471.omnetpp
+473.astar
+483.xalancbmk
+
+Table 2: Candidate Branches and Speedup.
+
+based on neural networks and decision trees to map static features
+associated with each branch to a prediction.
+
+Moreover, an attempt to construct an online ensemble learning
+framework consisting of small trees to solve the problem of hard-
+ware conditional branch prediction is discussed in (Fern and Givan
+2003). The learning based techniques (the third category) may be
+the only one that considered the effect of if-conversion on the whole
+program, as they train their systems over iterations to converge to
+the least possible runtime. Others make a separate decision for in-
+dividual if s regardless of the correlation with other ones. But, the
+problem is how fast they can evolve the selection space towards the
+best performing and that is what we handle in our system.
+
+As an example for research that considered using machine
+learning algorithms for efﬁcient compiler optimization, ordering or
+transformation parameters tuning, we demonstrate some of them
+below. A compiler based approach for mapping parallelism to mul-
+ticore processors is proposed in (Wang and O’Boyle 2009). This
+technique applies an off-line trained NNs to develop a number of
+threads and scheduling predictors for parallel programs. An at-
+tempt of speeding up iterative compilation -through building mod-
+els of the program features using machine learning techniques-
+was presented in (Agakov et al. 2006). Authors in (Monsifrot
+et al. 2002) introduced a decision-tree based technique that gen-
+erates compiler heuristics for the target processor considering the
+loop unrolling optimization as a source of performance features.
+(Yotov et al. 2003). A per-method logistic regression technique is
+
+used to select proper optimizations for each method in the program
+depending on its features in (Cavazos and O’boyle 2006).
+
+6. Conclusion
+If-conversion is a compiler optimization that tackles code perform-
+ance. It seeks to increase the instruction fetch bandwidth and to
+decrease branch mispredictions. That can be done by substituting
+the branches by branch free pieces of code.
+
+This paper investigates the efﬁcacy of a novel technique that
+uses a machine learning approach that evolves NNs to solve prob-
+lems with high complexity, namely NEAT; the technique cus-
+tomizes if-conversion in one of the recently developed and rap-
+idly grown open source compilers (LLVM). We examine the ad-
+equacy of our system for The INT suite of kernels from the SPEC-
+CPU2006 v1.1 benchmarks. The experiments are performed by
+extending the LLVM compilation framework to provide for such
+analysis. The results show notable discrepancy between optim-
+ized code using LLVM built-in technique and the best conﬁgura-
+tion achieved by our system, more than 8.6% in 462.libquantum.
+Moreover, our system does not require neither changes nor addi-
+tions to the original code of the program.
+
+Future work would consider dynamic compilation analysis tak-
+ing into consideration behavior change between calls. On the other
+hand, we are going to expand our research to include architectures
+that support predicated execution such as the ARM processors.
+
+PROHA’16, March 12, 2016, Barcelona, Spain
+
+5
+
+2016/3/4
+
+7. Acknowledgement
+We are grateful to Prof. Hironori Kasahara and Prof. Kazunori
+Ueda, Department of Computer Science and Engineering, Waseda
+University, Tokyo, Japan, for their contributions, discussions and
+advice.
+
+References
+F. Agakov, E. Bonilla, J. Cavazos, B. Franke, G. Fursin, M. F. O’Boyle,
+J. Thomson, M. Toussaint, and C. K. Williams. Using machine learning
+to focus iterative optimization. In Proceedings of the International Sym-
+posium on Code Generation and Optimization, pages 295–305. IEEE
+Computer Society, 2006.
+
+J. R. Allen, K. Kennedy, C. Porterﬁeld, and J. Warren. Conversion of
+control dependence to data dependence.
+In Proceedings of the 10th
+ACM SIGACT-SIGPLAN Symposium on Principles of Programming
+Languages, POPL ’83, pages 177–189, New York, NY, USA, 1983.
+ACM.
+doi: 10.1145/567067.567085. URL
+http://doi.acm.org/10.1145/567067.567085.
+
+ISBN 0-89791-090-7.
+
+R. Allen and K. Kennedy. Optimizing compilers for modern architectures:
+a dependence-based approach, volume 289. Morgan Kaufmann San
+Francisco, 2002.
+
+N. Asadi, J. Lin, and A. P. de Vries. Runtime optimizations for prediction
+
+with tree-based models. CoRR, abs/1212.2287, 2012.
+
+D. August, W.-M. Hwu, and S. Mahlke. A framework for balancing control
+ﬂow and predication. In Thirtieth Annual IEEE/ACM International Sym-
+posium on Microarchitecture, pages 92–103, 1997. doi: 10.1109/MI-
+CRO.1997.645801.
+
+D. August, J. Sias, J.-M. Puiatti, S. Mahlke, D. Connors, K. Crozier, and
+W.-M. Hwu. The program decision logic approach to predicated execu-
+tion. In Proceedings of the 26th International Symposium on Computer
+Architecture, pages 208–219, 1999. doi: 10.1109/ISCA.1999.765952.
+
+B. Calder, D. Grunwald, M. Jones, D. Lindsay, J. Martin, M. Mozer,
+and B. Zorn.
+Evidence-based static branch prediction using ma-
+chine learning. ACM Trans. Program. Lang. Syst., 19(1):188–222,
+Jan. 1997.
+doi: 10.1145/239912.239923. URL
+http://doi.acm.org/10.1145/239912.239923.
+
+ISSN 0164-0925.
+
+J. Cavazos and M. F. O’boyle. Method-speciﬁc dynamic compilation using
+
+logistic regression. ACM SIGPLAN Notices, 41(10):229–240, 2006.
+
+I. B. M. C. R. Division, P. Raghavan, H. Schachnai,
+
+and
+for Speculative Execution of
+Computer science. IBM Research Division, 1998. URL
+
+M. Yaniv.
+Code.
+https://books.google.co.jp/books?id=eBgMGwAACAAJ.
+
+Dynamic Schemes
+
+A. Elmasry and J. Katajainen. Lean programs, branch mispredictions, and
+sorting.
+In Fun with Algorithms, volume 7288 of Lecture Notes in
+Computer Science, pages 119–130. Springer Berlin Heidelberg, 2012.
+ISBN 978-3-642-30346-3. doi: 10.1007/978-3-642-30347-0 14.
+
+J. Fang. Compiler algorithms on if-conversion, speculative predicates
+assignment and predicated code optimizations.
+In Languages and
+Compilers for Parallel Computing, volume 1239 of Lecture Notes
+in Computer Science, pages 135–153. Springer Berlin Heidelberg,
+1997.
+ISBN 978-3-540-63091-3. doi: 10.1007/BFb0017250. URL
+http://dx.doi.org/10.1007/BFb0017250.
+
+A. Fern and R. Givan.
+
+ical study. Machine Learning, 2003.
+10.1023/A:1025619426553.
+
+Online ensemble learning: An empir-
+doi:
+
+ISSN 0885-6125.
+
+K. M. Hazelwood and T. M. Conte. A lightweight algorithm for dynamic if-
+conversion during dynamic optimization. In Parallel Architectures and
+Compilation Techniques Proceedings., pages 71–80. IEEE, 2000.
+
+J. L. Hennessy and D. A. Patterson. Computer architecture: a quantitative
+
+approach. Elsevier, 2011.
+
+J. L. Henning. Spec cpu2006 benchmark descriptions. ACM SIGARCH
+
+Computer Architecture News, 34(4):1–17, 2006.
+
+M. Hohenauer, F. Engel, R. Leupers, G. Ascheid, H. Meyr, G. Bette, and
+B. Singh. Retargetable code optimization for predicated execution. In
+Proceedings of the conference on Design, automation and test in Europe,
+pages 1492–1497. ACM, 2008.
+
+Intel 64 and IA-32 Architectures Software Developer’s Manual Volume 2B:
+
+Instruction Set Reference. Intel.
+
+D. Jimenez and C. Lin.
+
+Dynamic branch prediction with per-
+ceptrons.
+In The Seventh International Symposium on High-
+Performance Computer Architecture, HPCA., pages 197–206, 2001. doi:
+10.1109/HPCA.2001.903263.
+
+K. A. Jordan Alexander, Kim Nikolai.
+
+if-conversion for predicated architectures.
+
+Ir-level versus machine-
+In Proceed-
+the 10th Workshop on Optimizations for DSP and Em-
+ISBN
+URL
+
+level
+ings of
+bedded Systems, ODES ’13, pages 3–10. ACM, 2013.
+978-1-4503-1905-8.
+doi: 10.1145/2443608.2443611.
+http://doi.acm.org/10.1145/2443608.2443611.
+
+H. Kim, O. Mutlu, Y. N. Patt, and J. Stark. Wish branches: Enabling
+adaptive and aggressive predicated execution. Micro, IEEE, 26(1):48–
+58, 2006.
+
+C. Lattner and V. Adve. Llvm: A compilation framework for lifelong pro-
+gram analysis & transformation. In Code Generation and Optimization,
+CGO., pages 75–86. IEEE, 2004.
+
+S. A. Mahlke, R. E. Hank, J. E. McCormick, D. I. August, and W.-M. Hwu.
+A comparison of full and partial predicated execution support for ilp
+processors. In Proceedings of the 22nd Annual International Symposium
+on Computer Architecture, pages 138–149. IEEE, 1995.
+
+S. Mantripragada and A. Nicolau. Using proﬁling to reduce branch mispre-
+diction costs on a dynamically scheduled processor. In Proceedings of
+the 14th International Conference on Supercomputing, ICS, pages 206–
+214. ACM, 2000. ISBN 1-58113-270-0. doi: 10.1145/335231.335251.
+URL http://doi.acm.org/10.1145/335231.335251.
+
+A. Monsifrot, F. Bodin, and R. Quiniou. A machine learning approach to
+automatic production of compiler heuristics. In Artiﬁcial Intelligence:
+Methodology, Systems, and Applications, pages 41–50. Springer, 2002.
+S. S. Muchnick. Advanced compiler design implementation. Morgan
+
+Kaufmann, 1997.
+
+G. A. Noah Snavely, Saumya Debray. Predicate analysis and if-conversion
+in an itanium link-time optimizer.
+In Proceedings of the Workshop
+on Explicitly Parallel Instruction Set Architectures and Compilation
+Techniques (EPIC-2), 2002.
+
+J. P. Shen and M. H. Lipasti. Modern processor design: fundamentals of
+
+superscalar processors. Waveland Press, 2013.
+
+J. E. Smith. A study of branch prediction strategies. In Proceedings of the
+8th annual symposium on Computer Architecture, pages 135–148. IEEE
+Computer Society Press, 1981.
+
+Standard Performance Evaluation Corporation.
+
+URL http://www.spec.org/.
+
+SPEC Benchmarks,
+Accessed
+
+http://www.spec.org/.
+Sept.1,2015.
+
+K. O. Stanley and R. Miikkulainen.
+
+learning
+through evolving neural network topologies. Network (Phenotype), 1
+(2):3, 1996.
+
+Efﬁcient reinforcement
+
+K. O. Stanley and R. Miikkulainen. Evolving neural networks through aug-
+menting topologies. Evolutionary Computation, 10(2):99–127, 2002.
+URL http://nn.cs.utexas.edu/?stanley:ec02.
+
+The LLVM Compiler
+
+Infrastructure.
+
+http://www.llvm.org/.
+
+URL
+
+http://www.llvm.org/. Accessed Sept.1,2015.
+
+D. W. Wall. Limits of instruction-level parallelism, volume 19. ACM, 1991.
+Z. Wang and M. F. O’Boyle. Mapping parallelism to multi-cores: a machine
+learning based approach. In ACM Sigplan notices, volume 44, pages 75–
+84. ACM, 2009.
+
+K. Yotov, X. Li, G. Ren, M. Cibulskis, G. DeJong, M. Garzaran, D. Padua,
+K. Pingali, P. Stodghill, and P. Wu. A comparison of empirical and
+model-driven optimization.
+In ACM SIGPLAN Notices, volume 38,
+pages 63–76. ACM, 2003.
+
+PROHA’16, March 12, 2016, Barcelona, Spain
+
+6
+
+2016/3/4
+
+

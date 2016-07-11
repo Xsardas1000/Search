@@ -1,0 +1,2283 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+3
+
+ 
+
+ 
+ 
+]
+h
+p
+-
+o
+e
+g
+
+.
+s
+c
+i
+s
+y
+h
+p
+[
+ 
+ 
+
+1
+v
+3
+6
+2
+1
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Gamra: Simple Meshing for Complex
+
+Earthquakes
+
+Walter Landry∗1 and Sylvain Barbot†2
+
+1Infrared Processing and Analysis Center, Caltech, Pasadena, CA
+
+91125, USA
+
+2Earth Observatory of Singapore, 50 Nanyang Avenue, Nanyang
+
+Technological University, 639798, Singapore
+
+March 7, 2016
+
+Abstract
+
+The static oﬀsets caused by earthquakes are well described by elas-
+tostatic models with a discontinuity in the displacement along the fault.
+A traditional approach to model this discontinuity is to align the numer-
+ical mesh with the fault and solve the equations using ﬁnite elements.
+However, this distorted mesh can be diﬃcult to generate and update.
+We present a new numerical method, inspired by the Immersed Interface
+Method [38], for solving the elastostatic equations with embedded dis-
+continuities. This method has been carefully designed so that it can be
+used on parallel machines on an adapted ﬁnite diﬀerence grid. We have
+implemented this method in Gamra, a new code for earth modelling. We
+demonstrate the correctness of the method with analytic tests, and we
+demonstrate its practical performance by solving a realistic earthquake
+model to extremely high precision.
+
+1 Motivation
+A common feature of many earthquakes is a complex network of intersecting
+faults. Accurately modeling the static oﬀsets and associated large scale de-
+formation due to this fault geometry is crucial to a reliable understanding of
+seismic hazards [39]. The behavior of these faults is relatively well described by
+the equations of variable modulus elastostatics. However, for realistic faults, the
+displacement does not gradually taper oﬀ, but rather ends abruptly. This abrupt
+termination gives rise to a logarithmic singularity in the displacement [48]. In
+
+∗wlandry@caltech.edu
+†sbarbot@ntu.edu.sg
+
+1
+
+realistic faults, these singularities are smoothed out by non-linear processes at
+the fault tips that are on a scale that are many orders of magnitude smaller
+than the fault itself. These characteristics make it challenging to numerically
+model realistic fault networks.
+
+In addition, elastostatics is only one piece of the puzzle when modeling the
+earthquake cycle. We want to incorporate an elastostatic solver into an overall
+algorithm for modeling the entire earthquake cycle [9]. We desire a uniﬁed
+method, using the same mesh, architecture, and boundaries, that can solve
+elliptic equations (for static oﬀsets of earthquakes), parabolic equations (for
+poro-elastic and visco-elastic evolution between earthquakes), and hyperbolic
+equations (for dynamic rupture during an earthquake). Then we will have a
+powerful tool for self consistent models of the entire earthquake cycle.
+
+At present, one relatively successful approach to building this kind of tool
+uses boundary integral methods [9, 32, 37, 28, 34, 41, 52, 57, 58]. However,
+boundary integral methods inevitably make simpliﬁcations in the geometry or
+the physics of the problem. Finite-element methods [1, 26, 44, 51, 33, 31] pro-
+vide a natural way to fully represent the geometry and the physics as long as
+the mesh conforms to the faults. Generating these conforming meshes can be
+quite challenging and time consuming, especially when the faults intersect. The
+extended ﬁnite element method [10, 15, 64] shows great promise in addressing
+this problem with mesh generation, though it has yet to be applied to realistic
+3D earthquake models.
+
+Finite diﬀerence methods, on the other hand, have not traditionally been
+used for this kind of problem. Straightforward implementations of ﬁnite dif-
+ferences require that the displacement be continuous and diﬀerentiable. This
+limitation spurred the development of the Immersed Interface Method (IIM)
+[38]. IIM explicitly models the discontinuous jump, resulting in a series of cor-
+rections to the ordinary ﬁnite diﬀerence stencils. IIM has spawned a number of
+variations, and some of these have been applied to various problems in elasto-
+statics [55, 56, 12, 65]. None of them have looked at models most relevant to
+earthquakes, where we prescribe the discontinuity in the displacement. More
+importantly, none of them have discussed how to handle the diﬃculties associ-
+ated with the singularity at the fault tip. Finally, none of these methods have
+been implemented on adapted grids or parallel machines.
+
+The purpose of this paper is to describe a new method, inspired by IIM, that
+naturally handles all of the diﬃculties associated with faults. This method was
+developed with an eye towards performance, so it naturally extends to the use
+of parallel machines and highly adapted grids. With this solver in place, we can
+then use the existing deep understanding of how to implement hyperbolic and
+parabolic solvers for the equations speciﬁc to earthquakes in a ﬁnite diﬀerence
+framework [17, 19, 20, 3, 18, 25, 49, 21, 22, 16, 35, 45].
+
+We ﬁrst describe the equations of linear elasticity, how we treat internal
+dislocations, and how we solve these equations on an adapted mesh. Then
+we demonstrate the correctness of the method and our implementation with
+a series of analytic tests. Finally, we document the performance of our im-
+plementation with a simulation of the 1992 Mw 7.3 Landers earthquake. The
+
+2
+
+algorithm described in this paper is implemented in Gamra, a code available at
+https://bitbucket.org/wlandry/gamra. Gamra is a French acronym for Géody-
+namique Avec Maille Raﬁnée Adaptivement, meaning “geodynamics with adap-
+tive mesh reﬁnement”.
+
+2 Methods
+We begin by describing the equations of linear elasticity (section 2.1) and the
+mesh we use for solving them (section 2.2). Then we describe the Gauss-Seidel
+smoother that we use as a component in our solvers (section 2.3). Then we
+describe the corrections we make to treat internal dislocations of arbitrary ori-
+entation in two and three dimensions (section 2.4). Then we describe how we
+implement boundary conditions (section 2.5). With these components, we have
+a stable, accurate solver for earthquake physics.
+
+However, this will not be a fast solver without multigrid. To implement
+multigrid (section 2.6), we need coarsening (section 2.6.1) and reﬁnement (sec-
+tion 2.6.2) operators. To implement adaptive multigrid, we also need to set
+boundary conditions at coarse-ﬁne boundaries (section 2.6.3).
+
+2.1 Governing Equations
+We solve the Navier’s equation for elastostatic deformation with the inﬁnitesimal
+strain approximation
+
+(1)
+where the stress components σji are deﬁned using Hooke’s law in terms of the
+displacement components vi, Lame’s ﬁrst parameter λ, and the shear modulus
+µ
+
+σji,j + fi = 0 ,
+
+(2)
+We use Einstein summation notation, where each index i, j, k is understood
+to x, y, and z in turn, repeated indices are summed, and commas (,) denote
+derivatives.
+
+σji ((cid:126)v) ≡ µ(vi,j + vj,i) + δijλvk,k.
+
+For all of our test problems, the stress tensor will be symmetric (σij = σji).
+In addition, the forcing term fi is zero for many of our test problems. But
+equivalent body forces can be used represent inelastic deformation in quasi-static
+deformation simulations [7, 54, 53]. Therefore the inclusion of body forces in Eq.
+(1) is critical for modeling quasi-static deformation due to oﬀ-fault processes.
+
+2.2 Staggered Grid
+We discretize the equations on a staggered grid, with the displacement located
+at cell faces as shown in Figure 1. Our method requires the shear modulus (µ)
+at both the cell centers and cell corners. Since µ is a given function of space, we
+could compute it exactly at both cell centers and corners. We have found that
+we get larger reductions in the residuals for each multigrid V-cycle by using the
+
+3
+
+Figure 1: Reference cell showing where the displacement and moduli are deﬁned.
+The bottom left is at x = 0, y = 0, and the top right is at x = δx, y = δy.
+
+given function to compute the cell centers, and then using the geometric mean
+to ﬁll the value at the cell corners. Speciﬁcally, in 2D, for a reference cell where
+the bottom left corner is located at x = 0, y = 0, µ at that corner is
+
+(cid:17)1/4
+
+(cid:16)
+
+µ|0,0 =
+
+µ|δx/2,δy/2 µ|−δx/2,δy/2 µ|δx/2,−δy/2 µ|−δx/2,−δy/2
+
+.
+
+(3)
+
+The subscripts |0,δy/2 indicate the variable located at an oﬀset of x = 0, y = δy/2
+from the bottom left corner. So |0,0 is the bottom left corner, |0,δy/2 is the left
+face, and |δx/2,δy/2 is the cell center.
+The Lame parameter λ is only needed at cell centers, so there is no extra
+interpolation step.
+
+We can specify µ and λ one of two ways: analytic expressions and tables.
+We use the muparser library [11] to evaluate analytic expressions. To compute
+the modulus at the boundary, we may need the modulus at a point outside the
+boundary. For analytic expressions, we evaluate the expression at that outside
+point. For moduli given by a table, we choose the closest point covered by the
+table.
+
+For multigrid, the modulus on coarser levels is interpolated from ﬁner levels,
+not directly computed. Using the interpolated values rather than the directly
+computed values results in larger reductions in the residuals for each multigrid
+V-cycle. The interpolation onto the cell centered modulus is a simple arithmetic
+average of all of the ﬁne points in the coarse cell.
+
+This treatment of the modulus works well for the moderate jumps in material
+properties seen in realistic models of earthquake regions. More extreme jumps
+would require a more sophisticated treatment, such as applying IIM to material
+interfaces as well as faults.
+
+4
+
+2.3 Gauss-Seidel Relaxation
+The core of the solver is a red-black Gauss-Seidel relaxation. We ﬁrst deﬁne the
+residual as the non-zero remnant of equation 1
+
+ri
+
+(cid:126)v, (cid:126)f
+
+= σji,j + fi .
+
+(4)
+
+We discretize the residual in the usual way with centered diﬀerences. To be
+explicit, in 2D, we write the x component as
+
+(cid:16)
+
+(cid:17)
+
+σjx,j = ((λ + 2µ) vx,x),x + (λ vy,y),x + (µ (vx,y + vy,x)),y .
+
+where, in the reference cell
+
+(cid:0)vx,x
+
+,x
+
+(cid:0)λ + 2µ(cid:1)(cid:1)
+(cid:104)(cid:16)
+(cid:16)
+(cid:12)(cid:12)(cid:12)0,δy/2
+
+−
+
+(vy,yλ),x
+
+=
+
+(cid:12)(cid:12)(cid:12)(cid:12)0,δy/2
+(cid:104)(cid:16)
+(cid:16)
+(cid:12)(cid:12)(cid:12)0,δy/2
+
+−
+
+=
+
+and
+
+((vx,y + vy,x) µ),y
+
+=
+
+vx|δx,δy/2 − vx|0,δy/2
+vx|0,δy/2 − vx|−δx,δy/2
+
+λ|δx/2,δy/2 + 2 µ|δx/2,δy/2
+
+λ|−δx/2,δy/2 + 2 µ|−δx/2,δy/2
+
+(cid:17)
+
+vy|δx/2,δy − vy|δx/2,0
+vy|−δx/2,δy − vy|−δx/2,0
+
+λ|δx/2,δy/2
+
+(cid:17)
+
+λ|−δx/2,δy/2
+
+/ (δxδy) ,
+
+(cid:17)(cid:105)
+
+/δx2,
+
+(5)
+
+(6)
+
+(cid:17)
+
+(cid:105)
+
+(cid:17)
+
+(cid:17)
+(cid:17)
+
+µ|0,δy
+µ|0,0
+
+(cid:17)
+
+vx|0,3δy/2 − vx|0,δy/2
+vx|0,δy/2 − vx|0,−δy/2
+vy|δx/2,δy − vy|−δx/2,δy
+vy|δx/2,0 − vy|−δx/2,0
+
+µ|0,0
+
+(cid:17)
+(cid:17)
+
+/δy2
+
+µ|0,δy
+
+/ (δxδy) .
+
+(cid:17)(cid:16)
+(cid:17)(cid:16)
+
+(cid:16)(cid:16)
+(cid:16)
+(cid:16)(cid:16)
+(cid:16)
+
+−
++
+
+−
+
+We then deﬁne the expression ∂ri/∂ vi|x,y as the derivative of the ﬁnite dif-
+ference expression of ri with respect to vi|x,y. For example, the derivative of
+
+(cid:0)vx,x
+
+(cid:12)(cid:12)(cid:12)(cid:12)0,δy/2
+(cid:0)λ + 2µ(cid:1)(cid:1)
+(cid:32)(cid:0)vx,x
+(cid:0)λ + 2µ(cid:1)(cid:1)
+
+is
+
+,x
+
+∂
+
+∂ vx|0,δy/2
+
+(cid:33)
+
+=
+
+(cid:16)(cid:16)
+(cid:16)
+
+−
+
+,x
+
+(cid:12)(cid:12)(cid:12)(cid:12)0,δy/2
+(cid:17)
+
+(cid:16)
+
+The Gauss-Seidel update is then given by
+
+λ|δx/2,δy/2 + 2 µ|δx/2,δy/2
+
+λ|−δx/2,δy/2 + 2 µ|−δx/2,δy/2
+
+(cid:17)
+
+(cid:17)(cid:17)
+
+/δx2 .
+
+(7)
+
+vi|x,y
+
+= vi|x,y −
+
+new
+
+ri
+
+∂ri/∂ vi|x,y
+
+.
+
+5
+
+Figure 2: Update schedule for Gauss-Seidel relaxation in 2D. Updates for 3D
+follow a similar pattern.
+
+We perform the update in-place in two separate passes as seen in Figure 2. Our
+discretisation allows us to update each point within a pass independently of
+each other. Parallelizing the method involves partitioning the mesh into regions
+that each belong to a diﬀerent processor. Synchronization only happens before
+each pass, where each region gets updates to a single layer of ghost zones.
+
+2.4 Treatment of Internal Dislocations
+2.4.1 Theory
+We deﬁne faults as a ﬁnite-sized internal surfaces where there is a displacement
+discontinuity called slip. Fault slip is often described in piece-wise fault segments
+where displacement is uniform [47, 48, 62, 42, 6, 24, 46], and we follow this
+convention. This means that a model of a realistic fault will be made up of
+hundreds of fault segments, each with their own slip. Internal dislocations can
+cause stress and displacement singularities at the edges of these segments [50,
+59, 13]. These singularities do not manifest themselves in real earthquakes
+because the rock behaves nonlinearly beyond a certain stress by, for example,
+breaking. However, the nonlinear behavior occurs over a length scale that is
+orders of magnitude smaller than the rest of the model. So the stress can still
+get quite high, and these stress concentrations are key to understanding localized
+deformation. So modeling algorithms must not break down in the presence of
+these singularities.
+
+To illustrate the method, consider the single faults in 2D in Figure 3. The slip
+−→s = (sx, sy) on the faults is given as an input to the problem. To compute vx,x
+
+6
+
+first passsecond passFigure 3: Fault corrections on a grid. The stencil for the derivative vx,x crosses
+the fault at point A but misses the fault at point E. The stencil for the derivative
+vy,yx at point C crosses the fault but at point D only partially crosses it.
+
+at point A = (Ax, Ay), we would ordinarily write the ﬁnite diﬀerence expression
+
+(cid:16)
+
+(cid:17)
+
+vx,x|FD =
+
+vx|Ax+δx/2,Ay − vx|Ax−δx/2,Ay
+
+/δx.
+
+If vx is constant on each side (vright, vleft), then the slip sx is the diﬀerence
+between them sx = vright − vleft. The ﬁnite diﬀerence then becomes
+
+vx,x|FD = (vright − vleft) /δx = sx/δx.
+
+This goes to inﬁnity as the resolution improves and h decreases. However,
+the true value of vx,x at that point is zero because vx is constant. The core idea
+of the original IIM paper [38] is to model these discontinuities explicitly. Then
+we compute corrections to apply when computing derivatives. In this case, we
+can compute the correct derivative by carefully subtracting away the divergent
+term sx/δx. Then the corrected expression is
+
+(cid:104)
+
+(cid:105)
+
+vx,x|corrected = vx,x|FD − sx/δx =
+
+vx|Ax+δx/2 − vx|Ax−δx/2
+
+/δx − sx/δx.
+
+One important note is that this correction is only applied if the line between
+v|x+δx/2 and v|x−δx/2 crosses the fault. If it barely misses the fault as in the
+case at point E in Figure 3, there is no correction. This is a signiﬁcant diﬀerence
+from other methods such as extended ﬁnite elements, which can have diﬃculties
+arising from small cell volumes or bad aspect ratios [15]. This also implies that
+the tip of the fault, as seen by these corrections, is only determined up to O(h).
+When looking at terms with second derivatives, we build them out of ﬁrst
+derivatives. Since the slip is constant along the fault element, there is no cor-
+rection in the derivatives, only in the displacements. This means that we can
+
+7
+
+EBCDAB in Figure 3 is
+
+(cid:16)
+
+(cid:16)
+
+(cid:104)
+(cid:17)(cid:12)(cid:12)(cid:12)B
+(cid:17)(cid:12)(cid:12)(cid:12)C
+
+(cid:104)
+
+(cid:104)
+(cid:17)(cid:12)(cid:12)(cid:12)D
+
+(cid:105)
+
+(cid:105) sx
+(cid:105) sy
+
+,
+
+δxδy
+
+build ∆ (vx,xx), the correction for vx,xx, out of ∆ (vx,x), the corrections for vx,x.
+In the reference cell, this is
+
+∆ (vx,xx)|0,δy =
+
+∆ (vx,x)|δx/2,δy − ∆ (vx,x)|−δx/2,δy
+
+/δx
+
+(8)
+
+To be concrete, when applying this method to Eq. 5, the correction at point
+
+∆
+
+((λ + 2µ) vx,x),x
+
+= −
+
+λ|Bx−δx/2,By
+
++ 2 µ|Bx−δx/2,By
+
+δx2 .
+
+(9)
+
+The correction to Eq. 6 at point C is
+
+∆
+
+(vy,yλ),x
+
+= −
+
+λ|Cx+δx/2,Cy − λ|Cx−δx/2,Cy
+
+which is zero if the modulus λ is constant. In contrast, the correction at point
+D, near the tip of the fault, is
+
+(cid:16)
+
+(cid:17) sy
+
+(cid:16)
+
+∆
+
+(vy,yλ),x
+
+= −
+
+λ|Dx+δx/2,Dy
+
+,
+
+δxδy
+
+because only the derivative
+
+vy,y|Dx+δx/2,Dy
+
+crosses the fault. Finally, the correction to Eq. 6 at point B is zero because each
+individual correction ∆ (vy,y) is zero.
+
+Note that these corrections do not depend on the type of slip on the fault.
+For example, if the slip has a tensile opening component, the corrections would
+have the same form. The only restriction is that the two sides of the fault must
+be in contact. With that said, we have only tested slip along the faults, so we
+can only speak with certainty about that kind of slip, referred to as mode II
+and III in fracture mechanics.
+
+Excluding the tips, these corrections are exact for the type of slip being
+modeled. This means that the stress is consistent and well behaved across the
+fault. We might also expect that it would lead to a scheme that converges
+
+as O(cid:0)h2(cid:1). However, the method’s uncertainty about the location of the tips
+
+introduces a global error that converges as O (h). At the fault tips themselves,
+the logarithmic singularity introduces a local error that does not converge.
+
+The above treatment describes a single fault. Since the problem is linear, we
+can handle multiple faults, each made up of multiple fault segments, by adding
+all of the corrections from individual fault segments together. This includes the
+cases where fault segments intersect.
+
+Implementation
+
+2.4.2
+These corrections do not depend on the computed displacement ﬁeld. In that
+sense, they could be interpreted as body forces fi in equation 1. In 3D, this
+
+8
+
+would only require 3 additional numbers per cell. However, that analogy breaks
+down when we consider the corrections needed when interpolating between
+coarse and ﬁne levels for multigrid (Section 2.6). With that in mind, we pre-
+compute and store the jump in several diﬀerent directions as shown in Figure
+4. In 2D, we store the jump across a cell (∆f ) and the jump to the corner (∆e).
+Then, for example, the correction in Eq. 9 becomes
+
+(cid:16)
+
+(cid:16)
+
+(cid:17)(cid:12)(cid:12)(cid:12)B
+
+(cid:17) ∆f x|Bx−δx/2,By
+
+.
+
+δx2
+
+∆
+
+((λ + 2µ) vx,x),x
+
+= −
+In 2D, this requires storing
+
+λ|Bx−δx/2,By
+
++ 2 µ|Bx−δx/2,By
+
+2 (∆f x, ∆f y) + 4 (∆ex+, ∆ex−, ∆ey+, ∆ey−) = 6
+
+extra numbers per cell in addition to the 6 (vx, vy, λ, µ, fx, fy) already needed.
+In 3D, we store the jump across the cell (∆f ), from the cell face to the edge
+(∆e), and from the cell face to the corner (∆c). This requires
+
+3 (∆f x, ∆f y, ∆f z)
++ 12 (∆ex+z, ∆ex−z, ∆ey+z, ∆ey−z, . . .)
++ 12 (∆cx+y+, ∆cx+y−, ∆cx−y+, ∆cx−y−, . . .) = 27
+
+extra numbers per cell in addition to the 9 already needed.
+
+Figure 4: Types of corrections stored. We store the jump across the cell (∆f ),
+from the face to the edge (∆e), and, in 3D, from the face to the corner (∆c).
+
+2.5 Boundary Conditions
+We have implemented two diﬀerent kinds of boundary conditions: Dirichlet,
+where the displacement is ﬁxed to a certain value at the boundary, and stress,
+where the displacement is set so as to dictate what the stress is at a point. When
+
+9
+
+Figure 5: Mapping of points set by the various boundary conditions
+
+imposing these conditions, it turns out that there is an ordering dependency
+among the conditions. We must ﬁrst impose Dirichlet conditions. Then the
+shear stress conditions use values that were just set by the Dirichlet conditions.
+Finally, the normal stress conditions use values that were just set by the Dirichlet
+and shear stress conditions.
+
+2.5.1 Dirichlet
+The simplest boundary condition is Dirichlet conditions on the displacement
+normal to the boundary, as shown in Figure 5. In this case, the value at the
+boundary is simply set to the boundary value:
+
+vx = vBC.
+
+For Dirichlet conditions on the displacement tangential to the boundary, as
+shown in Figure 5, the point outside is set so that the average of the inner and
+outer points equal to the boundary value:
+
+vy|x−δx/2,y = 2vBC − vy|x+δx/2,y − ∆ey−|x+δx/2,y .
+
+The correction ∆ey−|x+δx/2,y is necessary to handle any faults between x+δx/2
+and x. For simplicity, we deﬁne the faults to never extend out of the mesh.
+
+2.5.2 Stress
+A more complicated boundary condition is to set the stress rather than directly
+setting the displacement.
+
+10
+
+set by normal stress BCset by tangent dirichletor shear stress BCset by normal dirichlet BCShear Stress The y component of the shear stress at an x boundary is
+
+σBC = σxy = µ (vx,y + vy,x) .
+
+We apply this condition by setting vy at an outside point
+
+(cid:16)
+
+(cid:16)
+
+(cid:17) δx
+
+(cid:17) δx
+
+vy|x−δx/2,y = vy|x+δx/2,y +
+
+vx|x,y+δy/2 − vx|x,y−δy/2
+
+δy − σbcδx/ µ|x,y
+
++ ∆ey−|x+δx/2,y +
+
+∆ex−|x,y+δy/2 − ∆ex+|x,y−δy/2
+
+.
+
+δy
+
+This depends on vx|x,y+δy/2 and vx|x,y−δy/2, so the normal Dirichlet condition
+must be applied before this condition.
+
+Normal Stress For the normal stress in the x direction in 2D, the analytic
+condition is σBC = σxx = 2µ vx,x + λ vi,i, which implies
+
+vx,x = −
+
+λ vy,y − σbc
+
+2µ + λ
+
+.
+
+We discretize this condition as
+vx|x−δx,y+δy/2 = vx|x+δx,y+δy/2 − ∆f x|x,y+δy/2
+
+(cid:16)
+
+(cid:20) λBC
+
+2δy
+
++
+
+vy|x+δx/2,y + vy|x−δx/2,y
+
+− vy|x+δx/2,y−δy − vy|x−δx/2,y−δy
+
+− ∆ey−|x+δx/2,y−δy
+
+λBC
+
+λBC + 2µBC
+
+δx
+δy
+
+(cid:17)
+
+(cid:105)
+
+− σBC
+
+2δx
+
+λBC + 2µBC
+
+This interpolates the derivative vy,y onto (x, y + δy/2). The moduli, λBC and
+µBC, are also interpolated there with the usual formula
+
+(cid:0) λ|x,y+δy + λ|x,y
+
+(cid:1) .
+
+λBC =
+
+1
+2
+
+The condition in 3D has an additional term, vz,z, which is computed in a similar
+manner. This discretization depends on vy|x+δx/2,y, so the shear stress condition
+must be applied before this condition.
+
+2.6 Multigrid on an Adapted Mesh
+With a smoother (Section 2.3), corrections for faults (Section 2.4), and boundary
+conditons (Section 2.5), we can compute highly accurate solutions to Eq. 1 on a
+single grid. This will, however, be very slow. To shorten the time to solution, we
+implement adaptive multigrid (Appendix A). This is essentially an enhancement
+of the multigrid method for adapted grids. To implement this, we must ﬁrst
+implement coarsening, reﬁnement, and coarse-ﬁne boundary operators.
+
+11
+
+Figure 6: Stencil and weights used for coarsening in 2D
+
+2.6.1 Coarsening
+Following Albers [2] we use weighted arithmetic averages to coarsen the face
+centered displacement and residuals. Figure 6 shows the ﬁne values used to
+compute the coarse value for vx. The corresponding expression in the reference
+cell is
+
+Vx|0,δy =
+
+vx|−δx,δy/2 + 2 vx|0,δy/2 + vx|δx,δy/2
++ vx|−δx,3δy/2 + 2 vx|0,3δy/2 + vx|δx,3δy/2
++
+
+(cid:17)
+
+/8
+
+(cid:17)
+
+/8
+
+(cid:16)
+
++
+
+(cid:16)
+(cid:16)
+
+The expression in 3D is a straightforward extension
+
+(cid:17)
+
+∆f x|−δx,δy/2 − ∆f x|0,δy/2 + ∆f x|−δx,3δy/2 − ∆f x|0,3δy/2
+∆ex+|0,δy/2 + ∆ex−|0,3δy/2
+(cid:104)
+
+/2.
+
+vx|−δx,δy/2,δz/2 + 2 vx|0,δy/2,δz/2 + vx|δx,δy/2,δz/2
++ vx|−δx,3δy/2,δz/2 + 2 vx|0,3δy/2,δz/2 + vx|δx,3δy/2,δz/2
++ vx|−δx,δy/2,3δz/2 + 2 vx|0,δy/2,3δz/2 + vx|δx,δy/2,3δz/2
++ vx|−δx,3δy/2,3δz/2 + 2 vx|0,3δy/2,3δz/2 + vx|δx,3δy/2,3δz/2
+∆f x|−δx,δy/2,δz/2 − ∆f x|0,δy/2,δz/2
++ ∆f x|−δx,3δy/2,δz/2 − ∆f x|0,3δy/2,δz/2
++ ∆f x|−δx,δy/2,3δz/2 − ∆f x|0,δy/2,3δz/2
++ ∆f x|−δx,3δy/2,3δz/2 − ∆f x|0,3δy/2,3δz/2
+∆cx++|0,δy/2,δz/2 + ∆cx−+|0,3δy/2,δz/2
++ ∆cx+−|0,δy/2,3δz/2 + ∆cx−−|0,3δy/2,3δz/2
+
+(cid:21)
+
+(cid:21)
+
+.
+
+(cid:105)
+
+Vx|0,δy,δz =
+
+1
+16
+
++
+
+1
+16
+
+(cid:20)
+
+(cid:20)
+
++
+
+1
+4
+
+12
+
+1/81/81/81/81/41/4Figure 7: Weights of coarse grid stencil for reﬁning in 2D
+
+At physical boundaries where not all of the values are available, we average only
+over the face. In 2D, the expression is
+
+(cid:104)
+vx|0,δy/2 + vx|0,3δy/2 + ∆ex+|0,δy/2 + ∆ex−|0,3δy/2
+(cid:20)
+
+(cid:105)
+
+Vx|0,δy =
+and in 3D it is
+
+1
+2
+
+Vx|0,δy,δz =
+
+vx|0,δy/2,δz/2 + vx|0,3δy/2,δz/2
+
+1
+4
+
+(cid:20)
+
++
+
+1
+4
+
++ vx|0,δy/2,3δz/2 + vx|0,3δy/2,3δz/2
+
+∆cx++|0,δy/2,δz/2 + ∆cx−+|0,3δy/2,δz/2
+
+(cid:21)
+
+,
+
+(cid:21)
+
+.
+
++ ∆cx+−|0,δy/2,3δz/2 + ∆cx−−|0,3δy/2,3δz/2
+
+2.6.2 Reﬁnement
+To reﬁne the face-centered variables, we use the stencil shown in Figure 7. We
+ﬁrst compute a derivative of the coarse values, which in 2D is
+
+(cid:104)
+
+(cid:105)
+
+dVx|0,δy =
+
+1
+8
+
+Vx|0,3δy − Vx|0,−δy
+
+.
+
+We only reﬁne corrections to the displacement, not the displacement itself. So
+there is no need to add fault corrections. If we are at the boundary where one
+of the variables is not available, we use a one-sided derivative. For example, at
+
+13
+
+-1/811/8(cid:105)
+
+(cid:105)
+
+y = ylower, the expression is
+
+dVx|0,ylower+δy =
+
+(cid:104)
+
+1
+4
+
+Vx|0,ylower+3δy − Vx|0,ylower+δy
+
+(cid:105)
+
+.
+
+The ﬁne value is computed from the closest coarse value and this computed
+derivative
+
+In 3D, the expressions look very similar although now we interpolate along
+
+diagonals. For a ﬁne variable on a coarse face, the derivative is
+
+vx|0,δy/2 = Vx|0,δy − dVx|0,δy .
+
+dVx|0,δy,δz =
+
+1
+8
+
+and the ﬁne value is
+
+Vx|0,3δy,3δz − Vx|0,−δy,−δz
+
+,
+
+vx|0,δy/2,δz/2 = Vx|0,δy,δz − dVx|0,δy,δz .
+
+For ﬁne variables in between coarse faces, we average the ﬁne values on each
+coarse face:
+
+vx|δx,δy/2,δz/2 =
+
+1
+2
+
+vx|0,δy/2,δz/2 + vx|2δx,δy/2,δz/2
+
+.
+
+2.6.3 Coarse-Fine Boundaries
+At the interface between coarse and ﬁne levels, we need to compute boundary
+conditions for the ﬁne mesh given the coarse surrounding mesh. There are
+two cases of coarse-ﬁne boundaries: vector normal to the interface (e.g., vx at
+an x=constant boundary), and vector tangent to the interface (e.g., vx at a
+y=constant boundary). When computing these internal boundary conditions,
+we must use at least quadratic interpolation to keep the overall error second
+order [40].
+
+Vector Normal to the Interface Figure 8 shows the stencil that is used to
+compute the ﬁne boundary value on the coarse-ﬁne interface for the component
+of a vector that is normal to the interface. The ﬁrst step is to interpolate the
+coarse values to the point C. First, we deﬁne some variables
+
+(cid:104)
+
+(cid:104)
+
+V+ = Vx|2δx,3δy + ¯∆ex−(cid:12)(cid:12)2δx,3δy − ¯∆ex+
+
+(cid:12)(cid:12)2δx,δy
+(cid:12)(cid:12)2δx,−δy − ¯∆ex−(cid:12)(cid:12)2δx,δy
+
+V0 = Vx|2δx,δy
+V− = Vx|2δx,−δy + ¯∆ex+
+∆V0 = − ¯∆f x
+
+(cid:12)(cid:12)0,δy − ∆ex+|0,δy/2 .
+
+(10)
+
+where ¯∆ are the corrections on the coarse grid. Then the coarse value at C is
+
+dV+ = V+ − V0
+dV− = V0 − V−
+Vx|C = V0 − (5dV− + 3dV+) /32.
+
+14
+
+(11)
+
+Figure 8: Weights for reﬁning vx to the ﬁne point F at an x = constant coarse-
+ﬁne boundary in 2D. The coarse points are ﬁrst interpolated to C, then the
+other ﬁne points are used to quadratically interpolate to F.
+
+The ﬁnal step is to interpolate along a line to get the ﬁne value at F
+
+vx|δx,δy/2 = vx|0,δy/2 + ∆f x|0,δy/2
+
+(cid:104)
+
++
+
+1
+3
+
+Vx|C − vx|−δx,δy/2 + ∆V0 − ∆f x|−δx,δy/2
+
+In 3D, the interpolation for coarse values is along diagonal directions as
+
+(cid:105)
+
+.
+
+(12)
+
+shown in Figure 9. That means that we can replace Eq. 10 with
+
+V+ = Vx|2δx,3δy,3δz + ¯∆cx−−(cid:12)(cid:12)2δx,3δy,3δz − ¯∆cx++
+
+(cid:12)(cid:12)2δx,δy,δz
+(cid:12)(cid:12)2δx,−δy,−δz − ¯∆cx−−(cid:12)(cid:12)2δx,δy,δz
+
+V0 = Vx|2δx,δy,δz
+V− = Vx|2δx,−δy,−δz + ¯∆cx++
+∆V0 = − ¯∆f x
+
+(cid:12)(cid:12)0,δy − ∆cx++|0,δy/2 ,
+(cid:104)
+
+vx|δx,δy/2,δz/2 = vx|0,δy/2,δz/2 + ∆f x|0,δy/2,δz/2
+
+and then use Eq. 11 as is. Eq. 12 is only slightly modiﬁed for 3D
+
+1
+3
+
++
+
+.
+(14)
+If one of the coarse points is outside the physical domain, then we use a simpler
+interpolation. If V+ is outside, then
+
+Vx|C − vx|−δx,δy/2,δz/2 + ∆V0 − ∆f x|−δx,δy/2,δz/2
+
+(cid:104)
+3V0 + V− + ∆cx++|2δx,−δy,−δz − ∆cx−−|2δx,δy,δz
+
+(cid:105)
+
+Vx|C =
+
+1
+4
+
+,
+
+(13)
+
+(cid:105)
+
+and if V− is outside then
+
+15
+
+CF-1/315/96-3/965/16Figure 9: Coarse point part of the stencil for reﬁning vx at the x = constant
+coarse-ﬁne boundary in 3D. The x direction is into the picture. The coarse
+points are ﬁrst interpolated to C so as to line up with the ﬁne points.
+
+Figure 10: Weights for reﬁning vx to the ﬁne point F at the y = constant
+coarse-ﬁne boundary in 2D.
+
+(cid:104)
+5V0 − V+ − ∆cx−−|2δx,3δy,3δz + ∆cx++|2δx,δy,δz
+
+(cid:105)
+
+1
+4
+
+.
+
+Vx|C =
+
+Eq. 14 is used unchanged.
+
+Vector Tangent to the Interface Figure 10 shows the stencil used for re-
+ﬁnement in 2D when the vector is tangential to the interface. For the case where
+the coarse and ﬁne values are on the same coordinate axis, the interpolation is
+
+16
+
+xyzCF8/1510/15-3/15vx|0,δy/2 =
+
+1
+15
+
+(cid:20)
+
+8 Vx|0,δy + 10 vx|0,−δy/2 − 3 vx|0,−3δy/2
+
++ 8 ¯∆ex−(cid:12)(cid:12)0,δy − 8 ∆ex+|0,δy/2
+
++ 7 ∆ex+|0,−δy/2 − 7 ∆ex−|0,δy/2
+− 3 ∆ex+|0,−3δy/2 + 3 ∆ex−|0,−δy/2
+
+(15)
+
+(cid:21)
+
+.
+
+When the ﬁne value does not lie along the coarse grid, we use a simple average
+of the neighboring coarse values
+
+(cid:104)
+
+1
+2
+
+(cid:105)
+
+Vx|δx,δy ≡
+and the interpolation becomes
+
+Vx|0,δy + Vx|2δx,δy
+
+,
+
+vx|δx,δy/2 =
+
+1
+15
+
+(cid:20)(cid:16)
+
+8 Vx|δx,δy + 10 vx|δx,−δy/2 − 3 vx|δx,−3δy/2
+
+(cid:17)
+(cid:18)
+¯∆ex−(cid:12)(cid:12)0,δy − ∆ex+|0,δy/2 + ∆f x|0,δy/2
++ ¯∆ex−(cid:12)(cid:12)2δx,δy − ∆ex+|2δx,δy/2 − ∆f x|2δx,δy/2
+(cid:16)
+(cid:17)(cid:21)
+(cid:16)
+
+∆ex+|δx,−δy/2 − ∆ex−|δx,δy/2
+∆ex+|δx,−3δy/2 − ∆ex−|δx,−δy/2
+
+(cid:17)
+
++ 4
+
++ 7
+
+− 3
+
+(cid:19)
+
+At the x = xmin or x = xmax corner, some of the ﬁne corrections (e.g. ∆f x|0,δy/2)
+are not necessarily deﬁned. For the x = xmin boundary, we work around this by
+correcting the coarse value at (0, δy) to (2δx, δy) ﬁrst, and then using the same
+correction from (2δx, δy) to (δx, δy/2). With this, the interpolation becomes
+
+(cid:20)(cid:16)
+
+vx|δx,δy/2 =
+
+1
+15
+
+(cid:16) ¯∆f x
+(cid:16)
+(cid:16)
+
+8 Vx|δx,δy + 10 vx|δx,−δy/2 − 3 vx|δx,−3δy/2
++ 4
+
+(cid:16) ¯∆ex−(cid:12)(cid:12)2δx,δy − ∆ex+|2δx,δy/2 − ∆f x|2δx,δy/2
+
+(cid:12)(cid:12)0,δy + 2
+
+(cid:17)(cid:17)
+
++ 7
+
+− 3
+
+∆ex+|δx,−δy/2 − ∆ex−|δx,δy/2
+∆ex+|δx,−3δy/2 − ∆ex−|δx,−δy/2
+
+(cid:17)
+
+(cid:17)
+
+(cid:17)(cid:21)
+
+.
+
+Figure 11 shows the points used for reﬁnement in 3D when the coarse and
+
+ﬁne values are on the same coordinate axis. Deﬁning
+
+17
+
+Figure 11: Weights for reﬁning vx to F at the z = constant coarse-ﬁne boundary
+in 3D.
+
+V+ = Vx|0,δy,3δz + ¯∆ex,z−(cid:12)(cid:12)0,δy,3δz − ¯∆ex,z+
+∆V0 = ¯∆c−−(cid:12)(cid:12)0,δy,δz − ∆c++|0,0,0 ,
+
+(cid:12)(cid:12)0,δy,δz
+(cid:12)(cid:12)0,δy,−δz − ¯∆ex,z−(cid:12)(cid:12)0,δy,δz
+
+V0 = Vx|0,δy,δz
+V− = Vx|0,δy,−δz + ¯∆ex,z+
+
+we then use Eq. 11 to compute the coarse value at point C. Then we use an
+expression much like 15 to compute the ﬁne value
+
+(cid:20)
+
+(cid:21)
+
+vx|0,δy/2,δz/2 =
+
+1
+15
+
+8 Vx|C + 10 vx|0,−δy/2,δz/2 − 3 vx|0,−3δy/2,δz/2
+
++ 8∆V0 + 7 ∆ex,y+|0,−δy/2,δz/2 − 3 ∆ex,y+|0,−3δy/2,δz/2
+
+.
+
+2.7 Generating the Adapted Mesh
+The ﬁnal part of the method is generating a mesh. Starting with a uniform grid
+at the coarsest resolution
+
+1. Compute a solution on the current set of grids (section 2.6).
+
+2. If the current number of levels is less than the maximum number of levels
+
+18
+
+FCxyz-1/201/21/122/3-1/5(a) Compute the maximum curvature at each cell center (x + δx/2, y + δy/2).
+
+The curvature in the x direction with fault corrections is
+
+Cx|x+δx/2,y+δy/2 = vx|x−δx,y+δy/2 − vx|x,y+δy/2
+
+− vx|x+δx,y+δy/2 + vx|x+2δx,y+δy/2
+− ∆f x|x−δx/2,y+δy/2 + ∆f x|x+3δx/2,y+δy/2 .
+
+At the boundaries, not all points are deﬁned. For example, at an
+x = xlower Dirichlet boundary, vx|x−δx,y+δy/2 may not be deﬁned. In
+these cases, we use a one-sided curvature
+
+Cx|xlower+δx/2,y+δy/2 = + vx|xlower,y+δy/2
+
+− 2 vx|xlower+δx,y+δy/2
++ vx|xlower+2δx,y+δy/2
+− ∆f x|x+δx/2,y+δy/2
++ ∆f x|x+3δx/2,y+δy/2 .
+
+We then compute the maximum curvature
+
+Cmax = max (Cx, Cy, Cz) .
+
+(b) Reﬁne all cells where Cmax > , where  is a ﬁxed number, unless the
+maximum number of mesh reﬁnements has been reached. Note that
+ is an absolute rather than a relative error.
+
+(c) Recurse back to step 1 with the new set of grids.
+
+At fault tips, the displacement is singular and so can never be adequately re-
+solved. However, at a ﬁnite distance from the singularity, AMR solutions can
+still converge [4].
+
+2.8 Accuracy
+When solving equation 1 in the presence of faults, there will always be in-
+accuracies because of the singularities at the tips of the faults. Away from
+the singularity, we expect O (h) convergence (Section 2.4.1). At the singular-
+ity, analysis becomes diﬃcult because the Taylor series approximation breaks
+down. However, the scheme in Section 2.7 monitors this error and reﬁnes where
+needed. This means that, where the algorithm has stopped reﬁning, the dis-
+cretization error should be less than the error bound . In practice, the actual
+error will be larger because the local error gets integrated along the points from
+the boundaries and singularities.
+
+An additional source of error arises because we only approximately solve
+equation 1. If there is an error in the displacement ξi, that will generate an
+error in the derivative vi,j of approximately ξi/δx, where δx is the grid spacing.
+This implies that, for a given ξi, the error in the stress will be at least
+
+19
+
+ξi min (λ, µ)
+
+δx
+
+.
+
+ε (σji) (cid:63)
+
+where min (λ, µ) is the smallest value of λ or µ. The modulus does not, in
+our problem, vary wildly, so ∇µ (cid:28) µ/δx. This implies that the error in the
+divergence of the stress is approximately
+
+Using equation 4, we relate this to the size of the residual ri
+
+ε (σji,j) ∼ ε (σji) /δx.
+
+ri ∼ ε (σji,j + fi) .
+
+Errors in vi do not contribute to errors in fi, so that term can be neglected.
+Simplifying this gives an estimate for the size of the error ξi in terms of the
+residual
+
+ξi (cid:62) riδx2/ min (λ, µ) ,
+(cid:112)min (λ, µ) /ri.
+
+This error will become comparable to the discretization error when ξi = , so
+we can turn this around to ﬁnd the minimum resolution required to ensure that
+the solver error is smaller than the discretization error
+
+(16)
+To be clear, this analysis only covers errors in solving 1 using fault segments.
+We do not claim to model all of the physical eﬀects (e.g. non-linear rheologies,
+topography, curved faults).
+
+δx (cid:63)
+
+3 Analytic Tests
+We have implemented this method in the parallel, adaptive code Gamra. Gamra
+uses the SAMRAI framework [29, 30] to handle the bookkeeping associated with
+multiple levels, multiple grids, and multiple parallel processes. SAMRAI is a
+mature, freely available, actively developed framework for large-scale parallel
+structured adaptive mesh reﬁnement. SAMRAI uses MPI to coordinate work
+among the diﬀerent processors. This has allowed us to run Gamra on a wide
+variety of parallel architectures: SMP nodes, traditional Linux clusters, a Blue
+Gene /Q, and the Intel Xeon Phi 5110p GPGPU.
+
+In this section we perform a number of tests to ensure that the algorithm
+works as expected and that we implemented it correctly. We have veriﬁed that
+the code works in both 2D and 3D, but mostly discuss the 3D results for brevity.
+The tests are available from the Gamra repository1.
+
+1https://bitbucket.org/wlandry/gamra, changeset 679:c8843527b10f18758e58011c57d5aa61098c88e2,
+
+directory input/benchmarks/Elastic
+
+20
+
+Level
+
+0
+1
+2
+3
+4
+5
+
+L1
+58.1
+5.86
+1.36
+0.344
+0.0819
+0.0378
+
+L2
+5.10
+0.612
+0.125
+0.0313
+7.79e-3
+2.33e-3
+
+L∞
+0.859
+0.168
+0.0409
+0.0118
+3.13e-3
+8.02e-4
+
+L∞
+n /L∞
+
+n+1
+
+5.11
+4.11
+3.48
+3.76
+3.90
+
+Table 1: L1, L2, and L∞ errors and L∞ convergence rate in vx at diﬀerent
+maximum reﬁnement levels for the 3D expanding cylinder.
+
+3.1 Expanding Cylinder in a Heterogeneous Medium
+This is a simple test to ensure that we handle variable elastic modulus correctly.
+In cylindrical symmetry, if we set the moduli and body forces to
+
+(cid:112)
+
+x2 + y2
+
+ρ =
+µ =µ0ρ
+
+µ
+
+λ =
+
+2
+3
+fi =0 ,
+
+then the basis functions for solutions to Eq. 1 which are purely cylindrical with
+no rotation or vertical components are
+
+vρ =v− ρ−3/2 + v+ρ1/2
+vθ =0
+vz =0 .
+
+(17)
+
+To make the test more rigorous, we rotate the solution by an angle θ around the
+y axis. Figure 12 shows a numerical solution and its associated adapted grid
+for a model with µ0 = 1.4, v− = 1, v+ = 0, and θ = 18◦. Table 1 shows the
+L1, L2, and L∞ error in vx. While the L1 and L2 errors do converge, they do
+
+not converge as O(cid:0)h2(cid:1). The error in the unreﬁned regions no longer decreases,
+expected O(cid:0)h2(cid:1) rate.
+
+because the mesh does not get smaller there. The integral of these small errors
+over the large unreﬁned volume is large enough to aﬀect the overall convergence
+rate. This is in contrast to the L∞ error, which converges uniformly at the
+
+Internal dislocations
+
+3.2
+Okada [47, 48] derived an analytic expression for the displacement due to a
+single fault in a homogeneous elastic half space. Figure 13 shows a solution
+computed by Gamra for an inclined, rotated fault. As the grid size gets more
+
+21
+
+Figure 12: A cutout of the scaled displacement magnitude of a computed so-
+lution and its associated adapted mesh levels for an expanding cylinder in 3D.
+The axis of the cylinder is angled 18 degrees from the x axis. The model covers
+(−5, 1, 0) to (5, 11, 10). The oﬀset is to avoid the singularity at the origin. The
+boundary conditions, set from the analytic solution, are Dirichlet for the normal
+components 2.5.1 and stress for the tangent components 2.5.2. The equivalent
+resolution is 128 × 128 × 128.
+
+reﬁned, the mesh places points closer and closer to the singularity. This means
+that the global L∞ error does not shrink, but rather grows with ﬁner resolution.
+To get around this, we cut holes around the singularities and compute the L∞
+error on that region. Figure 14 shows the L∞ error as a function of resolution.
+We see that the error scales as O (h) up to the point where the error becomes
+comparable to the criteria for adapting the mesh. Moreover, Figure 15 shows
+that, for a line crossing near the singularity in the displacement, the stress is
+well behaved.
+
+We have also run tests where we replace one of the normal Dirichlet con-
+ditions (Section 2.5.1) with a normal stress boundary condition (Section 2.5.2)
+set using the exact Okada stress. Similarly, we ran tests which replaced one of
+the shear stress conditions (Section 2.5.2) with a tangential Dirichlet condition
+(Section 2.5.1). All of these tests converge in a similar manner.
+
+Figure 16 shows the residual versus the number of multigrid V-cycles for
+2D and 3D. In spite of the singularity at the fault tips, the solvers perform
+well, with the per-iteration reduction of the residual tending asymptotically to
+about 0.25 in 2D and 0.12 in 3D. The 3D solver uses 4 rather than 2 sweeps per
+multigrid level, so the absolute reduction in the residual is larger.
+
+This gives us some conﬁdence that all of the moving parts involved in com-
+puting the solution: smoothing (Section 2.3), boundary conditions (Section 2.5),
+multigrid (Section 2.6), and adaptivity (Section 2.7) are correct and imple-
+mented correctly.
+
+22
+
+Figure 13: A cutout of the second invariant of the scaled deviatoric stress J2 =
+(σijσji − σiiσjj/3) /2 of a computed solution and its associated adapted mesh
+levels for a single fault in 3D. The equivalent resolution of the ﬁnest level is
+128 × 128 × 128. The fault, indicated in grey, is inclined about 25 degrees from
+vertical, has slip s = 10, and has dimensions L = 0.50, W = 0.25. The moduli
+are constant (µ = λ = 1). We set the boundary conditions (normal Dirichlet
+and shear stress) from Okada’s analytic solution. The mesh is fully reﬁned only
+at the edges of the fault segment where the solution is singular. In the center
+of the fault segment, the solution is discontinuous but otherwise well behaved.
+So those center areas do not require full reﬁnement.
+
+23
+
+Figure 14: L∞ error scaled by the slip s = 10 as a function of resolution for the
+x component of the displacement for a single fault in 3D. The points within a
+radius of 0.1 of the side and bottom edges of the faults are excluded. The L∞
+error stops converging as O (h) when it becomes comparable to the adaptivity
+criteria (10−3).
+
+24
+
+10−310−210−1h10−410−310−210−1L∞error/slipO(h)Figure 15: Numerical and analytic solutions for the scaled stress σxx/ (µs/L)
+due to a single inclined 3D fault for various resolutions. The points are plotted
+along the line y = −0.2 + h/2, z = h/2, passing near the singularity in the
+displacement at (−0.2001,−0.2001, 0). The points are oﬀset by h/2 because of
+the staggered mesh. The Okada solution is plotted along the same line as the
+ﬁnest resolution.
+
+25
+
+-0.24-0.22-0.20-0.18-0.16x-500-400-300-200-1000100σxx/(µs/L)h=3.13·10−3h=1.56·10−3h=7.81·10−4OkadaFigure 16: The scaled residual r/(cid:0)µs/L2(cid:1) versus the number of multigrid V-
+
+cycles for the 2D and 3D Okada solutions.
+
+1992 Mw 7.3 Landers earthquake
+
+4
+4.1 Setup
+We construct a realistic model of the 1992 Mw 7.3 Landers earthquake using the
+slip model from Fialko [23] and the material model from the Southern California
+Earthquake Center Community Velocity Model - Harvard (CVM-H) [60]. The
+slip model consists of 426 individual fault segments (Figure 17). Figure 17 also
+shows the variation of Lame’s ﬁrst parameter, λ. The second Lame parameter,
+µ, has similar structure.
+
+The boundaries are about 100-200 km away from the faults. The boundary
+conditions on the sides and bottom are free slip: zero shear stress (Section 2.5.2)
+and zero normal displacement (Section 2.5.1). The boundary condition on the
+top is free surface: zero shear and normal stress (Section 2.5.2). Since these
+boundary conditions are imperfect, the error due to the boundaries is about the
+size of the displacement at the boundary: 1 cm. Getting the error down to the
+current limits of GPS technology (about 0.5 mm [27, 36, 63]), would require
+moving the boundaries so far away such that other eﬀects not accounted for
+(e.g. topography, curvature of the earth) would become signiﬁcant.
+
+During a multigrid V-cycle, we used 4 pre- and post- sweeps. On the coars-
+est level, we smoothed 32 times to get an approximate solution. We set the
+reﬁnement criteria  (Section 2.7) to our estimate of the boundary error: 1 cm.
+
+26
+
+02468101214Number of V-cycles10-610-510-410-310-210-1100101102103104105r/(µs/L2)Okada 2DOkada 3DFigure 17: Fault geometry, slip and λ for the 1992 Mw 7.3 Landers model [23].
+
+We continue multigrid V-cycles until the L∞ norm of the residual (Eq. 4) is less
+than 10−3 m GPa km−2. From equation 16, this implies a minimum resolution
+
+of(cid:112)7 · 0.01/10−3 = 8.37 km, which in this case is satisﬁed when the reﬁnement
+
+level is at least 3. The mesh is globally reﬁned to level 3, so the error is always
+dominated by the discretization.
+
+4.2 Results
+Gamra automatically generated the highly adapted mesh in Figure 18. This
+mesh has 8.1 × 107 elements, while an equivalent non-adaptive mesh would
+require 2.2 × 1012 elements. The computed solution in Figure 19 highlights the
+discontinuous nature of the solutions. We expect the error to be concentrated
+close to the faults, as in Figure 14. So even though the error may be larger near
+the faults, this would not translate to a large oﬀset error farther from the faults.
+With that in mind, we expect that the error in displacement in the regions
+covered by levels 3-10 to be about 1 cm, or about 0.125% of the maximum
+displacement. Otherwise, the automatic reﬁnement criteria would have marked
+those regions for reﬁnement.
+
+4.3 Performance
+We computed this Landers earthquake solution on a Xen virtual machine run-
+ning in a Dell R720 with 16 physical cores (Intel Xeon CPU E5-2670) and 256
+GB of RAM using OpenMPI 1.8.8 and gcc 4.7.3. Figure 20 shows the time to
+solve as a function of resolution and number of cores. Altogether, the scaling is
+quite good at ﬁner resolutions on this shared memory architecture.
+
+Although it is diﬃcult to see in the plot, we see superlinear scaling from 1 to
+4 cores for ﬁner resolution. This superlinear scaling does not persist for higher
+core counts. This is probably a quirk due to running inside a virtual machine.
+On diﬀerent hardware without a virtual machine (8 physical core Intel Xeon
+
+27
+
+Figure 18: AMR level hierarchy for the 1992 Landers model at the surface
+(z = 0) of the model (left) and in a zoomed in region around the faults (right).
+Level 3, the coarsest level shown, has 64× 64× 32 elements with a resolution of
+4700 meters. Level 11 has a resolution of 18 meters.
+
+Figure 19: Zoomed in views of the computed surface displacement for the 1992
+Landers model. The black lines indicate fault segments.
+
+28
+
+Figure 20: Scaled performance for the Landers model.
+
+CPU E5620), we do not see superlinear scaling.
+We can roughly ﬁt the relation between time and grid spacing on the plot
+with a power law t ∝ h−1.85. This is signiﬁcantly better than a solver on a
+ﬁxed three-dimensional grid. Even an optimal multigrid solver would scale as
+t ∝ h−3.
+5 Conclusion
+Elastic deformation due to the displacement of faults can be modeled eﬃciently
+with parallel multigrid methods using adaptive meshes and embedded inter-
+faces. The multigrid eﬃciency is commensurate with what is expected for the
+simpler Poisson’s equation multigrid solvers [61], in spite of the added com-
+plexity brought by internal dislocations and mixed boundary conditions. The
+computational eﬃciency is improved by the mesh adaptivity, which reduces the
+number of nodes by orders of magnitudes compared with uniform meshes. A
+key advantage of the proposed method is the ability to simulate complex fault
+geometries without manual and labor-intensive meshing. Even in these complex
+models, we experienced no problems due to instabilities in the solver or excess
+sensitivity of the ﬁnal solution to small changes in the input.
+
+In addition, the method oﬀers high precision in the near ﬁeld of faults, even
+capturing the stress singularity asymptotically (Figure 15). This is important
+for evaluating stress and other dynamic variables. All of these features make
+
+29
+
+101102103104105Resolution (m)10-1100101102103104105Time to solve (s)1 core (/16)4 cores (/4)16 coresthe proposed approach optimal for generating stress and displacements kernels
+for inversions for fault slip [5], investigation of the surrounding elastic structure
+[8, 14], and building stress and displacement kernels for simulations using the
+boundary-integral method.
+
+This study presents an important building block of earthquake cycle simu-
+lations. A future major undertaking will be to incorporate rupture dynamics
+and quasi-static oﬀ-fault deformation. Fault dynamics will require modeling
+the propagation of seismic waves. The mesh adaptivity may then be exploited
+to implement spatially variable adaptive time steps [43]. Quasi-static time-
+dependent problems with oﬀ-fault plasticity and visco-elastic or poro-elastic
+deformation may be treated with the same elliptic solver using equivalent body
+forces (per unit time), requiring only more book-keeping to handle explicit time
+steps. Many other eﬀects may be incorporated to enable even more realistic
+models of earthquakes and Earth deformation, such as a spherical geometry for
+global-scale models and topography to improve calculation of local stress.
+
+6 Acknowledgements
+We thank two anonymous reviewers for their comments that improved this
+manuscript. This research used resources of the Argonne Leadership Comput-
+ing Facility, which is a DOE Oﬃce of Science User Facility supported under
+Contract DE-AC02-06CH11357. This research was supported by the Gordon
+and Betty Moore Foundation, the National Research Foundation of Singapore
+under the NRF Fellowship scheme (National Research Fellow Award No. NRF-
+NRFF2013-04) and by the Earth Observatory of Singapore and the National
+Research Foundation and the Singapore Ministry of Education under the Re-
+search Centres of Excellence initiative. This is EOS publication 113.
+
+A Adaptive Multigrid
+For completeness, we detail the exact adaptive multigrid algorithm we use. This
+is mostly a restatement of Section 4 of Martin & Cartwright [40].
+
+First, we deﬁne a Gauss-Seidel operator GS
+
+, where (cid:126)v is an initial
+guess, (cid:126)f is the forcing term, and N is the number of times to apply the smoother.
+The output of GS
+
+is a correction
+
+(cid:126)v, (cid:126)f , N
+
+(cid:126)v, (cid:126)f , N
+
+(cid:16)
+
+(cid:17)
+
+(cid:16)
+
+(cid:17)
+
+δ(cid:126)v = GS
+
+(cid:126)v, (cid:126)f , N
+
+.
+
+(18)
+
+For N = 1, Equation 7 implies
+
+(cid:16)
+
+GS
+
+(cid:126)v, (cid:126)f , 1
+
+(cid:126)v, (cid:126)f
+
+= −ri
+
+dri/dvi
+
+(cid:17)
+(cid:16)
+
+(cid:17)
+
+,
+
+(cid:16)
+
+(cid:17)
+
+i
+
+30
+
+(cid:16)
+
+(cid:17)
+
+(cid:126)v, (cid:126)f
+
+where ri
+V-cycle relaxation routine MGRelax
+the defect. The outline of the routine is as follows.
+
+l, (cid:126)d
+
+(cid:16)
+
+(cid:17)
+
+is deﬁned by Equation 4. Next we deﬁne a recursive multigrid
+
+, where l is the current level and (cid:126)d is
+
+1. If l = 0 (the coarsest level)
+
+(a) Using an initial guess of 0, compute a correction by applying the
+
+smoother Ncoarse times
+
+(cid:16)(cid:126)0, (cid:126)d, Ncoarse
+
+(cid:17)
+
+δ(cid:126)v = GS
+
+or until the L∞ norm of the residual ri(δ(cid:126)v, (cid:126)d) is less than coarse.
+
+2. If l > 0
+
+(a) Using an initial guess of 0, compute a correction δ(cid:126)v by applying the
+
+smoother Npre times
+
+(cid:16)(cid:126)0, (cid:126)d, Npre
+
+(cid:17)
+
+.
+
+δ(cid:126)v = GS
+
+(cid:16)
+
+(cid:17)
+
+(b) Compute ri
+(c) Coarsen ri to make Ri (Section 2.6.1)
+
+δ(cid:126)v, (cid:126)d
+
+, the residual on just the ﬁne grid (Section 2.3).
+
+Ri = Coarsen (ri) .
+
+(d) Recursively call MGRelax to get the coarse grid correction
+
+(e) Reﬁne the correction δ (cid:126)V to the ﬁne level (Section 2.6.2) and add it
+
+to the ﬁne correction δ(cid:126)v
+
+(f) Apply the smoother Npost times to get a ﬁnal correction
+
+δ (cid:126)V = MGRelax (l − 1, Ri) .
+(cid:17)
+(cid:17)
+
+δ(cid:126)v = δ(cid:126)v + Reﬁne
+
+(cid:16)
+
+(cid:16)
+
+δ (cid:126)V
+
+.
+
+δ(cid:126)v = GS
+
+δ(cid:126)v, (cid:126)d, Npost
+
+,
+
+3. Return δ(cid:126)v.
+
+Given these functions, the driver routine is short.
+
+1. Compute a composite residual ri (Equation 4). This includes applying all
+physical (Section 2.5) and coarse-ﬁne (Section 2.6.3) boundary conditions.
+
+31
+
+2. While the L∞ norm of the residual is less than the stopping tolerance
+
+stopping
+
+(a) Compute δ(cid:126)v = MGRelax (lmax, ri).
+(b) Add in the correction
+
+(cid:126)v = (cid:126)v + δ(cid:126)v
+
+(c) Recompute the composite residual ri.
+
+In pseudo-code, MGRelax is
+
+Procedure MGRelax
+
+if l > 0:
+δ(cid:126)v = 0
+for (i =0; i<Ncoarse; ++i)
+
+δ(cid:126)v = δ(cid:126)v + GS
+
+(cid:17)
+
+:
+
+< coarse
+
+(cid:16)
+
+(cid:17)
+
+ri
+
+δ(cid:126)v, (cid:126)d
+
+(cid:17)
+
+l, (cid:126)d
+
+:
+
+δ(cid:126)v, (cid:126)d, 1
+
+(cid:17)(cid:17)
+
+(cid:16)
+(cid:16)
+L∞(cid:16)
+(cid:16)
+(cid:17)
+(cid:16)(cid:126)0, (cid:126)d, Npre
+(cid:16)
+(cid:16)
+(cid:17)(cid:17)
+(cid:16)
+(cid:17)
+δ(cid:126)v, (cid:126)d
+ri
+(cid:16)
+(cid:17)
+l − 1, (cid:126)R
+(cid:17)
+δ (cid:126)V
+δ(cid:126)v, (cid:126)d, Npost
+
+if
+
+break
+
+else:
+
+δ(cid:126)v = GS
+
+Ri = Coarsen
+δ (cid:126)V = MGRelax
+
+δ(cid:126)v = δ(cid:126)v + Refine
+
+δ(cid:126)v = GS
+return δ(cid:126)v
+
+(cid:16)
+L∞(cid:16)
+
+(cid:16)
+
+and the driver is
+
+(cid:16)
+
+(cid:17)(cid:17)
+
+(cid:17)
+
+> stopping
+
+while
+
+ri
+
+(cid:126)v, (cid:126)d
+
+(cid:126)v = (cid:126)v + MGRelax (lmax, (cid:126)r)
+
+References
+[1] B. T. Aagaard, M. G. Knepley, and C. A. Williams. A domain decomposi-
+tion approach to implementing fault slip in ﬁnite-element models of quasi-
+static and dynamic crustal deformation. J. Geophys. Res., 118(6):3059–
+3079, 2013. 1
+
+[2] M. Albers. A local mesh reﬁnement multigrid method for 3-d convection
+problems with strongly variable viscosity. J. Comp. Phys., 160:216–150,
+2000. 2.6.1
+
+32
+
+[3] D. J. Andrews. A fault constitutive relation accounting for thermal pressur-
+ization of pore ﬂuid. J. Geophys. Res., 107:10.1029/2002JB001942, 2002.
+1
+
+[4] D. Bai and A. Brandt. Local mesh reﬁnement multilevel techniques. J.
+
+Sci. Stat. Comput., 8(2):109–134, 1987. 2.7
+
+[5] S. Barbot, P. Agram, and M. De Michele. Change of Apparent Segmenta-
+tion of the San Andreas Fault Around Parkﬁeld from Space Geodetic Ob-
+servations Across Multiple Periods. J. Geophys. Res., 118(12):6311–6327,
+2013. 5
+
+[6] S. Barbot and Y. Fialko. Fourier-domain Green’s function for an elastic
+semi-inﬁnite solid under gravity, with applications to earthquake and vol-
+cano deformation. Geophys. J. Int., 182(2):568–582, 2010. 2.4.1
+
+[7] S. Barbot and Y. Fialko. A uniﬁed continuum representation of postseis-
+mic relaxation mechanisms: semi-analytic models of afterslip, poroelastic
+rebound and viscoelastic ﬂow. Geophys. J. Int., 182(3):1124–1140, 2010.
+2.1
+
+[8] S. Barbot, Y. Fialko, and D. Sandwell. Three-Dimensional Models of
+Elasto-Static Deformation in Heterogeneous Media, with Applications to
+the Eastern California Shear Zone. Geophys. J. Int., 179(1):500–520, 2009.
+5
+
+[9] S. Barbot, N. Lapusta, and J. P. Avouac. Under the hood of the earth-
+quake machine: Towards predictive modeling of the seismic cycle. Science,
+336(6082):707–710, 2012. 1
+
+[10] R. Becker, E. Burman, and P. Hansbo. A nitsche extended ﬁnite el-
+ement method for incompressible elasticity with discontinuous modulus
+of elasticity. Computer Methods in Applied Mechanics and Engineering,
+198(41):3352–3360, 2009. 1
+
+[11] I. Berg. muparser home page. http://muparser.beltoforion.de/, 2014. 2.2
+
+[12] O. Botella and Y. Cheny. The ls-stag method for viscous incompressible
+ﬂows in irregular geometries: Basics of the discretization and application
+to viscoelastic ﬂows. In ASME 2010 3rd Joint US-European Fluids Engi-
+neering Summer Meeting collocated with 8th International Conference on
+Nanochannels, Microchannels, and Minichannels, pages 2441–2451. Amer-
+ican Society of Mechanical Engineers, 2010. 1
+
+[13] R. Bürgmann, D. D. Pollard, and S. J. Martel. Slip distributions on faults:
+eﬀects of stress gradients, inelastic deformation, heterogeneous host-rock
+stiﬀness, and fault interaction. Journal of Structural Geology, 16(12):1675–
+1690, 1994. 2.4.1
+
+33
+
+[14] Y. Cochran, Y.-G. Li, P. Shearer, S. Barbot, Y. Fialko, and J. Vidale.
+Seismic and geodetic evidence for extensive, long-lived fault damage zones.
+Geology, 37(4):315–318, Apr. 2009. 5
+
+[15] E. T. Coon, B. E. Shaw, and M. Spiegelman. A nitsche-extended ﬁnite
+element method for earthquake rupture on complex fault systems. Comput.
+Methods Appl. Mech. Engrg., 200:2859–2870, 2011. 1, 2.4.1
+
+[16] Y. Cui, K. B. Olsen, T. H. Jordan, K. Lee, J. Zhou, P. Small, D. Roten,
+G. Ely, D. K. Panda, A. Chourasia, et al. Scalable earthquake simulation
+on petascale supercomputers. In Proc. 2010 ACM/IEEE Int. Conf. High
+Perf. Comp., Net., Storage Analysis, pages 1–20. IEEE Computer Society,
+2010. 1
+
+[17] S. M. Day. Three-dimensional ﬁnite diﬀerence simulation of fault dynam-
+ics: rectangular faults with ﬁxed rupture velocity. Bull. Seism. Soc. Am.,
+72(3):705–727, 1982. 1
+
+[18] S. M. Day, L. A. Dalguer, N. Lapusta, and Y. Liu. Comparison of ﬁnite dif-
+ference and boundary integral solutions to three-dimensional spontaneous
+rupture. J. Geophys. Res., 110(B12307), 2005. 1
+
+[19] E. M. Dunham and R. J. Archuleta. Near-source ground motion from
+
+steady state dynamic rupture pulses. Geophys. Res. Lett., 32(3), 2005. 1
+
+[20] E. M. Dunham, J. E. Kozdon, D. Belander, and L. Cong. Earthquake rup-
+tures on rough faults. In Multiscale and multiphysics processes in geome-
+chanics: Results of the workshop on Multiscale and multiphysics processes
+in geomechanics, Stanford, June 23-25, 2010, page 145. Springer Science
+& Business Media, 2011. 1
+
+[21] G. P. Ely, S. M. Day, and J.-B. Minster. A support-operator method for
+
+3-d rupture dynamics. Geophys. J. Int., 177(3):1140–1150, 2009. 1
+
+[22] G. P. Ely, S. M. Day, and J.-B. Minster. Dynamic rupture models for the
+southern san andreas fault. Bull. Seism. Soc. Am., 100(1):131–150, 2010.
+1
+
+[23] Y. Fialko. Probing the mechanical properties of seismically active crust with
+space geodesy: Study of the co-seismic deformation due to the 1992 Mw7.3
+Landers (Southern California) earthquake. J. Geophys. Res., 109(B03307),
+2004. 4.1, 17
+
+[24] Z. Gimbutas, L. Greengard, M. Barall, and T. E. Tullis. On the calculation
+of displacement, stress, and strain induced by triangular dislocations. Bull.
+Seism. Soc. Am., 102(6):2776–2780, 2012. 2.4.1
+
+[25] R. A. Harris, M. Barall, R. Archuleta, E. Dunham, B. Aagaard, J.-P. Am-
+puero, D. J. Andrews, H. Bhat, V. Cruz-Atienza, L. Dalguer, S. Day,
+B. Duan, G. Ely, Y. Kaneko, Y. Kase, N. Lapusta, Y. Liu, S. Ma,
+
+34
+
+D. Oglesby, K. Olsen, A. Pitarka, S. Song, and E. Templeton. The
+SCEC/USGS Dynamic Earthquake Rupture Code Veriﬁcation Exercise.
+Seism. Res. Lett., 80(1):119–126, 2009. 1
+
+[26] R. Hassani, D. Jongmans, and J. Chéry. Study of plate deformation and
+stress in subduction processes using two-dimensional numerical models. J.
+G. R., 102(B8):17951–17965, 1997. 1
+
+[27] E. M. Hill, J. L. Davis, P. Elòsegui, B. P. Wernicke, E. Malikowski,
+and N. A. Niemi. Characterization of site-speciﬁc gps errors using a
+short-baseline network of braced monuments at yucca mountain, southern
+nevada. J. Geophys. Res., 114(B11402):13, 2009. 4.1
+
+[28] T. Hori, N. Kato, K. Hirahara, T. Baba, and Y. Kaneda. A numerical sim-
+ulation of earthquake cycles along the Nankai Trough in southwest Japan:
+lateral variation in frictional property due to the slab geometry controls
+the nucleation position. Earth Plan. Sci. Lett., 228(3-4):215–226, 2004. 1
+
+[29] R. D. Hornung and S. R. Kohn. Managing application complexity in the
+samrai object-oriented framework. Concurrency and computation: practice
+and experience, 14:347–368, 2002. 3
+
+[30] R. D. Hornung, A. M. Wissink, and S. R. Kohn. Managing complex data
+and geometry in parallel structured amr applications. Engineering with
+Computers, 2006. 3
+
+[31] Y. Kaneko, J.-P. Ampuero, and N. Lapusta. Spectral-element simulations
+of long-term fault slip: Eﬀect of low-rigidity layers on earthquake-cycle
+dynamics. J. Geophys. Res., 116(B10313), 2011. 1
+
+[32] Y. Kaneko, J.-P. Avouac, and N. Lapusta. Towards inferring earthquake
+patterns from geodetic observations of interseismic coupling. Nature Geo-
+science, 3:363–369, 2010. 1
+
+[33] Y. Kaneko, N. Lapusta, and J.-P. Ampuero. Spectral element modeling of
+spontaneous earthquake rupture on rate and state faults: Eﬀect of velocity-
+strengthening friction at shallow depths. J. Geophys. Res., 113:17, 2008.
+1
+
+[34] N. Kato.
+
+Interaction of slip on asperities: Numerical simulation of seis-
+mic cycles on a two-dimensional planar fault with nonuniform frictional
+property. J. Geophys. Res., 109, 2004. 1
+
+[35] J. Kozdon, E. M. Dunham, and J. Nordström. Simulations of dynamic
+earthquake ruptures in complex geometries using high-order ﬁnite diﬀer-
+ence methods. J. Sci. Comput., 55:92–124, 2013. 1
+
+[36] J. Langbein. Noise in GPS displacement measurements from Southern
+California and Southern Nevada. J. Geophys. Res., 113(B05405), 2008. 4.1
+
+35
+
+[37] N. Lapusta and S. Barbot. Models of earthquakes and aseismic slip based
+on laboratory-derived rate and state friction laws. In A. Bizzarri and H. S.
+Bhat, editors, The mechanics of Faulting: From Laboratory to Real Earth-
+quakes. 2012. 1
+
+[38] R. J. Leveque and Z. Li. The immersed interface method for elliptic equa-
+tions with discontinuous coeﬃcients and singular sources. SIAM J. Numer.
+Anal., 31(4):1019–1044, 1994. (document), 1, 2.4.1
+
+[39] S. T. Marshall, M. L. Cooke, and S. E. Owen. Eﬀects of nonplanar fault
+topology and mechanical interaction on fault-slip distributions in the ven-
+tura basin, california. Bull. Seism. Soc. Am., 98(3):1113–1127, 2008. 1
+
+[40] D. F. Martin and K. L. Cartwright. Solving Poisson’s equation using adap-
+tive mesh reﬁnement. Electronics Research Laboratory, College of Engi-
+neering, University of California, 1996. 2.6.3, A
+
+[41] T. Matsuzawa, H. Hirose, B. Shibazaki, and K. Obara. Modeling short-
+and long-term slow slip events in the seismic cycles of large subduction
+earthquakes. J. Geophys. Res., 115(B12301), 2010. 1
+
+[42] B. J. Meade. Algorithms for the calculation of exact displacements, strains,
+and stresses for triangular dislocation elements in a uniform elastic half
+space. Comp. Geosc., 33(8):1064–1075, Aug. 2007. 2.4.1
+
+[43] Z. Meglicki, S. K. Gray, and B. Norris. Multigrid fdtd with chombo. Com-
+
+puter physics communications, 176(2):109–120, 2007. 5
+
+[44] H. J. Melosh and C. A. Williams. Mechanics of graben formation in crustal
+rocks: a ﬁnite element analysis. J. Geophys. Res., 94(B10):13961–13973,
+1989. 1
+
+[45] P. Moczo, J. Kristek, and M. Gális. The Finite-Diﬀerence Modelling of
+Earth Quake Motions: Waves and Ruptures. Cambridge University Press,
+2014. 1
+
+[46] M. Nikkhoo and T. R. Walter. Triangular dislocation: an analytical,
+artefact-free solution. Geophysical Journal International, 201(2):1117–
+1139, 2015. 2.4.1
+
+[47] Y. Okada. Surface deformation due to shear and tensile faults in a half-
+
+space. Bull. Seism. Soc. Am., 75(4):1135–1154, Aug. 1985. 2.4.1, 3.2
+
+[48] Y. Okada. Internal deformation due to shear and tensile faults in a half-
+
+space. Bull. Seism. Soc. Am., 82:1018–1040, April 1992. 1, 2.4.1, 3.2
+
+[49] K. B. Olsen, R. Madariaga, and R. J. Archuleta. Three-Dimensional Dy-
+namic Simulation of the 1992 Landers Earthquake. Science, 278(5339):834–
+838, 1997. 1
+
+36
+
+[50] P. C. Paris and G. C. Sih. Stress analysis of cracks. ASTM stp, 381:30–81,
+
+1965. 2.4.1
+
+[51] J. Puente, J.-P. Ampuero, and M. Käser. Dynamic rupture modeling on
+unstructured meshes using a discontinuous galerkin method. J. Geophys.
+Res., 114(B10), 2009. 1
+
+[52] J. R. Rice. Spatio-temporal complexity of slip on a fault. J. Geophys. Res.,
+
+98(B6):9885–9907, 1993. 1
+
+[53] J. C. Rollins, S. Barbot, and J.-P. Avouac. Mechanisms of Postseismic
+Deformation Following the 2010 El Mayor-Cucapah Earthquake. Pure App.
+Geophys., page 54, 2015. 2.1
+
+[54] B. Rousset, S. Barbot, J. P. Avouac, and Y.-J. Hsu. Postseismic Defor-
+mation Following the 1999 Chi-Chi Earthquake, Taiwan: Implication for
+Lower-Crust Rheology. J. Geophys. Res., 117(B12405):16, 2012. 2.1
+
+[55] V. Rutka, H. Andrä, and A. Wiegmann. EJIIM for calculation of eﬀective
+
+elastic moduli in 3D linear elasticity. ITWM, 2006. 1
+
+[56] V. Rutka and A. Wiegmann. Explicit jump immersed interface method for
+virtual material design of the eﬀective elastic moduli of composite materials.
+Numerical Algorithms, 43(4):309–330, 2006. 1
+
+[57] B. Shibazaki and T. Shimamoto. Modelling of short-interval silent slip
+events in deeper subduction interfaces considering the frictional properties
+at the unstablestable transition regime. Geophys. J. Int., 171(1):191–205,
+2007. 1
+
+[58] B. Smith and D. Sandwell. A three-dimensional semianalytic viscoelastic
+model for time-dependent analyses of the earthquake cycle. J. Geophys.
+Res., 109, 2004. 1
+
+[59] H. Tada, P. Paris, and G. Irwin. The analysis of cracks handbook. New
+
+York: ASME Press, 2000. 2.4.1
+
+[60] C. Tape, Q. Liu, A. Maggi, and J. Tromp. Adjoint tomography of the
+
+southern California crust. Science, 325:988–992, 2009. 4.1
+
+[61] U. Trottenberg, C. W. Oosterlee, and A. Schuller. Multigrid. Academic
+
+press, 2000. 5
+
+[62] R. Wang, F. Martin, and F. Roth. Computation of deformation induced
+by earthquakes in a multi-layered elastic crust - FORTRAN programs ED-
+GRN/EDCMP. Comp. Geosci., 29:195–207, 2003. 2.4.1
+
+[63] S. D. P. Williams, Y. Bock, P. Fang, P. Jamason, R. M. Nikolaidis,
+L. Prawirodirdjo, M. Miller, and D. J. Johnson. Error Analysis of Con-
+tinuous GPS Position Time Series. J. Geophys. Res., 109(B03412), 2004.
+4.1
+
+37
+
+[64] M. S. T. Zangmeister. On the Extended Finite Element Method for the
+Elasto-Plastic Deformation of Heterogeneous Materials. PhD thesis, Zugl.:
+Kaiserslautern, Technische Universität Kaiserslautern, Diss., 2014, 2015. 1
+
+[65] Y. Zhu, Y. Wang, J. Hellrung, A. Cantarero, E. Sifakis, and J. M. Teran. A
+second-order virtual node algorithm for nearly incompressible linear elastic-
+ity in irregular domains. Journal of Computational Physics, 231(21):7092–
+7117, 2012. 1
+
+38
+
+

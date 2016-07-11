@@ -1,0 +1,1490 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+9
+1
+
+ 
+ 
+]
+
+G
+L
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+2
+5
+0
+6
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Fast Dpp Sampling for Nystr¨om
+
+with Application to Kernel Methods
+
+Chengtao Li
+Stefanie Jegelka
+Suvrit Sra
+Massachusetts Institute of Technology
+
+ctli@mit.edu
+stefje@csail.mit.edu
+suvrit@mit.edu
+
+Abstract
+
+The Nystr¨om method has long been popular for scaling up kernel methods. However,
+successful use of Nystr¨om depends crucially on the selected landmarks. We consider landmark
+selection by using a Determinantal Point Process (Dpp) to tractably select a diverse subset from
+the columns of an input kernel matrix. We prove that the landmarks selected using Dpp sampling
+enjoy guaranteed error bounds; subsequently, we illustrate impact of Dpp-sampled landmarks on
+kernel ridge regression. Moreover, we show how to efﬁciently sample from a Dpp in linear time
+using a fast mixing (under certain constraints) Markov chain, which makes the overall procedure
+practical. Empirical results support our theoretical analysis: Dpp-based landmark selection shows
+performance superior to existing approaches.
+
+1 Introduction
+
+An important ingredient in many machine learning methods is the low-rank approximation of
+matrices. Such approximations are attractive when the default method uses matrix operations
+quadratic or cubic in the number of input data points, clearly prohibitive for large-data. By working
+with low-rank approximations one can reduce running times by trading off accuracy for scalability.
+A key example of this idea is the Nystr¨om method [8, 31], which takes as input a positive
+semideﬁnite matrix K ∈ RN×N and from it selects a small subset C of columns K·,C to construct the
+approximation ˜K = K·,CK†
+C,CKC,· (X† denotes the Moore-Penrose Pseudoinverse of X). The matrix
+˜K, in its factored form, is then used in place of K. If the number |C| of selected columns is small,
+then using ˜K can dramatically reduce runtimes from (cubic) O(N3) to (linear) O(N|C|3).
+
+Consequently, the Nystr¨om method has been used to scale up several kernel methods, for
+instance kernel ICA [6, 35], kernel and spectral methods in computer vision [9, 19], manifold
+learning [38, 39], regularization [34], and efﬁcient approximate sampling [1]. Recent work [2, 5, 13]
+also studies risk bounds for Nystr¨om applied to various kernel methods.
+
+The most important step of the Nystr¨om method is the selection of the subset C of columns,
+also called landmarks. The choice of landmarks governs the quality of approximation offered
+by Nystr¨om and thus its subsequent impact on the learning task [13]. A basic choice is to pick
+landmarks uniformly at random [42]. Several more sophisticated selection strategies have also been
+proposed, including deterministic greedy schemes [36], incomplete Cholesky decomposition [7, 18],
+sampling with probabilities proportional to diagonal values [15], to column norms [16], based on
+leverage scores [20], via K-means [43], and using determinants [10].
+
+In this paper, we study landmark selection using Determinantal Point Processes (Dpp), discrete
+probability models that allow tractable sampling of diverse non-independent subsets [27, 30]. Our
+work (discovered independently) is related to determinantal sampling scheme of Belabbas and
+Wolfe [10]1, but is more general. We refer to our sampling scheme as Dpp-Nystr¨om, and analyze it
+from various perspectives including efﬁcient implementation.
+
+1Surprisingly, they do not make an explicit connection to Dpps.
+
+1
+
+1.1 Overview
+We analyze our Dpp-Nystr¨om’s performance using its approximation error. Suppose k is the
+target rank; then for selecting c ≥ k landmarks, Nystr¨om’s error is typically measured using the
+Frobenius or spectral norm, relative to the best achievable error via rank-k SVD Kk. In other words,
+we measure the relative errors
+
+(cid:107)K − K·,CK†
+
+C,CKC,·(cid:107)F
+
+(cid:107)K − Kk(cid:107)F
+
+or
+
+(cid:107)K − K·,CK†
+
+C,CKC,·(cid:107)2
+
+(cid:107)K − Kk(cid:107)2
+
+.
+
+(1.1)
+
+Several authors also use additive instead of relative bounds. However, such bounds are very
+sensitive to scaling, and become loose even if a single entry of the matrix is large. Thus, we focus
+on the relative error bounds (1.1).
+In Section 3 we analyze this error for Dpp-Nystr¨om. Previous analysis [10] assumes cardinality
+|C| = k in Nystr¨om; we go beyond this limitation and analyze the general case that permits
+using |C| ≥ k columns, by exploiting properties of the characteristic polynomial of K. Empirically
+Dpp-Nystr¨om is seen to obtain approximations superior to other state-of-art methods.
+
+In Section 4 we consider the impact of Dpp-Nystr¨om on kernel methods by focusing on
+Nystr¨om-based kernel approximations for kernel ridge regression (a task that is also a main
+application in [2, 5]). We show risk bounds of Dpp-Nystr¨om that hold in expectation. Empirically,
+Dpp-Nystr¨om is seen to again obtain the best performance among competing methods.
+
+Section 5 considers the key question of computational efﬁciency of Dpp-Nystr¨om. In particular,
+we consider efﬁcient realization of determinantal sampling: since its proposal in [10], determinantal
+sampling (also realized as k-Dpp) has not yet been widely adopted due to concerns about its
+scalability. To that end, we address a Gibbs sampler for k-Dpp, and analyze its mixing time using
+a path coupling [12] argument. We prove that under certain conditions the chain is fast mixing,
+which implies a linear running time for Dpp sampling of landmarks. Empirical results (Section 6)
+indicate that the chain yields favorable results within a small number of iterations as well as the
+best efﬁciency-accuracy traedoffs compared to state-of-art methods (Figure 6).
+
+Λ
+
+2 Background and Notation
+Let K ∈ RN×N be positive semideﬁnite (PSD) with the eigendecomposition K = UΛU(cid:62) where
+the eigenvalues {λi}N
+i=1 are arranged decreasingly. We use Ki,· for the i-th row and K·,j for the
+j-th column; likewise, KC,· denotes rows of K and K·,C the columns of K indexed by C ⊆ [N] :=
+{1, 2, . . . , N}. Finally, KC,C denotes the submatrix of K with rows and columns indexed by C. In this
+[k],[k]U(cid:62)
+notation, Kk = U·,[k]
+·,[k] is the best rank-k approximation to K in both Frobenius and spectral
+norm. We write r(·) for the rank and (·)† for the pseudoinverse, and denote the decomposition of
+K by B(cid:62)B, where B ∈ Rr(K)×N.
+The Nystr¨om Method. The standard Nystr¨om method selects a subset C ⊆ [N] of c := |C| land-
+marks, and approximates K with K·,CK†
+C,CKC,·. The choice of landmarks affects the approximation
+quality, and has been the subject of a substantial body of research [7, 10, 13, 15, 16, 18, 20, 36, 43].
+Besides various landmark selection methods, there exist variants of the standard Nystr¨om method,
+such as the ensemble Nystr¨om method [28] that uses a weighted combination of approximations and
+C,·KC,· [37]. We consider
+the modiﬁed Nystr¨om method that constructs an approximation K·,CK†·,CKK†
+only the standard Nystr¨om method.
+
+2
+
+Determinantal Point Processes. A determinantal point process Dpp(K) is a distribution over all
+subsets of a ground set Y of cardinality N that is determined by a PSD kernel K ∈ RN×N. In
+particular, the probability of observing a subset C ⊆ [N] is proportional to det(KC,C), so that
+
+Pr(C) =
+
+det(KC,C)
+det(K + I)
+
+.
+
+(2.1)
+
+When conditioning on a ﬁxed cardinality |C| = c, one obtains a k-Dpp [26]:
+
+Pr(C | |C| = c) = det(KC,C)ec(K)−1(cid:74)|C| = c(cid:75),
+
+where ec(L) is the c-th coefﬁcient of the characteristic polynomial det(λI − L) = ∑N
+j=0(−1)jej(L)λN−j.
+Sampling from a (k-)Dpp can be done in polynomial time, but requires a full eigen-decomposition
+of K [24], which is prohibitive for large N. A number of approaches have been proposed for more
+efﬁcient sampling [1, 29, 41]. We follow an alternative approach based on Gibbs sampling and
+show that it can offer fast polynomial-time Dpp sampling under certain constraints.
+
+3 DPP for the Nystr¨om Method
+In this section we consider sampling landmarks C ⊆ [N] using a k-Dpp(K), resulting in the
+C,CKC,·. We refer to this procedure as Dpp-Nystr¨om, and note that it was
+approximation ˜K = K·,CK†
+essentially introduced by Belabbas and Wolfe [10], though without making an explicit connection
+to Dpps. Our analysis builds on this connection to Dpps and subsumes existing results which only
+apply to |C| = c = k (recall that, k is the rank of the target approximation).
+
+In the remainder of this section, we prove the following main result.
+
+Theorem 1 (Relative Error). If C ∼ k-Dpp(K), then Dpp-Nystr¨om satisﬁes the relative errors bounds
+
+(cid:20)(cid:107)K − K·C(KCC)†KC·(cid:107)F
+(cid:20)(cid:107)K − K·C(KCC)†KC·(cid:107)2
+
+(cid:107)K − Kk(cid:107)F
+(cid:107)K − Kk(cid:107)2
+
+(cid:21)
+(cid:21)
+
+(cid:19) √
+(cid:19)
+
+(cid:18) c + 1
+(cid:18) c + 1
+
+c + 1 − k
+
+c + 1 − k
+
+≤
+
+≤
+
+N − k,
+
+(N − k).
+
+EC
+
+EC
+
+These bounds hold only in expectation; however, a short additional argument based on [32]
+
+yields bounds that hold with high probability.
+Corollary 2 (Relative Error w.h.p.). When sampling C ∼ k-Dpp(K), for any δ ∈ (0, 1), with probability
+at least 1 − δ we have
+
+(cid:107)K − K·C(KCC)†KC·(cid:107)F
+
+(cid:107)K − Kk(cid:107)F
+
+(cid:107)K − K·C(KCC)†KC·(cid:107)2
+
+≤
+
+≤
+
+(cid:18) c + 1
+(cid:18) c + 1
+
+c + 1 − k
+
+(cid:19) √
+(cid:19)
+
+(cid:113)
+(cid:113)
+
+N − k +
+
+8c log(1/δ)
+
+λ1(cid:113)
+
+∑N
+
+,
+
+i=k+1 λi
+
+(N − k) +
+
+8c log(1/δ) λ1
+λk+1
+
+,
+
+c + 1 − k
+where λ1 ≥ λ2 ≥ . . . ≥ λN are the eigenvalues of K.
+
+(cid:107)K − Kk(cid:107)2
+
+We ﬁrst prove Theorem 1. Our analysis exploits a property of characteristic polynomials
+observed in [23]. Recall that coefﬁcients of the characteristic polynomial are sums over submatrix
+determinants, that is
+
+ek(K) = ∑
+|S|=k
+
+det(B(cid:62)
+
+S BS) = ek(Λ).
+
+(3.1)
+
+The following lemma bounds a ratio of consecutive such coefﬁcients.
+
+3
+
+Lemma 3 (Guruswami and Sinop [23]). Let K = UΛUT. Then, for any c ≥ k > 0, it holds that
+
+∑
+c + 1 − k
+i>k
+With Lemma 3 in hand we are ready to prove Theorem 1.
+Proof (Theorem 1). We begin with the Frobenius norm error, and then show the spectral norm result.
+Writing K = B(cid:62)B, we see that
+
+ec+1(K)
+ec(K)
+
+λi.
+
+≤
+
+1
+
+(cid:104)(cid:107)K − K·CK†
+
+(cid:105)
+(cid:104)(cid:107)B(cid:62)(I − BC(B(cid:62)
+
+CCKC·(cid:107)F
+
+= EC
+
+EC
+
+(cid:105)
+C is the SVD of BC. Next, we extend UC to a full basis U = [UC U⊥
+
+= EC
+C BC)†B(cid:62)
+
+C BC)†B(cid:62)
+
+C )B(cid:107)F
+
+= EC
+
+(cid:105)
+
+,
+
+(cid:104)(cid:107)B(cid:62)B − B(cid:62)BC(B(cid:62)
+
+where UCΣCV(cid:62)
+is orthonormal, we have UU(cid:62) = I and I − UCU(cid:62)
+applying Cauchy-Schwarz yields
+
+C ]. Since U
+C )(cid:62). Plugging in this identity and
+
+C B(cid:107)F
+
+(cid:105)
+(cid:104)(cid:107)B(cid:62)(I − UCU(cid:62)
+C )B(cid:107)F
+(cid:104)(cid:113)∑i,j(b(cid:62)
+(cid:105)
+
+i U⊥
+
+(cid:104)(cid:107)B(cid:62)(I − UCU(cid:62)
+
+(cid:104)(cid:113)
+
+EC
+
+C )(cid:62)bj)2(cid:105)
+
+C (U⊥
+
+C = U⊥
+C (U⊥
+(cid:105)
+(cid:104)∑i (cid:107)b(cid:62)
+= EC
+i U⊥
+C (cid:107)2
+
+C )(cid:62)B(cid:107)F
+
+2
+
+C (U⊥
+= EC
+
+(cid:105)
+(cid:104)(cid:107)B(cid:62)U⊥
+(cid:105)
+C )B(cid:107)F
+= EC
+C (cid:107)2
+C (cid:107)2
+(∑i,j (cid:107)b(cid:62)
+2(cid:107)b(cid:62)
+i U⊥
+j U⊥
+2)
+C BC)(cid:107)b(cid:62)
+det(B(cid:62)
+i U⊥
+C (cid:107)2
+∑
+∑
+|C|=c
+i
+∑
+∑
+i/∈C
+|C|=c
+ec+1(K)
+ec(K)
+
+det(BC∪{i}B(cid:62)
+
+C∪{i})
+
+2
+
+.
+
+≤ EC
+1
+
+=
+
+ec(K)
+
+1
+
+ec(K)
+
+=
+
+= (c + 1)
+
+From identity (3.1) and Lemma 3 it follows that
+
+√
+
+(c + 1) ec+1(K)
+
+ec(K) ≤ c+1
+= c+1
+c+1−k
+
+c+1−k ∑
+√
+i>k
+
+λi ≤ c+1
+c+1−k
+N − k(cid:107)K − Kk(cid:107)F.
+
+N − k
+
+(cid:104)(cid:107)K − K·C(KCC)†KC·(cid:107)2
+
+(cid:105) ≤ EC
+
+(cid:104)(cid:107)K − K·CK†
+
+EC
+
+√
+
+≤ c + 1
+c + 1 − k
+
+N − k(cid:107)K − Kk(cid:107)F ≤ c + 1
+c + 1 − k
+
+CCKC·(cid:107)F
+(N − k)(cid:107)K − Kk(cid:107)2
+
+λ2
+i
+
+(cid:114)∑
+(cid:105)
+
+i>k
+
+The bound on the Frobenius norm immediately implies the bound on the spectral norm:
+
+To show high probability bounds we employ concentration results on homogeneous strongly
+
+Rayleigh measures. Speciﬁcally, we use the following theorem.
+Theorem 4 (Pemantle and Peres [32]). Let P be a k-homogeneous strongly Rayleigh probability measure
+on {0, 1}N and f an (cid:96)-Lipschitz function on {0, 1}N, then
+
+P( f − E[ f ] ≥ a(cid:96)) ≤ exp{−a2/8k}.
+
+Proof (Corollary 2). It is known that a Dpp is a strongly Rayleigh measure on {0, 1}N [11]. Since a
+k-Dpp is its truncation to a probability measure on cardinality k subsets of {0, 1}N, it is still strongly
+Rayleigh, and hence Theorem 4 applies. Corollary 2 follows since the Lipschitz constant for the
+relative error is (cid:96) = λ1/λk+1 for the spectral norm, and (cid:96) = λ1/
+i=k+1 λi for the Frobenius
+norm.
+
+(cid:113)
+
+∑N
+
+4
+
+Remarks. Our bounds are not directly comparable to previous bounds (e.g., [20] on uniform and
+leverage score sampling). However, in Sec. 6.1 we extensively experiment with Dpp-Nystr¨om on
+various datasets and observe superior accuracies against various existing state-of-the-art methods.
+
+4 Low-rank Kernel Ridge Regression
+The theoretical results in Section 3 suggest that Dpp-Nystr¨om may be suitable for scaling kernel
+In this section, we analyze Dpp-Nystr¨om’s implications on kernel ridge
+learning methods.
+regression. In Section 6 we present empirical results that Dpp-Nystr¨om is indeed very effective.
+i=1, where yi = zi + i are the observed labels
+
+Suppose we have N training samples {(xi, yi)}N
+
+under zero-mean noise with ﬁnite covariance. We minimize a regularized empirical loss
+
+min
+f∈F
+
+1
+N
+over an RKHS F; equivalently we solve
+1
+N
+
+min
+α∈RN
+
+∑N
+
+i=1 (cid:96)(yi, f (xi)) +
+
+∑N
+
+i=1 (cid:96)(yi, (Kα)i) +
+
+(cid:107) f(cid:107)2
+
+γ
+2
+
+(cid:62)Kα,
+
+γ
+2 α
+
+using the corresponding kernel matrix K. Under the squared loss (cid:96)(y, f (x)) = 1
+can minimize (4.1) to obtain the estimator
+
+(4.1)
+2 (y − f (x))2, we
+
+i=1 αik(x, xi),
+Thus, we predict ˆz = K(K + NγI)−1y for {xi}N
+
+ˆf (x) = ∑N
+
+α = (K + NγI)−1y.
+
+(4.2)
+
+i=1. If F is the noise covariance we obtain the risk
+
+R( ˆz) =
+
+1
+N
+
+Eε(cid:107) ˆz − z(cid:107)2 = Nγ2z(cid:62)(K + NγI)−2z + 1
+
+N tr(FK2(K + NγI)−2)
+
+= bias(K) + var(K).
+
+(4.3)
+
+Observe that the bias term is matrix-decreasing (in K) while the variance term is matrix-increasing.
+Since the estimator (4.2) requires expensive matrix inversions, it is common to replace K in (4.2)
+by an approximation ˜K. A ˜K constructed via Nystr¨om satisﬁes ˜K (cid:22) K, whereby the variance
+shrinks upon using ˜K while the bias increases. Denoting the predictions corresponding to ˜K by ˆz ˜K,
+Theorem 5 completes the picture of how using ˜K affects the risk.
+Theorem 5. If ˜K is constructed via Dpp-Nystr¨om and γ ≥ 1
+
+N tr(K), then
+
+(cid:34)(cid:115) R( ˆz)
+
+(cid:35)
+
+R( ˆz ˜K)
+
+EC
+
+≥ 1 − (c + 1)
+Nγ
+
+ec+1(K)
+ec(K)
+
+.
+
+Proof. We build upon [5]. Knowing that Var( ˜K) ≤ Var(K) as ˜K (cid:22) K, it remains to bound the bias.
+We write K = B(cid:62)B and ˜K = B(cid:62)BC(B(cid:62)
+
+C B, and bound the difference K − ˜K as
+
+C BC)†B(cid:62)
+
+K − ˜K = B(cid:62)(I − BC(B(cid:62)
+(cid:22) (cid:107)B(cid:62)U⊥
+
+C (U⊥
+(∑i,j (cid:107)b(cid:62)
+
+C )(cid:62)B(cid:107)F I =
+C (cid:107)2
+2(cid:107)b(cid:62)
+i U⊥
+
+(cid:22)(cid:113)
+
+C BC)†B(cid:62)
+
+(cid:113)∑i,j(b(cid:62)
+
+C (U⊥
+C )(cid:62)B
+C )B = B(cid:62)U⊥
+C (U⊥
+C )(cid:62)bj)2I
+2)I = ∑i (cid:107)b(cid:62)
+i U⊥
+C (cid:107)2
+
+i U⊥
+
+C (cid:107)2
+j U⊥
+
+2I = νC I,
+
+5
+
+where νC = ∑i (cid:107)b(cid:62)
+
+2 ≤ ∑i (cid:107)b(cid:62)
+i (cid:107)2
+
+C (cid:107)2
+i U⊥
+2 = tr(K). By assumption 1
+( ˜K + NγI)−1 (cid:22) (K − νC I + NγI)−1 (cid:22) (1 − νC
+Nγ
+
+N tr(K) < γ, so that νC
+)−1(K + NγI)−1.
+
+Nγ < 1; thus
+
+Finally, this matrix inequality implies that(cid:115)
+
+bias(K)
+bias( ˜K)
+Taking expectation over C ∼ k-Dpp(K) yields
+
+Together with the fact that var( ˜K) ≥ var(K), we obtain
+
+(cid:34)(cid:115)
+
+EC
+
+bias(K)
+bias( ˜K)
+
+(cid:35)
+(cid:34)(cid:115) R( ˆz)
+
+(cid:35)
+
+≥ 1 − EC
+
+(cid:20) νC
+(cid:34)(cid:115)
+
+Nγ
+
+≥ (1 − νC
+Nγ
+
+).
+
+(cid:21)
+
+= 1 − (c + 1)
+Nγ
+
+ec+1(K)
+ec(K)
+
+.
+
+(cid:35)
+
+EC
+
+R( ˆz ˜K)
+
+= EC
+
+bias(K) + var(K)
+bias( ˜K) + var( ˜K)
+
+≥ 1 − (c + 1)
+Nγ
+≥ 1 − c + 1
+c + 1 − k
+
+ec+1(K)
+ec(K)
+∑i>k λi
+∑i λi
+
+,
+
+(4.4)
+
+(4.5)
+
+for any k ≤ c, where the last inequality follows from Lemma 3 and γ ≥ 1
+
+N tr(K).
+
+Corollary 6. If ˜K is constructed via Dpp-Nystr¨om and γ ≥ 1
+
+By empoloying Theorem 4 we obtain the following bounds that hold with high probability:
+N tr(K), then with probability at least 1 − δ
+(cid:113)
+
+(cid:115)
+
+(cid:19)
+
+ec(K)
+Proof. Consider the function fC(K) = νC = ∑i (cid:107)b(cid:62)
+2. Since 0 ≤ fC(K) ≤ tr(K), it follows that
+the Lipschitz constant for fC is at most tr(K). Thus when C ∼ k-Dpp and δ ∈ (0, 1), by applying
+least 1 − δ. Thus, it follows that the bound
+
+Theorem 4 we see that the inequality νC ≤ E [νC] +(cid:112)8c log(1/δ)tr(K) holds with probability at
+
+(cid:18) (c + 1)ec+1(K)
+C (cid:107)2
+i U⊥
+
+bias(K)
+bias( ˜K)
+
+≥ 1 − 1
+Nγ
+
++
+
+8c log(1/δ)tr(K)
+
+.
+
+(cid:115)
+
+bias(K)
+bias( ˜K)
+
+≥ 1 − E
+
+(cid:20) νC
+(cid:21)
+−(cid:113)
+(cid:18) (c + 1)ec+1(K)
+
+Nγ
+
+8c log(1/δ)
+
+tr(K)
+Nγ
+
+(cid:113)
+
+ec(K)
+
+(cid:19)
+
++
+
+8c log(1/δ)tr(K)
+
+= 1 − 1
+Nγ
+holds with probability at least 1 − δ.
+
+Remarks. Theorem 5 quantiﬁes how the learning results rely on the decay of the spectrum of
+K. In particular, the ratio ec+1(K)/ec(K) closely relates to the effective rank of K: if λc > a and
+λc+1 (cid:28) a, this ratio becomes almost zero, resulting in near-perfect approximations and no loss in
+learning. This conclusion is also evident from (4.5).
+There exist works considering Nystr¨om methods in this scenario [2, 5]. Although our bounds are
+not directly comparable to the existing ones, we do extensive experiments against other state-of-art
+methods in Sec. 6.2 and observe superior performances of Dpp-Nystr¨om.
+
+6
+
+5 Fast Mixing Markov Chain for DPP
+
+Despite its excellent empirical performance and strong theoretical results, determinantal sampling
+for Nystr¨om has rarely been used in applications due to the computational cost of O(N3) for exactly
+sampling from a Dpp, which relies on eigendecomposition. Instead, we resort to using an MCMC
+sampler, which offers a promising alternative if the chain mixes fast enough. Recent empirical
+results provide initial evidence [25], but without a theoretical analysis2; other recent works [22, 33]
+do not apply to our setting which deals with cardinality constrained k-Dpp. We offer the theoretical
+analysis that conﬁrms fast mixing (i.e., polynomial or even linear-time sampling) under certain
+conditions and connect it to our empirical results. (We note in a time period overlapping with
+completion of our proofs, [4] have independently obtained an elegant polynomial mixing time
+analysis that does not place additional restrictions.) The empirical results in Section 6 illustrate the
+favorable performance of Dpp-Nystr¨om in trading off time and error.
+Algorithm 1 presents a Gibbs sampler for k-Dpps. Starting with a uniformly random set Y0, at
+iteration t the sampler tries to swap an element yin ∈ Yt with an element yout /∈ Yt, according to the
+probabilities of the sets Yt and Yt ∪ {yout} \ {yin}. The stationary distribution of the corresponding
+Markov chain is exactly the desired k-Dpp(K).
+
+Algorithm 1 Gibbs sampler for k-Dpp
+Require: K the kernel matrix, Y = [N] the ground set
+Ensure: Y sampled from exact k-Dpp(K)
+
+Randomly Initialize Y ⊆ Y
+while not mixed do
+
+Sample b from uniform Bernoulli distribution
+if b = 1 then
+
+Pick yin ∈ Y and yout ∈ Y\Y uniformly randomly
+
+q(yin, yout, Y) ←
+
+det(LY∪{yout}\{yin})
+
+det LY∪{yout}\{yin} + det(LY)
+
+Y ← Y ∪ {yout}\{yin} with probability q(yin, yout, Y)
+
+end if
+
+end while
+
+The mixing time τ(ε) of the Markov chain is the number of iterations it takes until the distribution
+over the states is ε-close to the target in total variation, i.e., τ(ε) := min{t| maxY0 TV(Yt, π) ≤ }.
+We show a bound on this mixing time via coupling techniques.
+Given a Markov chain (Yt) on a state space Ω with transition matrix P, a coupling is a new
+chain (Yt, Zt) on Ω × Ω such that both (Yt) and (Zt), if considered marginally, are Markov chains
+with the same transition matrices P. The key point of coupling is to construct such a new chain
+to encourage Yt and Zt to coalesce quickly. If in the new chain Pr(Yt (cid:54)= Zt) ≤ ε for some ﬁxed t
+regardless of the starting state (Y0, Z0), then the mixing time τ(ε) ≤ t [3].
+Such coalescing chains can be difﬁcult to construct. Path coupling [12] relieves this burden by
+reducing the coupling to adjacent states in an appropriately constructed state graph. The coupling
+of arbitrary states follows by aggregation over a path between the two. Path coupling is formalized
+in the following lemma.
+Lemma 7 ([12, 17]). Let δ be an integer-valued metric on Ω × Ω where δ(·,·) ≤ D. Let E be a subset
+of Ω × Ω such that for all (Yt, Zt) ∈ Ω × Ω there exists a path Yt = X0, . . . , Xr = Zt between Yt
+
+2The analysis in [25] is not correct.
+
+7
+
+and Zt where (Xi, Xi+1) ∈ E for i ∈ [r − 1] and ∑i δ(Xi, Xi+1) = δ(Yt, Zt). Suppose a coupling
+(R, T) → (R(cid:48), T(cid:48)) of the Markov chain is deﬁned on all pairs in E such that there exists a scalar α < 1 such
+that E[δ(R(cid:48), T(cid:48))] ≤ αδ(R, T) for all (R, T) ∈ E. Then, for any ε > 0 we have the following bound:
+
+τ(ε) ≤ log(Dε−1)
+(1 − α)
+
+.
+
+The lemma says that if we have a contraction of the two chains in expectation (α < 1), then the
+chain mixes fast. With the path coupling lemma, we obtain a bound on the mixing time that can be
+linear in the data set size N.
+
+The actual result depends on three quantities that relate to how sensitive the transition proba-
+bilities are to swapping a single element in a set of size k. Consider an arbitrary set S of columns,
+|S| = k − 1, and complete it to two k-sets R = S ∪ {r} and T = S ∪ {t} that differ in exactly one
+element. Our quantities are, for u /∈ R ∪ T, v ∈ S and q deﬁned as in Algorithm 1:
+
+p1(S, r, t, u) = min{q(r, u, R), q(t, u, T)}
+p2(S, r, t, u) = min{q(v, t, R), q(v, u, T)}
+p3(S, r, t, v, u) = |q(v, u, R) − q(v, u, T)|.
+
+Theorem 8. Let
+
+α =
+
+max
+
+|S|=k−1,r,t∈[n]\S,r(cid:54)=t
+
+∑
+
+u3∈S,u4 /∈S∪{r,t}
+
+p3(S, r, t, u3, u4) − ∑
+
+u1 /∈S∪{r,t}
+
+p1(S, r, t, u1) − ∑
+u2∈S
+
+p2(S, r, t, u2).
+
+Given α < 1, the mixing time for the Gibbs sampler in Algorithm 1 is bounded as
+
+τ(ε) ≤ 2k(N − k) log(kε−1)
+
+(1 − α)
+
+.
+
+Proof. We bound the mixing time via path coupling. Let δ(R, T) = |R ⊕ T|/2 be half the Hamming
+distance on the state space, and deﬁne E to consist of all state pairs (R, T) in Ω × Ω such that
+δ(R, T) = 1. We intend to show that for all states (R, T) ∈ E and next states (R(cid:48), T(cid:48)) ∈ E, we have
+E[δ(R(cid:48), T(cid:48))] ≤ αδ(R, T) for an appropriate α.
+Since δ(R, T) = 1, the sets R and T differ in only two entries. Let S = R ∩ T, so |S| = k − 1 and
+R = S ∪ {r} and T = S ∪ {t}. For a state transition, we sample an element rin ∈ R and rout ∈ [n]\R
+as switching candidates for R, and elements tin ∈ T and tout ∈ [n]\T as switching candidates for T.
+Let bR and bT be the Bernoulli random variables indicating whether to try to make a transition. In
+our coupling we always set bR = bT. Hence, if bR = 0 then both chains will not transition and the
+distance of states remains. For bR = bT = 1, we distinguish four cases:
+
+Case C1.
+
+If rin = r and rout = t, we let tin = t and tout = r. As a result, δ(R(cid:48), T(cid:48)) = 0.
+If rin = r and rout = u1 /∈ S ∪ {r, t}, we let tin = t and tout = u1. In this case, if both
+Case C2.
+chains transition, then the resulting distance is zero, otherwise it remains one. With probability
+p1(S, r, t, u1) = min{q(r, u1, R), q(t, u1, T)} both chains transit.
+
+If rin = u2 ∈ S and rout = t, we let tin = u2 and tout = r. Again, if both chains
+Case C3.
+transition, then the resulting distance is δ(R(cid:48), T(cid:48)) = 0, otherwise it remains one. With probability
+p2(S, r, t, u2) = min{q(u2, t, R), q(u2, u1, T)} both chains transit.
+
+8
+
+If rin = u3 ∈ S and rout = u4 /∈ S ∪ {r, t}, we let tin = u3 and tout = u4.
+
+Case C4.
+If both
+chains make the same transition (both move or do not move), the resulting distance is one,
+otherwise it increases to 2. The distance increases with probability p3(S, r, t, u3, u4) = |q(u3, u4, R)−
+q(u3, u4, T)|.
+
+With those four cases, we can now bound E[δ(R(cid:48), T(cid:48))]. For all (R, T) ∈ E, i.e., δ(R, T) = 1:
+
++ Pr(C2)E[δ(R(cid:48), T(cid:48))|C2] + Pr(C3)E[δ(R(cid:48), T(cid:48))|C3] + Pr(C4)E[δ(R(cid:48), T(cid:48))|C4]
+
+(1 + p3(u3, u4))(cid:1)
+p2(u2) − 1(cid:1),
+
+E[δ(R(cid:48), T(cid:48))]
+E[δ(R, T)]
+
+=
+
+1
+2
+
++
+
+=
+
+1
+2
+2k(n − k)
+
+1
+
+(cid:0) ∑
+(cid:0)2k(n − 1) + ∑
+
+u1 /∈S∪{r,t}
+
+=
+
+1
+
+2k(n − k)
+
+(1 − p1(u1)) + ∑
+u2∈S
+p3(u3, u4) −
+
+(1 − p2(u2)) + ∑
+u3∈S,
+u4 /∈S∪{r,t}
+p1(u1) − ∑
+u2∈S
+
+u1 /∈S∪{r,t}
+
+∑
+
+u3∈S,
+
+u4 /∈S∪{r,t}
+
+where we did not explicitly write the arguments S, r, t to p1, p2, p3. For
+p1(u1) − ∑
+u2∈S
+
+p3(u3, u4) − ∑
+
+∑
+u3∈S,
+
+u1 /∈S∪{r,t}
+
+α = max
+|S|=k−1,
+r,t∈[n]\S,
+
+p2(u2)
+
+u4 /∈S∪{r,t}
+
+r(cid:54)=t
+
+and α < 1 the path coupling lemma 7 implies that
+
+τ(ε) ≤ 2k(N − k) log(kε−1)
+
+(1 − α)
+
+.
+
+If α < 1 is ﬁxed, then the mixing time depends only linearly on N. The quantity
+Remarks.
+α itself depends on our three quantities. In particular, fast mixing requires p3 (the difference
+between transition probabilities) to be very small compared to p1, p2, at least on average. The
+difference p3 measures how exchangeable two points r and t are. This notion of symmetry is closely
+related to a symmetry that determines the complexity of submodular maximization [40] (indeed,
+F(S) = log det KS is a submodular function). This symmetry only needs to hold for most pairs r,
+t, and most swapping points u, v. It holds for kernels with sufﬁciently fast-decaying similarities,
+similar to the conditions in [33] for unconstrained sampling.
+
+Finally, we note that a single iteration of the sampler can be implemented to run in O(k2) time
+using block inversion [21]. Together with fast mixing, this leads to an efﬁcient sampler for k-Dpps.
+
+6 Experiments
+In our experiments, we evaluate the performance of Dpp-Nystr¨om on both kernel approximation
+and kernel learning tasks; we report both running times and accuracy.
+
+We use 8 datasets: Abalone, Ailerons, Elevators, CompAct, CompAct(s), Bank32NH, Bank8FM
+and California Housing3. We truncated each dataset to 4,000 samples (3,000 training and 1,000
+testing). Throughout our experiments we use an RBF kernel and choose the bandwidth parameter
+σ and regularization parameter λ for each dataset by 10-fold cross-validation. We initialize the
+Gibbs sampler via Kmeans++ and run for 3,000 iterations. Results are averaged over 3 random
+subsets of data.
+
+3The data is available at http://www.dcc.fc.up.pt/~ltorgo/Regression/DataSets.html
+
+9
+
+Figure 1: Relative Frobenius/Spectral norm errors from different kernel approximation algorithms
+on Ailerons dataset.
+
+6.1 Kernel Approximation
+We ﬁrst explore Dpp-Nystr¨om (kDPP in the ﬁgures) for approximating kernel matrices. We compare
+against the following methods:
+
+– Uniform sampling (Unif);
+– Leverage score sampling (Lev) [20];
+– AdapFull (AdapFull) [14];
+– Sampling with regularized leverage scores (RegLev) [2].
+
+Unif and Lev serve as as baseline landmark selection methods. Though AdapFull performs quite
+well in terms of accuracy, it scales poorly, as O(N2), with the size of dataset. We note that
+RegLev is not originally designed for kernel approximation, but we include its results to see how
+regularization impacts leverage score sampling.
+
+Figure 1 shows example results on the Ailerons data, further experiments may be found in
+the appendix. Dpp-Nystr¨om performs well, and achieves the lowest errors as measured in both
+spectral and Frobenius norm. The only method that is on par in terms of accuracy is AdapFull but
+with a much higher running time.
+
+For a different view, Figure 2 shows the improvement in error over Unif. Relative improvements
+are averaged over all data sets. Again, the performance of Dpp-Nystr¨om almost always dominates
+other methods and achieves up to an 80% reduction in error.
+
+6.2 Kernel Ridge Regression
+Next, we apply Dpp-Nystr¨om to kernel ridge regression, comparing against uniform sampling
+(Unif) [5] and regularized leverage score sampling (RegLev) [2] which have theoretical guarantees
+for this task. Figure 3 illustrates an example result: non-uniform sampling greatly improves
+accuracy, with kDPP improving over regularized leverage scores in particular for a small number of
+landmarks, where a single column has a larger effect.
+
+Figure 4 displays the average improvement over Unif, averaged over 8 data sets. Again the
+performances of kDPP dominates those of RegLev and Unif and leads to gains in accuracy. On
+average kDPP consistently achieve more than 20% improvement over Unif.
+
+10
+
+# landmarks20406080100error00.020.040.060.08Fro Error# landmarks20406080100error00.020.040.060.08Spec ErrorUnifAdapFullLevRegLevkDPPFigure 2: Improvement in relative Frobenius/spectral norm errors (%) over Unif (with correspond-
+ing landmark sizes) for kernel approximation, averaged over all datasets.
+
+Figure 3: Training and testing errors by different Nystr¨om-approximated kernel ridge regression
+algorithms on Ailerons dataset.
+
+6.3 Mixing of the Gibbs Markov Chain
+In the next experiment, we empirically study the mixing of the Gibbs chain with respect to matrix
+approximation error, the ultimate measure that is of interest in our application. We use c = 50
+and vary N from 500 to 4,000. To exclude impacts of the initialization, we pick the initial state Y0
+uniformly at random. We run the chain for 5,000 iterations, monitoring how the error changes with
+the number of iterations. The example results in Figure 5 show that empirically, the error drops very
+quickly and afterwards ﬂuctuates only little, indicating a fast convergence of the approximation
+error (even before the Gibbs chain has truly mixed). Other error measures and larger c conﬁrm this
+trend. Further results may be found in the supplementary material.
+
+Notably, our empirical results suggest that the mixing time does not increase much even if N
+
+increases greatly, suggesting that the Gibbs sampler remains fast even for large N.
+
+In Theorem 8, the mixing time depends on the quantity α. By subsampling 1,000 random sets S
+and column indices r, t, we approximately computed α on our data sets. We ﬁnd that, as expected,
+α < 1 in particular for kernels with a smaller bandwidth, and in general α increases with k. In
+accordance with the theory, we found that the mixing time (in terms of error) too increases with
+k. In practice, we observe a fast drop in error even for cases where α > 1, indicating that in this
+regime Theorem 8 is conservative and that the iterative approach is even more widely applicable.
+
+11
+
+# landmarks20406080100Relative Improvement (%)50607080Fro Improvement# landmarks20406080100Relative Improvement (%)50607080Spec ImprovementAdapFullLevRegLevkDPP# landmarks20406080100error051015202530Train Error# landmarks20406080100error051015202530Test ErrorUnifRegLevkDPPFigure 4: Improvements in training/testing errors (%) over uniform sampling (with corresponding
+landmark sizes) in kernel ridge regression, averaged over all datasets.
+
+Figure 5: Relative Frobenius norm error of Dpp-Nystr¨om with 50 landmarks as changing across
+iterations of the Markov Chain.
+
+6.4 Time-Error Tradeoffs
+
+(a) Time vs. Fnorm Error
+
+(b) Time vs. Test Error
+
+Figure 6: Time-Error tradeoffs with 50 landmarks on the Ailerons data truncated at 2,000 samples
+(1,000 training and 1,000 testing). Errors are shown on a log scale. Bottom left is the best (low error,
+low running time), top right is the worst.
+
+Iterative methods like the Gibbs sampler offer tradeoffs between time and error. The longer
+the Markov Chain runs, the closer the sampling distribution is to the desired Dpp, and the higher
+
+12
+
+# landmarks20406080100Relative Improvement (%)102030405060Train Improvement# landmarks20406080100Relative Improvement (%)102030405060Test ImprovementRegLevkDPP# iters010002000300040005000Fnorm error00.0050.010.0150.02Size=500# iters010002000300040005000Fnorm error00.0050.010.0150.02Size=1000# iters010002000300040005000Fnorm error00.0050.010.0150.02Size=2000# iters010002000300040005000Fnorm error00.010.020.03Size=4000Time (s)00.51Fnorm error10-210-1UnifAdapFullLevRegLevAppLevAppRegLevkDPPTime (s)00.51Test error100101UnifAdapFullLevRegLevAppLevAppRegLevkDPPthe accuracy obtained by Nystr¨om. We hence explicitly show the time and accuracy for 0 to 300
+iterations of the sampler.
+
+A similar tradeoff occurs with leverage scores. For the experiments in the other sections,
+we computed the (regularized) leverage scores for Lev and RegLev exactly. This requires a full,
+computationally expensive eigendecomposition. For a fast, rougher approximation, we here
+compare to an approximation mentioned in [2]. Concretely, we sample p elements with probability
+proportional to the diagonal entries of kernel matrices Kii, and then use a Nystr¨om-like method
+to construct an approximate low-rank decomposition of K, and compute scores based on this
+approximation. We vary p from 50 to 500 to show the tradeoff for approximated leverage score
+sampling (AppLev) and regularized leverage score sampling (AppRegLev).
+
+Figure 6 summarizes and compares the tradeoffs offered by these different methods. The x-axis
+indicates time, the y-axis error, so the lower left is the preferred corner. We see that exact leverage
+scores are accurate but expensive, whereas the approximate versions empirically lose accuracy.
+AdapFull is accurate but needs longer time than kDPP. These results are sharpened as N grows.
+Overall, Dpp-Nystr¨om offers the best tradeoff of accuracy versus efﬁciency.
+
+7 Conclusion
+
+In this paper, we revisited the use of k-Determinantal Point Processes for sampling good landmarks
+for the Nystr¨om method. We theoretically and empirically observe its competitive performance, for
+both matrix approximation and ridge regression, compared to state-of-the-art methods.
+
+To make this accuracte method scalable to large matrices, we consider an iterative approach,
+and analyze it theoretically as well as empirically. Our results indicate that the iterative approach,
+a Gibbs sampler, achieves good landmark samples quickly; under certain conditions even in a
+linear number of iteratons, for an N by N matrix. Finally our empirical results demonstrate that
+among state of the art methods, the iterative sampler yields the best tradeoff between efﬁciency
+and accuracy.
+
+References
+[1] R. H. Affandi, A. Kulesza, E. Fox, and B. Taskar. Nystr¨om approximation for large-scale
+
+determinantal processes. In AISTATS, pages 85–98, 2013.
+
+[2] A. E. Alaoui and M. W. Mahoney. Fast randomized kernel methods with statistical guarantees.
+
+NIPS, 2015.
+
+[3] D. J. Aldous. Some inequalities for reversible markov chains. Journal of the London Mathematical
+
+Society, pages 564–576, 1982.
+
+[4] N. Anari, S. O. Gharan, and A. Rezaei. Monte Carlo Markov Chain Algorithms for Sampling
+Strongly Rayleigh distributions and Determinantal Point Processes. arXiv:1602.05242, 2016.
+
+[5] F. Bach. Sharp analysis of low-rank kernel matrix approximations. COLT, 2013.
+[6] F. R. Bach and M. I. Jordan. Kernel independent component analysis. JMLR, pages 1–48, 2003.
+[7] F. R. Bach and M. I. Jordan. Predictive low-rank decomposition for kernel methods. In ICML,
+
+pages 33–40, 2005.
+
+[8] C. T. Baker and C. Baker. The numerical treatment of integral equations. Clarendon press Oxford,
+
+1977.
+
+13
+
+[9] M.-A. Belabbas and P. J. Wolfe. On landmark selection and sampling in high-dimensional data
+analysis. Philosophical Transactions of the Royal Society of London A: Mathematical, Physical and
+Engineering Sciences, pages 4295–4312, 2009.
+
+[10] M.-A. Belabbas and P. J. Wolfe. Spectral methods in machine learning and new strategies for
+
+very large datasets. Proceedings of the National Academy of Sciences, pages 369–374, 2009.
+
+[11] J. Borcea, P. Br¨and´en, and T. Liggett. Negative dependence and the geometry of polynomials.
+
+Journal of the American Mathematical Society, pages 521–567, 2009.
+
+[12] R. Bubley and M. Dyer. Path coupling: A technique for proving rapid mixing in markov
+
+chains. In FOCS, pages 223–231, 1997.
+
+[13] C. Cortes, M. Mohri, and A. Talwalkar. On the impact of kernel approximation on learning
+
+accuracy. In AISTATS, pages 113–120, 2010.
+
+[14] A. Deshpande, L. Rademacher, S. Vempala, and G. Wang. Matrix approximation and projective
+
+clustering via volume sampling. In SODA, pages 1117–1126, 2006.
+
+[15] P. Drineas and M. W. Mahoney. On the Nystr¨om method for approximating a gram matrix for
+
+improved kernel-based learning. JMLR, pages 2153–2175, 2005.
+
+[16] P. Drineas, R. Kannan, and M. W. Mahoney. Fast monte carlo algorithms for matrices II:
+Computing a low-rank approximation to a matrix. SIAM Journal on Computing, pages 158–183,
+2006.
+
+[17] M. Dyer and C. Greenhill. A more rapidly mixing markov chain for graph colorings. Random
+
+Structures and Algorithms, pages 285–317, 1998.
+
+[18] S. Fine and K. Scheinberg. Efﬁcient SVM training using low-rank kernel representations.
+
+JMLR, pages 243–264, 2002.
+
+[19] C. Fowlkes, S. Belongie, F. Chung, and J. Malik. Spectral grouping using the Nystr¨om method.
+
+TPAMI, pages 214–225, 2004.
+
+[20] A. Gittens and M. W. Mahoney. Revisiting the Nystr¨om method for improved large-scale
+
+machine learning. ICML, 2013.
+
+[21] G. H. Golub and C. F. Van Loan. Matrix computations. 2012.
+[22] A. Gotovos, H. Hassani, and A. Krause. Sampling from probabilistic submodular models. In
+
+NIPS, pages 1936–1944, 2015.
+
+[23] V. Guruswami and A. K. Sinop. Optimal column-based low-rank matrix reconstruction. In
+
+SODA, pages 1207–1214, 2012.
+
+[24] J. B. Hough, M. Krishnapur, Y. Peres, B. Vir´ag, et al. Determinantal processes and independence.
+
+Probability Surveys, pages 206–229, 2006.
+
+[25] B. Kang. Fast determinantal point process sampling with application to clustering. In NIPS,
+
+pages 2319–2327, 2013.
+
+[26] A. Kulesza and B. Taskar. k-DPPs: Fixed-size determinantal point processes. In ICML, pages
+
+1193–1200, 2011.
+
+[27] A. Kulesza and B. Taskar. Determinantal point processes for machine learning. arXiv preprint
+
+arXiv:1207.6083, 2012.
+
+14
+
+[28] S. Kumar, M. Mohri, and A. Talwalkar. Ensemble Nystr¨om method. In NIPS, pages 1060–1068,
+
+2009.
+
+[29] C. Li, S. Jegelka, and S. Sra. Efﬁcient sampling for k-determinantal point processes. AISTATS,
+
+2016.
+
+[30] O. Macchi. The coincidence approach to stochastic point processes. Advances in Applied
+
+Probability, pages 83–122, 1975.
+
+[31] E. J. Nystr¨om. ¨Uber die praktische Auﬂ¨osung von Integralgleichungen mit Anwendungen auf
+
+Randwertaufgaben. Acta Mathematica, pages 185–204, 1930.
+
+[32] R. Pemantle and Y. Peres. Concentration of lipschitz functionals of determinantal and other
+
+strong rayleigh measures. Combinatorics, Probability and Computing, pages 140–160, 2014.
+
+[33] P. Rebeschini and A. Karbasi. Fast mixing for discrete point processes. COLT, 2015.
+[34] A. Rudi, R. Camoriano, and L. Rosasco. Less is more: Nystr¨om computational regularization.
+
+NIPS, 2015.
+
+[35] H. Shen, S. Jegelka, and A. Gretton. Fast kernel-based independent component analysis. Signal
+
+Processing, IEEE Transactions on, pages 3498–3511, 2009.
+
+[36] A. J. Smola and B. Sch¨olkopf. Sparse greedy matrix approximation for machine learning.
+
+ICML, 2000.
+
+[37] S. Sun, J. Zhao, and J. Zhu. A review of Nystr¨om methods for large-scale machine learning.
+
+Information Fusion, pages 36–48, 2015.
+
+[38] A. Talwalkar, S. Kumar, and H. Rowley. Large-scale manifold learning. In CVPR, 2008.
+[39] A. Talwalkar, S. Kumar, M. Mohri, and H. Rowley. Large-scale SVD and manifold learning.
+
+JMLR, pages 3129–3152, 2013.
+
+[40] J. Vondr´ak. Symmetry and approximability of submodular maximization problems. SIAM
+
+Journal on Computing, 42(1):265–304, 2013.
+
+[41] S. Wang, C. Zhang, H. Qian, and Z. Zhang. Using the matrix ridge approximation to speedup
+
+determinantal point processes sampling algorithms. In AAAI, 2014.
+
+[42] C. Williams and M. Seeger. Using the Nystr¨om method to speed up kernel machines. In NIPS,
+
+pages 682–688, 2001.
+
+[43] K. Zhang, I. W. Tsang, and J. T. Kwok. Improved Nystr¨om low-rank approximation and error
+
+analysis. In ICML, pages 1232–1239, 2008.
+
+15
+
+A Supplementary Experiments
+
+A.1 Kernel Approximation
+Fig. 7 shows the matrix norm relative error of various methods in kernel approximation on the
+remaining 7 datasets mentioned in the main text.
+
+(a) Abalone
+
+(b) Bank8FM
+
+(c) Bank32NH
+
+(d) California Housing
+
+(e) CompAct
+
+(f) CompAct(s)
+
+Figure 7: Relative Frobenius norm and spectral norm error achieved by different kernel approxima-
+tion algorithms on the remaining 7 data sets.
+
+(g) Elevators
+
+16
+
+# landmarks20406080100error×10-400.511.522.53Fro Error# landmarks20406080100error×10-400.511.522.53Spec ErrorUnifAdapFullLevRegLevkDPP# landmarks20406080100error00.010.020.030.04Fro Error# landmarks20406080100error00.0050.010.0150.020.0250.03Spec ErrorUnifAdapFullLevRegLevkDPP# landmarks20406080100error0.0050.010.0150.020.0250.030.035Fro Error# landmarks20406080100error00.0050.010.0150.02Spec ErrorUnifAdapFullLevRegLevkDPP# landmarks20406080100error×10-401234567Fro Error# landmarks20406080100error×10-401234567Spec ErrorUnifAdapFullLevRegLevkDPP# landmarks20406080100error×10-30123456Fro Error# landmarks20406080100error×10-30123456Spec ErrorUnifAdapFullLevRegLevkDPP# landmarks20406080100error×10-300.511.522.5Fro Error# landmarks20406080100error×10-300.511.52Spec ErrorUnifAdapFullLevRegLevkDPP# landmarks20406080100error00.0020.0040.0060.0080.010.012Fro Error# landmarks20406080100error00.0020.0040.0060.0080.010.012Spec ErrorUnifAdapFullLevRegLevkDPPA.2 Approximated Kernel Ridge Regression
+Fig. 8 shows the training and test error of various methods for kernel ridge regression on the
+remaining 7 datasets.
+
+(a) Abalone
+
+(b) Bank8FM
+
+(c) Bank32NH
+
+(d) California Housing
+
+(e) CompAct
+
+(f) CompAct(s)
+
+Figure 8: Training and test error achieved by different Nystr¨om kernel ridge regression algorithms
+on the remaining 7 regression datasets.
+
+(g) Elevators
+
+17
+
+# landmarks20406080100error0.0050.010.0150.020.0250.030.035Train Error# landmarks20406080100error0.010.0150.020.0250.030.035Test ErrorUnifRegLevkDPP# landmarks20406080100error051015202530Train Error# landmarks20406080100error051015202530Test ErrorUnifRegLevkDPP# landmarks20406080100error024681012Train Error# landmarks20406080100error024681012Test ErrorUnifRegLevkDPP# landmarks20406080100error00.050.10.150.20.250.30.35Train Error# landmarks20406080100error00.050.10.150.20.250.30.35Test ErrorUnifRegLevkDPP# landmarks20406080100error0.060.080.10.120.140.160.18Train Error# landmarks20406080100error0.060.080.10.120.140.16Test ErrorUnifRegLevkDPP# landmarks20406080100error0.070.080.090.10.110.120.130.14Train Error# landmarks20406080100error0.080.090.10.110.120.130.140.15Test ErrorUnifRegLevkDPP# landmarks20406080100error00.511.522.533.54Train Error# landmarks20406080100error00.511.522.533.54Test ErrorUnifRegLevkDPP(a) Training error
+
+(b) Test error
+
+(c) Relative Frobenius norm error
+
+(d) Relative Spectral norm error
+
+Figure 9: Performance of Markov chain Dpp-Nystr¨om with 50 landmarks on Ailerons. Runs for
+5,000 iterations.
+
+A.3 Mixing of Markov Chain k-Dpp
+We show the mixing of the Gibbs Dpp-Nystr¨om with 50 landmarks with different performance
+measures: relative spectral norm error, training error and test error of kernel ridge regression
+in Fig. 9.
+
+We also show corresponding results with respect to 100 and 200 landmarks in Fig. 10 and Fig. 11,
+so as to illustrate that for varying number of landmarks the chain is indeed fast mixing and will
+give reasonably good result within a small number of iterations.
+
+A.4 Running Time Analysis
+We show running time comparisons for various sampling methods on the Ailerons dataset with
+respect to spectral norm error and training error with 50 landmarks and all error measures with
+100 landmarks. The result is shown in Fig. 12 and Fig. 13 and similar trends as the example results
+in the main text could be spotted.
+
+18
+
+# iters05000Train error0123Size=500# iters05000Train error0123Size=700# iters05000Train error0123Size=1000# iters05000Train error0123Size=1500# iters05000Train error0123Size=2000# iters05000Train error0123Size=3000# iters05000Train error0123Size=4000# iters05000Test error0123Size=500# iters05000Test error0123Size=700# iters05000Test error0123Size=1000# iters05000Test error0123Size=1500# iters05000Test error0123Size=2000# iters05000Test error0123Size=3000# iters05000Test error0123Size=4000# iters05000Fnorm error00.0050.010.0150.02Size=500# iters05000Fnorm error00.0050.010.0150.02Size=700# iters05000Fnorm error00.010.02Size=1000# iters05000Fnorm error00.0050.010.0150.02Size=1500# iters05000Fnorm error00.0050.010.0150.02Size=2000# iters05000Fnorm error00.0050.010.0150.02Size=3000# iters05000Fnorm error00.0050.010.0150.02Size=4000# iters050002norm error00.0050.010.0150.02Size=500# iters050002norm error00.0050.010.0150.02Size=700# iters050002norm error00.0050.010.0150.02Size=1000# iters050002norm error00.0050.010.0150.02Size=1500# iters050002norm error00.0050.010.0150.02Size=2000# iters050002norm error00.0050.010.0150.02Size=3000# iters050002norm error00.0050.010.0150.02Size=4000(a) Training error
+
+(b) Test error
+
+(c) Relative Frobenius norm error
+
+(d) Relative Spectral norm error
+
+Figure 10: Performance of Markov chain Dpp-Nystr¨om with 100 landmarks on Ailerons. Runs for
+5,000 iterations.
+
+19
+
+# iters05000Train error00.511.5Size=500# iters05000Train error00.511.5Size=700# iters05000Train error00.511.5Size=1000# iters05000Train error00.511.5Size=1500# iters05000Train error00.511.5Size=2000# iters05000Train error00.511.5Size=3000# iters05000Train error00.511.5Size=4000# iters05000Test error00.511.5Size=500# iters05000Test error00.511.5Size=700# iters05000Test error00.511.5Size=1000# iters05000Test error00.511.5Size=1500# iters05000Test error00.511.5Size=2000# iters05000Test error00.511.5Size=3000# iters05000Test error00.511.5Size=4000# iters05000Fnorm error00.0050.01Size=500# iters05000Fnorm error00.0050.01Size=700# iters05000Fnorm error00.0050.01Size=1000# iters05000Fnorm error00.0050.01Size=1500# iters05000Fnorm error00.0050.01Size=2000# iters05000Fnorm error00.0050.01Size=3000# iters05000Fnorm error00.0050.01Size=4000# iters050002norm error00.0050.01Size=500# iters050002norm error00.0050.01Size=700# iters050002norm error00.0050.01Size=1000# iters050002norm error00.0050.01Size=1500# iters050002norm error00.0050.01Size=2000# iters050002norm error00.0050.01Size=3000# iters050002norm error00.0050.01Size=4000(a) Training error
+
+(b) Test error
+
+(c) Relative Frobenius norm error
+
+(d) Relative Spectral norm error
+
+Figure 11: Performance of Markov chain Dpp-Nystr¨om with 200 landmarks on Ailerons. Runs for
+5,000 iterations.
+
+(a) 2norm Error vs. Time
+
+(b) Training Error vs. Time
+
+Figure 12: Time-Error tradeoff with 50 landmarks on Ailerons. Errors shown in log-scale.
+
+20
+
+# iters05000Train error0.250.30.350.40.45500 size# iters05000Train error0.250.30.350.40.45700 size# iters05000Train error0.250.30.350.40.451000 size# iters05000Train error0.250.30.350.40.451500 size# iters05000Train error0.250.30.350.40.452000 size# iters05000Train error0.250.30.350.40.453000 size# iters05000Test error0.30.320.340.360.380.4500 size# iters05000Test error0.30.320.340.360.380.4700 size# iters05000Test error0.30.320.340.360.380.41000 size# iters05000Test error0.30.320.340.360.380.41500 size# iters05000Test error0.30.320.340.360.380.42000 size# iters05000Test error0.30.320.340.360.380.43000 size# iters020004000Fnorm error×10-30123500 size# iters020004000Fnorm error×10-30123700 size# iters020004000Fnorm error×10-301231000 size# iters020004000Fnorm error×10-301231500 size# iters020004000Fnorm error×10-301232000 size# iters020004000Fnorm error×10-301233000 size# iters020004000Fnorm error×10-30123500 size# iters020004000Fnorm error×10-30123700 size# iters020004000Fnorm error×10-301231000 size# iters020004000Fnorm error×10-301231500 size# iters020004000Fnorm error×10-301232000 size# iters020004000Fnorm error×10-301233000 sizeTime (s)00.512norm error10-210-1UnifAdapFullLevRegLevAppLevAppRegLevkDPPTime (s)00.51Train error100101UnifAdapFullLevRegLevAppLevAppRegLevkDPP(a) Fnorm Error vs. Time (b) 2norm Error vs. Time (c) Training Error vs. Time
+
+(d) Test Error vs. Time
+
+Figure 13: Time-Error tradeoff with 100 landmarks on Ailerons. Errors shown in log-scale.
+
+21
+
+Time (s)00.511.5Fnorm error10-310-2UnifAdapFullLevRegLevAppLevAppRegLevkDPPTime (s)00.511.52norm error10-310-2UnifAdapFullLevRegLevAppLevAppRegLevkDPPTime (s)00.511.5Train error0.511.52UnifAdapFullLevRegLevAppLevAppRegLevkDPPTime (s)00.511.5Test error0.511.52UnifAdapFullLevRegLevAppLevAppRegLevkDPP

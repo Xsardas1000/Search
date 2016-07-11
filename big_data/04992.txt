@@ -1,0 +1,832 @@
+Unsupervised CNN for Single View Depth
+
+Estimation: Geometry to the Rescue
+
+Ravi Garg, Vijay Kumar BG, Ian Reid
+
+University of Adelaide
+
+Abstract. A signiﬁcant weakness of most current deep Convolutional
+Neural Networks is the need to train them using vast amounts of manu-
+ally labelled data. In this work we propose a unsupervised framework to
+learn a deep convolutional neural network for single view depth predic-
+tion, without requiring a pre-training stage or annotated ground truth
+depths. We achieve this by training the network in a manner analogous
+to an autoencoder. At training time we consider a pair of images, source
+and target, with small, known camera motion between the two such as a
+stereo pair. We train the convolutional encoder for the task of predicting
+the depth map for the source image. To do so, we explicitly generate an
+inverse warp of the target image using the predicted depth and known
+inter-view displacement, to reconstruct the source image; the photomet-
+ric error in the reconstruction is the reconstruction loss for the encoder.
+The acquisition of this training data is considerably simpler than for
+equivalent systems, requiring no manual annotation, nor calibration of
+depth sensor to camera. We show that our network trained on less than
+half of the KITTI dataset (without any further augmentation) gives com-
+parable performance to that of the state of art supervised methods for
+single view depth estimation.
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+6
+1
+
+ 
+ 
+]
+
+V
+C
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+2
+9
+9
+4
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+1 Introduction
+
+The availability of very large human annotated datasets like Imagenet [4] has
+led to a surge of deep learning approaches successfully addressing various vision
+problems. Trained initially on tasks such as image classiﬁcation, and ﬁne-tuned
+to ﬁt other tasks, supervised CNNs are now state of the art for object detection
+[11], per-pixel image classiﬁcation [19], depth and normal prediction from single
+image [15], human pose estimation [7] and many other applications. A signiﬁ-
+cant and abiding weakness, however, is the need to accrue labeled data for the
+supervised learning. Providing per-pixel segmentation masks on large datasets
+like CoCo [16], or classiﬁcation labels for Imagenet requires signiﬁcant human
+eﬀort and is prone to error. Supervised training for single view depth estima-
+tion for outdoor scenes requires expensive hardware and careful acquisition. For
+example, despite using state of art 3D sensors, multiple calibrated cameras and
+inertial sensors, a dataset like KITTI [10] provides sparse depth maps with less
+
+2
+
+Garg et. al.
+
+Fig. 1. We propose a stereopsis based auto-encoder setup: the encoder (Part 1) is a
+traditional convolutional neural network with stacked convolutions and pooling layers
+(See ﬁgure 2) and maps the left image (I1) of the rectiﬁed stereo pair into its depth
+map. Our decoder (Part 2) explicitly forces the encoder output to be disparities (scaled
+inverse depth) by synthesising a backward warp image (Iw) by moving pixels from right
+image I2 along the scanline. We use the reconstructed output Iw to be matched with
+the encoder input (Part 3) via a simple loss. For end-to-end training, we minimize
+the reconstruction loss with a simple smoothness prior on disparities which deals with
+aperture problem, while at test time our CNN performs single-view disparity (inverse
+depth) prediction, up to the scene scale given in form of f B at the time of training.
+
+than 5% density on the captured image resolutions and with only a limited reli-
+able depth range. A signiﬁcant challenge now is to develop unsupervised training
+regimes that can train networks that perform either as well as, or better than
+those trained used using these supervised methods. This will be a major step
+towards realizing in-situ learning, in which we can retrain or tune a network
+for speciﬁc circumstances, and towards life-long learning, in which continuous
+acquisition of data leads to improved performance over time.
+
+In this paper we are particularly concerned with the task of single-view depth
+estimation, in which the goal is to learn a non linear prediction function which
+maps an image to a (scaled) depth map of the scene. CNNs have achieved the
+state-of-the-art performance on this task due to their ability to capture the
+complex and implicit relationships between scene depth and the corresponding
+image textures, scene semantics, and local and global context in the image. State-
+of-the-art supervised learning methods for this task train a CNN to minimize
+a loss based on either the scale invariant RMS [6], or the log RMS [17] of the
+depth predictions from ground truth. These networks have been trained using
+datasets that provide both RGB images and corresponding depth maps such as
+NYUv2 and KITTI.
+
+However as noted in [17], the networks learnt by these systems do not gen-
+eralise well outside their immediate domain of application. For example, [17]
+
+Title Suppressed Due to Excessive Length
+
+3
+
+trained two separate networks, one for indoors (using NYUv2) amd one for
+street scenes (using KITTI), because the weights learnt in one do not work well
+in the other. To transfer the idea of single-view depth estimation into yet another
+domain would require indulging in the expensive task of acquiring a new RGB-
+D dataset with well aligned image and depth values, and re-train the network.
+An alternative to this would be to generate a large synthetic or semi-synthetic
+dataset using graphical rendering, an approach that has met with some success
+in [12]. However it is diﬃcult to capture the full variablility of real-world images
+in such datasets.
+
+Another possible approach would be to capture a large dataset of stereo
+images, and use standard geometric methods to compute the disparity map for
+each pair, yielding a large set of image-plus-disparity-map pairs. We could then
+train a network to predict a disparity map from a single view. However such
+system will likely learn the systematic errors in estimated depths, “baking in”
+the failure modes of the stereo algorithm. Factors such as sensor ﬂare, motion
+blur, lighting changes, shadows, etc are present in real images and rarely dealt
+with adequately by standard stereo algorithms.
+
+We adopt a diﬀerent approach that moves towards a system capable of in-
+situ training or even lifelong learning, using real un-annotated imagery. We take
+inspiration from the idea of autoencoders, and leverage well-understood ideas
+in visual geometry. The result is a convolutional neural network for single-view
+depth estimation, the ﬁrst of its kind that can be trained end-to-end from scratch,
+in a fully unsupervised fashion, simply using data captured using a stereo rig.
+
+2 Approach
+
+In this section we give more detail of our approach. Figure 1 explains our idea
+graphically. To train our network we make use of pairs of images with a known
+camera motion between the two, such as stereo pairs. Such data are considerably
+more easily acquired than calibrated depth maps and aligned images. In our case
+we use large numbers of stereo pairs, but the method applies equally to data
+acquired from a moving SLAM system in an otherwise static scene.
+
+We learn a CNN to model the complex non-linear transformation which con-
+verts the image to a depth-map. The loss we use for learning this CNN is the
+photometric diﬀerence between the input – or source – image, and the inverse-
+warped target image (the other image in the stereo pair). This loss is both
+diﬀerentiable (to facilitate back-propagation) and is highly correlated with the
+prediction error - i.e. can be used to accurately rank two diﬀerent depth-maps
+without using groundtruth labels.
+
+This approach can be interpreted in the context of convolutional autoen-
+coders. The task in a standard autoencoder is to encode the input with a series
+of non-linear operations to a compressed code that captures suﬃcient core infor-
+mation so that a decoder can reconstruct the input with minimal reconstruction
+error. In our case we replace the decoder with a standard geometric image warp,
+based on the predicted depth map and the relative camera positions. This has
+
+4
+
+Garg et. al.
+
+two advantages: ﬁrst, the decoder in our case does not need to be learnt, since
+it is already a well-understood geometric operation; second, our reconstruction
+loss naturally encourages the code to be the correct depth image.
+
+2.1 Our autoencoder loss
+Every training instance i ∈ {1··· N} in our setup is a rectiﬁed stereo pair
+{I1i, I2i} captured by a single pre-calibrated stereo rig with two cameras having
+focal length f each which are separated horizontally by a distance B.1 Assuming
+that the predicted depth of a pixel x for the left image of the rig via CNN is
+di(x), the motion of the pixel along the scan-line Di(x) is then f B/di(x). Thus,
+using the right image I2i, a warp Iwi can be synthesized as I2i(x + f B/di(x)).
+With this explicit parameterization of the warp, we propose to minimize
+standard color constancy (photometric) error between the reconstructed image
+Iw and the left image I1:
+
+Erecons
+
+i
+
+=
+
+(cid:107)Iwi(x) − I1i(x)(cid:107)2dx =
+
+(cid:107)I2(x + Di(x)
+
+) − I1(x)(cid:107)2dx (1)
+
+Ω
+
+Ω
+
+(cid:90)
+
+(cid:90)
+
+(cid:124)(cid:123)(cid:122)(cid:125)
+
+f B/di(x)
+
+It is well known that this photometric loss function is non-informative in
+homogeneous regions of the scene. Thus multiple disparities can generate equally
+good warp Iw and a prior on the disparities is needed to get a unique depthmap.
+We use very simple L2 regularization on the depth discontinuities as our prior
+to deal with the aperture problem:
+
+Esmooth
+
+i
+
+= (cid:107)∇Di(x)(cid:107)2
+
+(2)
+
+This regularizer is known to over-smooth the estimated motion, however a
+vast literature of more sophisticated edge preserving regularizers with robust
+penalty functions like [2,22] for which gradients can be computed are at our
+disposal and can be easily used with our setup to get sharper depth maps. As
+the main purpose of our work is to prove that end to end training of the proposed
+autoencoder is feasible and helpful for depth prediction, we choose to minimize
+the simplest suitable loss summed over all training instances:
+
+E =
+
+Erecons
+
+i
+
++ γEsmooth
+
+i
+
+(3)
+
+i=1
+
+where γ is the strength of the regularization forcing the estimated depth maps
+to be smooth.
+
+Our loss function is described in (3) for every frame is similar to the stan-
+dard Horn and Schunck optic ﬂow cost [13]. However, the major diﬀerence is
+that our disparity maps Di’s are parametrized to be a non-linear function of the
+
+1 All training images are assumed to be taken with a ﬁxed rectiﬁed stereo setup as
+is the case in KITTI for simplicity but our method is generalizable to work with
+instances taken by diﬀerent calibrated stereos.
+
+N(cid:88)
+
+Title Suppressed Due to Excessive Length
+
+5
+
+Fig. 2. Coarse to ﬁne stereo with CNN with results on a sample validation instance:
+We adapt the convolution based upsampling architecture proposed in [18] to mimic the
+coarse to ﬁne stereo estimations. Our upsampling ﬁlter is initialized with simple bilinear
+interpolation kernel and we initialize the corresponding pooling layer contribution by
+setting both bias and 1x1 convolution ﬁlter to be zero. The ﬁgure shows how features
+coming from previous layers of the CNN (L3) combined with ﬁner resolution loss
+function generates better depth maps at 46 × 154 from our bilinear upsampled initial
+estimate of coarser prediction at 22 × 76.
+
+input image and unknown weights of the CNN which are shared for estimating
+the motion between every stereo pair. This parameter sharing enforces consis-
+tency in the estimated depths over 1000’s of correlated traing images of a large
+dataset like KITTI. Our autoencoder’s reconstruction loss can be seen as a ma-
+jor generalization of the multiframe optic ﬂow methods like [9,8]. The diﬀerence
+is, instead of modeling the correlations in the estimated motions for a shorter
+video sequence with a predeﬁned linear subspace [8], our autoencoder learns (and
+models) valid ﬂows which are consistent throughout the dataset non-linearly.
+
+3 Coarse to ﬁne training with skip architecture
+
+To compute the gradient for standard back-propagation on our cost (1), we need
+to linearize the warp image at the current estimate of the depths using taylor
+expansion:
+I2(x + Dn+1(x)) = I2(x + Dn(x)) + (Dn+1(x) − Dn(x))I2h(x + Dn(x))
+where I2h represents the horizontal gradient of the warp image computed at the
+current disparity. This lineariation is valid only for small values of Dn+1(x) −
+
+(4)
+
+6
+
+Garg et. al.
+
+Fig. 3. Network architecture: The blocks C (red), P (yellow), L (dark blue), F (green),
+D (blue) correspond to convolution, pooling, local response normalization, FCN and
+upsampling layers respectively. The FCN blocks F1 and F2 combine the predictions
+from upsampling layers (L8 and L9) and the output pooling layers P4 and P3 (L4 and
+L5) respectively. The information from the encoding layers L4 and L5 contain local
+appearance information such as textures, edges and help to sharpen the predicted
+depthmap.
+
+Dn(x) limiting the magnitude of estimated disparities in the image. To estimate
+larger motions (smaller depths) accurately, a coarse to ﬁne strategy with iterative
+warping is well established in the stereo and optic ﬂow literature which facilitates
+gradient decent based continuous optimization.
+
+However, our disparities are a non-linear function of the CNN parameters
+and the input image. To move from coarse to ﬁne level, we not only need a
+good depth initialization at the ﬁner resolutions to linearize the warps but also
+the corresponding CNN parameters which predict these initial depth maps for
+each training instance. Thankfully recent fully convolutional architecture with
+upsampling proposed in [18] is appropriate choice simulate coarse to ﬁne warping
+for our system. As depicted in Figure 2, given a networks which predict M × N
+depth map we can use a simple bilinear upsampling ﬁlter, to initialize upscaled
+depths (to get 2M × 2N depth maps) keeping the other network parameters
+ﬁxed. It has been shown that the ﬁner details of the images are captured in the
+previous layers of CNN and fusing back such information is helpful for reﬁning a
+coarse CNN prediction. We use a simple 1×1 convolution with the ﬁlter and bias
+both initialized to zero and simply use the convolved image output to upscaled
+coarse depth.
+
+4 Our Network Architecture
+
+The network architecture for our deep convolutional encoder is shown in ﬁgure
+4 which is similar to the alexnet architecture [14] upto C5 layer. We replace
+
+Title Suppressed Due to Excessive Length
+
+7
+
+the fully connected layer of alexnet by a fully convolutional layer with 2048
+convolution ﬁlters of size 5 × 5 each.2 This reduces the number of parameters
+in the network and allows for the network to accept variable size inputs uring
+testing. More importantly, it preserves the spatial information present in the
+image and allows us to upsample the predictions in a stage-wise manner in
+the layers that follow the L7 output of the ﬁgure. which is a requirement for
+our stereopsis based auto encoder as explained in section 3. Insprired from the
+observations from [18], that the ﬁner details in the images are lost in the last few
+layers of the deep convolutional network we employ the “skip architecture” that
+combines the coaser depth prediction with the local image information to get
+crispier ﬁner predictions. The aﬀect of which is illustrated using a example from
+validation set in ﬁgure 2. The layers following the L7 output (a coarse 5 × 18
+depth map) in our network are all upsampling layers each converting a coarser
+low resolution depth map to a higer resolution output as explained in section 3.
+
+5 Experiments
+
+We evaluate our method on publicly available KITTI dataset [10] that consists
+several outdoor scenes captured using a stereo camera mounted on a moving
+vehicle. We employ the same train/test split used in [6]: From the 56 scenes
+belonging to the categories “city”, “residential” and “road”, we choose 28 for
+training and remaining 28 for testing. We downsample the left images by a factor
+of 2 to bring it to 188 x 620 and use it as input to the network. Corresponding
+right images in the stereo pairs are used at the resolutions of predicted depth
+maps at every stage of our our coarse to ﬁne training to generate the warp and
+match it with resized left image.
+
+The training set consists of 23488 stereo pairs out of which we use 22600 for
+training and remaining for validation. Nither the right to left stereo nor any data
+augmentation is used. For testing, we use the 697 images provided by [6] from
+the testset. We do not use any groundtruth depths for training the network. To
+evaluate all the results produced by our network we use simple upscaling of the
+low resolution disparity predictions to the resolution at which the stereo images
+were captured by the KITTI. Using stereo baseline of 0.64 meters as reported
+in KITTI, we convert the upsampled disparities to the depth for evaluation. We
+evaluate our method using the error measures reported in [6,17]:
+
+(cid:113) 1
+
+T
+
+(cid:80)
+
+RMS:
+
+abs. relative: 1
+T
+
+(cid:80)
+
+i (cid:107)2
+i∈T(cid:107)di − dgt
+i∈T
+
+|di−dgt
+i |
+
+dgt
+i
+
+Threshold % of di s.t. max( di
+dgt
+i
+
+(cid:113) 1
+
+T
+
+log RMS:
+
+sq. relative: 1
+T
+
+, dgt
+i
+di
+
+) = δ < thr
+
+(cid:80)
+(cid:80)
+i∈T(cid:107)log(di) − log(dgt
+i∈T
+
+(cid:107)di−dgt
+dgt
+i
+
+i (cid:107)2
+
+i )(cid:107)2
+
+2 A 5 × 18 convolution can be used instead to increase network capacity and replicate
+the eﬀect of a fully connected layer of [14].
+
+8
+
+Garg et. al.
+
+5.1 Implementation Details
+
+We train our network using the CNN toolbox MatConvnet [21]. We use SGD for
+optimization with momentum 0.9 and weight decay of 0.0005. It is important to
+note that our network weights starts with a random initialization of the ﬁrst 5
+layers of the alexnet and we append the 5× 5 fully convolutional layer initialized
+with zero weights to get zreo disparity estimates. Due to the linearization of
+the loss function as explained in section 3, we learn the network proposed in
+Figure 4 in multiple stages, starting from the coarsest level (5x18 depthmaps),
+and iteratively adding upsampling layer at a time.
+
+The learning rate for the network which predicts depths at the coarsest reso-
+lution is initially set to 0.01 and gradually decreased after each epoch using the
+factor 1/(1 + α ∗ n)(n−1) where n is the index of current epoch and α = 0.0005.
+We set the number of epochs to 100 for learning depths for pyramid level in the
+coarse to ﬁne fashion. Since the number of pixels increase by a factor of 4 (with
+2× upsampling of the depthmaps), the cost approximately increases by the same
+factor at every ﬁner level. Hence we decrease the initial learning rate by a factor
+of 4 for the subsequent layers. The smoothness prior strangth γ was set to 0.01.
+
+Table 1. Comparison with state-of-the-art methods on KITTI dataset.
+
+Methods
+
+Ours L9
+Ours L101
+Ours L10
+Ours L11
+
+Mean
+
+Make3D [20]
+
+Eigen etal (c) 2 [6]
+Eigen etal (f) [6]
+
+Fayao etal (pt) 3[17]
+Fayao etal (ft) [17]
+
+-
+
+9.635
+Dense
+8.734
+28 × 144 7.216
+27 × 142 7.156
+superpix 7.421
+superpix 7.046
+
+Resolution RMS log RMS abs. relative sq.relative
+22 × 76
+5.722
+0.314
+46 × 154 5.836
+0.342
+46 × 154 5.461
+0.304
+94 × 310 5.422 0.297
+0.444
+0.361
+0.273
+0.270
+
+0.210
+0.254
+0.207
+0.198
+0.412
+0.280
+0.194
+0.190
+
+1.368
+1.715
+1.347
+1.328
+5.712
+3.012
+1.531
+1.515
+
+-
+-
+
+-
+-
+
+-
+-
+
+Accuracies
+
+δ < 1.25 δ < 1.252 δ < 1.253
+
+0.654
+0.601
+0.678
+0.701
+0.556
+0.601
+0.679
+0.692
+0.613
+0.656
+
+0.871
+0.839
+0.883
+0.888
+0.752
+0.820
+0.897
+0.899
+0.858
+0.881
+
+0.947
+0.936
+0.952
+0.953
+0.870
+0.926
+0.967
+0.967
+0.949
+0.958
+
+5.2 Eﬀect of upsampling
+For learning the upsampling layers, we start with the coarsest layer of 5 × 18
+resolution (L7) and progressively add upsampling layers L8, L9, L10, and L11
+whose resolutions are 10× 37, 22× 76, 46× 154 and 94× 310 respectively. While
+adding upsampling layers, we crop and pad the layers such that the resolution
+of upsampling matches with the resolution of the maps from the pooling layers
+P4 and P3. Row 1 and 2 of our table correspond to our L9 and L10 output
+
+1 Layer 10 obtained by combining upsampling and pooling layer output P2
+2 c and f indicates the the coarse and ﬁne networks of [6]
+3 pt and ft indicates the the pre-train and ﬁne-tuned networks of [17]
+
+Title Suppressed Due to Excessive Length
+
+9
+
+with 2 and 3 upsampling layers with corresponding pooling layer contributing
+to the ﬁner depth prediction. Consistent with [18] we also observe that after
+2 upsampling layers, skipped architecture starts to give diminishing results. We
+believe that this is due to the fact that the ﬁrst few layers of CNN are more closer
+to images then depth and a simple linear combination of the these layers features
+with that of the coarse depth map does not work well. However higer resution
+images still have very ﬁne scale information which can be back-propagated via
+out loss function. As evident from the third rows in table 1 layer L10 without
+adding pooling layer output P2 outperforms the counterparts thus for further
+reﬁnements, we only use a upsampling without any pool layer input.
+
+5.3 Comparison with State-of-the-art Methods on KITTI Dataset
+
+In table 1, we compare the performance our method with state-of-the-art meth-
+ods [20,6,17]. We propose to simply upscale all our predicted disparities to the
+D to compute the depths d
+size of the KITTI images and use the relation d = f B
+from the disparities D. Errors for other methods are taken from [6,17]. For fair
+comparison we evaluate our results on the same cropped region of interest as
+[6]. Since the supervised methods are trained using the groundtruth depth that
+ranges between 1 and 50 meters whereas we predict large depths, for fair evalu-
+ation we clamp the predicted depth values for our method between 1 and 50 for
+evaluation. i.e. setting the depths bigger then 50 meter to 50.
+
+Our method achieves the lowest RMS and sq. relative error on the dataset
+and signiﬁcantly outperforms other methods for theses measures. It performs on
+par with the state-of-the-art methods on other evaluation measures. Eigen etal
+[6] obtains lower error in terms of log RMS compared to ours. This is because
+log RMS is biased towards higher depth errors. Besides, supervised methods
+being trained with log or scale invariant depth error measures are bound to
+perform well on similarly biased evaluation criteria. In addition, the number of
+parameters in our network (15M) is signiﬁcantly lesser compared to [6] (90M)
+and marginally lesser than [6] (20M).
+
+The most noteworthy point is that ours is completely unsupervised method
+trained with randomly initialize the weights of the network, whereas [6] and [17]
+initialize the network using alex-net and VGG-16 respectively and are super-
+vised.
+
+Figure 5.1 compares the output inverse depth maps (scaled to [0 1]) for the
+L9 (2nd column) and L11 (3rd column) layers of the proposed method and [6].
+We appropriately pad the predictions provided by the authors of [6] to generate
+the visualizations of [6] at the correct scale. It is evident from the ﬁgure that
+both L9 and L11 are able to capture objects that are closer to the camera with
+signiﬁcantly more details. Edges are localized more accurately in L11 results
+compared to L9. This clearly depicts that even with the simple linear interpo-
+lation of the coarse depth estimation, the ﬁner alignment errors are correctly
+back-propagated leading to the performance boost.
+
+In summery, our simple, skinnier network with less then half of the train-
+ing images used by [6] gives on par results without any supervision which looks
+
+10
+
+Garg et. al.
+
+visually more appealing and should be reﬁned with small changes like using bet-
+ter loss functions, replacing linear interpolation ﬁlter with a learned polynomial
+ﬁlter. As our method is completely unsupervised, it can be trained on theoret-
+ically limitless data with more deeper networks to capture variation and give
+depthmaps at image resolutions.
+
+6 Related work
+
+In this work we have proposed a geometry inspired unsupervised setup for visual
+learning, in particular addressing the problem of single view depth estimation.
+Our main objective was to address the downsides of training deep networks
+with large amount of labeled data. Another regime of works which attempts
+to address this issue are the set of methods like [12,5] which rely mainly on
+generating synthetic/semi-synthetic training data with the aim to mimic the
+real world and use it to train deep network in a supervised fashion. For example,
+In [5], CNN is used to discriminate a set of surrogate classes where the data for
+each class is generated automatically from unlabeled images. The network thus
+learned is shown to perform well on the task image classiﬁcation. Or Handa etal
+[12] learn a network for semantic segmentation using synthetic data of indoor
+scenes and show that the network can generalize well on the real-world scenes.
+Methods which do stereo with CNN: Recently, many methods have used CNN
+to learn good visual features for matching patches which are sampled from the
+stereo dataset like KITTI [23,3] and match these features while doing classical
+stereo to get state of the art depth estimation. These methods are relying on
+local matching and loose the global information about the scene and use ground
+truth. But their success is already an indicator that a joint visual learning and
+depth estimation approach like ours could be extended at the test time to use a
+pair of images.
+
+Using camera motion as the information for visual learning is also explored
+in the works like [1] which directly regress over the 6DOF camera poses to learn
+a deep network which performs well on various visual tasks. In contrast to that
+work, we train our CNN for a more generic task of synthesizing image and get the
+state of art single view depth estimation as a bonus. [1] suggests that geometry
+can help in learning good visual features and it will be of immense interest to
+evaluate the quality of the visual features learned with our framework.
+
+7 Conclusions
+
+In spite of the enormous growth and success of deep neural networks for a variety
+of visual tasks, an abiding weakness is the need for vast amounts of annotated
+training data. We are motivated by the desire to build systems that can be
+trained relatively cheaply without the need for costly manual labelling or even
+trained on the ﬂy.
+
+To this end we have presented the ﬁrst convolutional neural network for
+single-view depth estimation that can be trained end-to-end from scratch, in a
+
+Title Suppressed Due to Excessive Length
+
+11
+
+fully unsupervised fashion, simply using data captured using a stereo rig. We
+have shown that our network trained on less than half of the KITTI dataset
+(without any further augmentation) gives comparable performance to the current
+state of art supervised methods for single view depth estimation.
+
+Various natural extensions to our work present themselves. We have yet to
+explore the full capacity of our network. Instead of training on KITTI data
+(which is nevertheless convenient because it provides a clear baseline) we aim to
+train on a continuous feed from a stereo rig “in the wild”, and to explore the eﬀect
+on accuracy by augmenting the KITTI data with new stereo pairs. Furthermore,
+as intimated in the Introduction, our method is not restricted to stereo pairs,
+and a natural extension is to use a monocular SLAM system to compute camera
+motion, and use this known motion within our autoencouder framework; here
+the warp function is slightly more complex than for rectiﬁed stereo, but still well
+understood. The resulting single-view depth estimation system could be used
+for bootstrapping structure, or generating useful priors on the scene structure
+that capture much richer information than typical continuity or smoothness
+assumptions. It also seems likely that the low-level features learned by our system
+will prove eﬀective for other tasks such as classiﬁcation, in a manner analogous
+to [1,5], but this hypothesis remains to be proven experimentally.
+
+12
+
+Garg et. al.
+
+Fig. 4. Inverse Depths visualizations. Brighter color means closer pixel.
+
+InputImageCoarseResultsUpsampledResultsEigenetal22×7694×31027×142∗Title Suppressed Due to Excessive Length
+
+13
+
+References
+
+1. Agrawal, P., Carreira, J., Malik, J.: Learning to see by moving. In: The IEEE
+
+International Conference on Computer Vision (ICCV) (December 2015)
+
+2. Brox, T., Bruhn, A., Papenberg, N., Weickert, J.: High accuracy optical ﬂow es-
+timation based on a theory for warping. In: Computer Vision-ECCV 2004, pp.
+25–36. Springer (2004)
+
+3. Chen, Z., Sun, X., Wang, L., Yu, Y., Huang, C.: A deep visual correspondence
+embedding model for stereo matching costs. In: The IEEE International Conference
+on Computer Vision (ICCV) (December 2015)
+
+4. Deng, J., Dong, W., Socher, R., Li, L.J., Li, K., Fei-Fei, L.: ImageNet: A Large-
+
+Scale Hierarchical Image Database. In: CVPR09 (2009)
+
+5. Dosovitskiy, A., Springenberg, J.T., Riedmiller, M., Brox, T.: Discriminative un-
+supervised feature learning with convolutional neural networks. In: Advances in
+Neural Information Processing Systems 27, pp. 766–774 (2014)
+
+6. Eigen, D., Puhrsch, C., Fergus, R.: Depth map prediction from a single image
+using a multi-scale deep network. In: Advances in Neural Information Processing
+Systems 27 (2014)
+
+7. Fan, X., Zheng, K., Lin, Y., Wang, S.: Combining local appearance and holistic
+view: Dual-source deep neural networks for human pose estimation. In: The IEEE
+Conference on Computer Vision and Pattern Recognition (CVPR) (June 2015)
+
+8. Garg, R., Pizarro, L., Rueckert, D., Agapito, L.: Dense multi-frame optic ﬂow for
+non-rigid objects using subspace constraints. In: Computer Vision–ACCV 2010,
+pp. 460–473. Springer (2010)
+
+9. Garg, R., Roussos, A., Agapito, L.: Dense variational reconstruction of non-rigid
+surfaces from monocular video. In: Proceedings of the IEEE Conference on Com-
+puter Vision and Pattern Recognition. pp. 1272–1279 (2013)
+
+10. Geiger, A., Lenz, P., Stiller, C., Urtasun, R.: Vision meets robotics: The kitti
+
+dataset. International Journal of Robotics Research (IJRR) (2013)
+
+11. Girshick, R., Donahue, J., Darrell, T., Malik, J.: Rich feature hierarchies for accu-
+rate object detection and semantic segmentation. In: Computer Vision and Pattern
+Recognition (2014)
+
+12. Handa, A., Patraucean, V., Badrinarayanan, V., Stent, S., Cipolla, R.: Scenenet:
+Understanding real world indoor scenes with synthetic data. CoRR abs/1511.07041
+(2015)
+
+13. Horn, B.K., Schunck, B.G.: Determining optical ﬂow. In: 1981 Technical sympo-
+
+sium east. pp. 319–331. International Society for Optics and Photonics (1981)
+
+14. Krizhevsky, A., Sutskever, I., Hinton, G.E.: Imagenet classiﬁcation with deep con-
+volutional neural networks. In: Advances in Neural Information Processing Systems
+25. pp. 1097–1105 (2012)
+
+15. Li, B., Shen, C., Dai, Y., van den Hengel, A., He, M.: Depth and surface normal
+estimation from monocular images using regression on deep features and hierar-
+chical CRFs. In: IEEE Conference on Computer Vision and Pattern Recognition
+(CVPR’15) (2015)
+
+16. Lin, T., Maire, M., Belongie, S., Hays, J., Perona, P., Ramanan, D., Dollar, P.,
+Zitnick, C.L.: Microsoft coco: Common objects in context. In: ECCV. European
+Conference on Computer Vision (September 2014)
+
+17. Liu, F., Shen, C., Lin, G., Reid, I.: Learning depth from single monocular images
+using deep convolutional neural ﬁelds. IEEE Transactions on Pattern Analysis and
+Machine Intelligence (2016)
+
+14
+
+Garg et. al.
+
+18. Long, J., Shelhamer, E., Darrell, T.: Fully convolutional networks for semantic seg-
+mentation. In: The IEEE Conference on Computer Vision and Pattern Recognition
+(CVPR) (June 2015)
+
+19. Noh, H., Hong, S., Han, B.: Learning deconvolution network for semantic seg-
+mentation. In: Computer Vision (ICCV), 2015 IEEE International Conference on
+(2015)
+
+20. Saxena, A., Sun, M., Ng, A.: Make3d: Learning 3d scene structure from a single
+still image. Pattern Analysis and Machine Intelligence, IEEE Transactions on 31(5)
+(2009)
+
+21. Vedaldi, A., Lenc, K.: Matconvnet – convolutional neural networks for matlab
+
+(2015)
+
+22. Zach, C., Pock, T., Bischof, H.: A duality based approach for realtime tv-l 1 optical
+
+ﬂow. In: Pattern Recognition, pp. 214–223. Springer (2007)
+
+23. Zbontar, J., LeCun, Y.: Computing the stereo matching cost with a convolutional
+neural network. In: The IEEE Conference on Computer Vision and Pattern Recog-
+nition (CVPR) (June 2015)
+
+

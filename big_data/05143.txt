@@ -1,0 +1,1098 @@
+Robust Structural Identiﬁcation via Polyhedral
+Template Matching
+
+Peter Mahler Larsen, Søren Schmidt, Jakob Schiøtz
+Department of Physics, Technical University of Denmark, 2800 Kgs. Lyngby,
+Denmark
+
+Abstract. Successful scientiﬁc applications of large-scale molecular dynamics often
+rely on automated methods for identifying the local crystalline structure of condensed
+phases. Many existing methods for structural
+identiﬁcation, such as Common
+Neighbour Analysis, rely on interatomic distances (or thresholds thereof) to classify
+atomic structure. As a consequence they are sensitive to strain and thermal
+displacements, and preprocessing such as quenching or temporal averaging of the
+atomic positions is necessary to provide reliable identiﬁcations. We propose a
+new method, Polyhedral Template Matching (PTM), which also classiﬁes structures
+according to the topology of the local atomic environment, with a unique result and
+with greater reliability than e.g. Common Neighbour Analysis in the presence of
+thermal ﬂuctuations. We demonstrate that the method can reliably be used to identify
+structures even in simulations near the melting point, and that it can identify the most
+common ordered alloy structures as well. In addition, the method makes it easy to
+identify local grain rotation in polycrystalline samples, and to calculate the local strain
+tensor. An implementation is made available under a Free and Open Source Software
+license.
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+6
+1
+ 
+ 
+]
+i
+c
+s
+-
+l
+r
+t
+
+m
+
+.
+t
+a
+m
+-
+d
+n
+o
+c
+[
+ 
+ 
+
+1
+v
+3
+4
+1
+5
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Robust Structural Identiﬁcation via Polyhedral Template Matching
+
+2
+
+1. Introduction
+
+Often, the most challenging part of a Molecular Dynamics (MD) simulation is analysing
+the large amounts of data generated. For simulations within condensed matter physics,
+algorithms for automatic determination of local structure are often necessary,
+for
+example to identify crystalline phases, defects in the crystal structure, or structural
+motifs in non-crystalline samples. One method is to use the energy of the individual
+atoms and identify defect atoms by a threshold value of the energy. Another possibility
+is the centro-symmetry parameter, which is zero in many crystalline phases, but takes
+a non-zero value at defects such as dislocation cores [1]. Both methods are reasonably
+eﬀective at identifying atoms near defects if the temperature is not too high, but do not
+provide additional information about the local structure.
+
+A very popular analysis method is Common Neighbour Analysis (CNA) [2, 3], which
+classiﬁes bonds between atoms according the local bonding structure, and uses this to
+assign a local crystalline structure to the atoms. The CNA has successfully been used to
+identify dislocations and grain boundaries in deforming polycrystalline metals [4, 5, 6],
+local ordering in amorphous phases [7, 8], and the competition between crystalline and
+icosahedral order in nanoparticles [9, 10].
+
+The CNA method analyses the bonds between common neighbours of two bonded
+atoms. It relies heavily on the concept of two atoms being “bonded” or “neighbours”,
+and thus needs a strict deﬁnition of this; typically in the form of a cut-oﬀ distance
+deﬁning if two atoms are neighbours.
+Such a cut-oﬀ distance is, by necessity,
+somewhat arbitrary. Furthermore, thermal vibrations, coexistence of various phases,
+and ﬂuctuations in the local density may all inﬂuence the result and either introduce
+noise in the analysis, or make it impossible to ﬁnd a cutoﬀ parameter useful for
+the entire system. For these reasons, Stukowski introduced the Adaptive Common
+Neighbour Analysis (ACNA) [11], where the cutoﬀ distance is picked automatically, and
+individually, for each atom. While this makes the method signiﬁcantly more robust, the
+ACNA still suﬀers from noise introduced by thermal vibrations, causing bonds to be
+sporadically broken or formed.
+
+Recently, Lazar et al. have introduced a method classifying the local structure
+by the topology of the Voronoi cell surrounding the atom [12]. While this makes the
+method more robust to thermal vibrations than the (A)CNA, the method has diﬃculty
+distinguishing between the face-centered cubic (fcc) and hexagonal closed packed (hcp)
+structures, and requires calculating the Voronoi cells of all atoms.
+
+In this paper, we introduce the Polyhedral Template Matching (PTM), an approach
+which is similar in spirit to the method of Lazar et al.. The gist of the method is that the
+convex hull formed by the set of neighbouring atoms describes the local structure around
+an atom. The convex hull is represented as a planar graph, and this graph is then used
+to classify the structure. As this method looks at a ﬁxed number of neighbouring atoms
+around the atom being analysed, and as it does not employ a concept of bonds between
+these atoms, it is less sensitive to thermal ﬂuctuations. In addition, the method assigns
+
+Robust Structural Identiﬁcation via Polyhedral Template Matching
+
+3
+
+a well-deﬁned order to the neighbours of an atom, making it much easier to deﬁne a
+local rotation or a local strain without referring to an initial unstrained structure. An
+implementation of the method is available online [13].
+
+The structure of the paper is as follows:
+
+in section 2, we review how structures
+can easily be evaluated against a template structure, if a mapping between the atoms
+and the atoms of the template exists. In section 3 we show how the convex hull of the
+neighbouring atoms can be used to deﬁne a low number of candidate templates and
+mappings, and present the resulting algorithm for structure identiﬁcation. In section 4,
+we benchmark the algorithm. In section 5 we extend it to ordered alloys. Finally, in
+sections 6 and 7, we illustrate how the method can provide information about local
+lattice rotation and local strain, the former at no additional computational cost.
+
+2. Template Matching
+
+In this section we will describe how template matching can be used to choose the best
+structural match, given that a point-to-point correspondence between simulated and
+template structures exists. The process of ﬁnding the point-to-point correspondences
+is described in the next section. A commonly used measure of similarity between two
+point sets is the Root-Mean-Square Deviation (RMSD). Given two sets of points v and
+w, the RMSD is deﬁned as:
+
+RMSD(v, w) =
+
+||(cid:126)vi − (cid:126)wi||2
+
+2
+
+(1)
+
+(cid:118)(cid:117)(cid:117)(cid:116) 1
+
+N
+
+N(cid:88)
+
+i=1
+
+The superposition problem is that of ﬁnding a translation and a rotation of v
+which minimizes the RMSD. It can be shown that the optimal translation is equivalent
+to bringing the barycentre of each point set to the origin. The optimal rotation is given
+by:
+
+(cid:118)(cid:117)(cid:117)(cid:116) 1
+
+N
+
+N(cid:88)
+
+i=1
+
+(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)(Q[(cid:126)vi − v]T )T − [ (cid:126)wi − w]
+(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)2
+
+2
+
+RMSD(v, w) = min
+
+Q
+
+where Q is a right-handed orthogonal matrix, and v = 1
+N
+
+vi and w = 1
+N
+
+barycentres of v and w respectively. Finding Q is a well studied problem with many
+diﬀerent solution methods; Theobald [14] provides a good exposition of the problem.
+We can make the RMSD scale invariant by scaling each point set such that the mean
+distance of each point from the origin (after translation) is 1:
+
+RMSD(v, w) = min
+
+Q
+
+(Q[(cid:126)vi − v]T )T − 1
+l(w)
+
+[ (cid:126)wi − w]
+
+where:
+
+N(cid:88)
+
+i=1
+
+1
+N
+
+l(v) =
+
+||(cid:126)vi − v||
+
+and
+
+l(w) =
+
+1
+N
+
+|| (cid:126)wi − w||
+
+(cid:118)(cid:117)(cid:117)(cid:116) 1
+
+N
+
+(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)(cid:12) 1
+
+l(v)
+
+N(cid:88)
+
+i=1
+
+N(cid:80)
+
+i=1
+
+N(cid:88)
+
+i=1
+
+N(cid:80)
+
+(2)
+
+wi are the
+
+i=1
+
+(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)2
+
+2
+
+(3)
+
+(4)
+
+Robust Structural Identiﬁcation via Polyhedral Template Matching
+
+4
+
+Structure Neighbours Required
+
+SC
+FCC
+HCP
+ICO
+BCC
+
+6
+12
+12
+12
+14
+
+Table 1. Number of neighbouring atoms required to identify structures.
+
+Suppose now that we want to determine the structure of a central atom and
+its neighbours. We wish to determine if it has simple cubic (SC), face-centred cubic
+(FCC), hexagonal close packed (HCP), icosahedral (ICO) or body-centred cubic (BCC)
+structure. For SC, FCC, HCP and ICO the positions of the ﬁrst shell of neighbouring
+atoms are suﬃcient to identify the structure. For BCC the ﬁrst two shells are
+required. Table 1 shows the number of atoms required for each structure. Given a
+set of reference templates corresponding to the atom positions of the aforementioned
+structures, the template which best matches an atom and its neighbours is the template
+which minimizes the RMSD after superposition. A scale-invariant RMSD serves two
+purposes; it avoids preferential weighting of smaller templates and avoids the need for
+selecting bond lengths.
+
+the task of structural
+
+As we have demonstrated here,
+
+identiﬁcation would
+Clearly,
+be simple if the optimal point-to-point correspondences were known.
+a brute force approach of testing all possible permutations of the neighbours is
+computationally infeasible. Fast determination of point-to-point correspondences is the
+main contribution of this work; the algorithm for doing this is developed in the next
+section.
+
+3. Convex Hulls
+
+We have described how template matching can be used to ﬁnd the best structural
+match, given a known point-to-point correspondence. In this section we will describe
+how convex hull graphs can be used ﬁnd all possible point-to-point correspondences in
+an eﬃcient manner. A convex hull of a set of vertices is the smallest convex set which
+contains all the vertices. In R3 it can be described by a set of bounding planes. Figure 1
+shows the convex hulls of the ﬁve diﬀerent structural types we wish to match. The
+convex hull is the polyhedron formed by the nearest neighbours of a central atom.
+
+Identiﬁcation of the SC, FCC, HCP and ICO structures requires only the vertices of
+the ﬁrst neighbour shell, which form a convex set. Two neighbour shells are required for
+identiﬁcation of the BCC structure but, remarkably, these vertices also form a convex
+set. A stronger requirement of a convex hull is that it must consist only of simplicial
+facets, which in R3 are triangles; this is a triangulation of the surface of the convex hull.
+Multiple triangulations exist for convex hulls with more than three coplanar points. Let
+
+Robust Structural Identiﬁcation via Polyhedral Template Matching
+
+5
+
+Simple Cubic
+
+BCC
+
+FCC
+
+HCP
+
+(SC)
+
+Icosahedral
+
+(ICO)
+
+Figure 1. Convex hulls of the nearest neighbours of ﬁve diﬀerent structures. For the
+BCC structure, the ﬁrst two shells of nearest neighbours are included.
+
+us ﬁrst consider the SC and ICO cases. The convex hulls of these structures consist
+only of triangular facets and the convex hull is therefore a unique triangulation. The
+FCC and HCP convex hulls consist of both equilateral triangular facets and perfect
+square facets. A perfect square has two equally valid triangulations which means the
+convex hull triangulation is not unique. Furthermore, the small atomic displacements
+can change the triangulation of the square facets. Figure 2 shows four diﬀerent, equally
+valid, triangulations of the FCC convex hull.
+
+Figure 2. Four diﬀerent triangulations of the FCC convex hull. The convex hull
+contains six square facets, which gives a total of 26 diﬀerent triangulations.
+
+The BCC convex hull consists only of rhombus facets. Whilst an unperturbed
+rhombus facet has a unique triangulation, small changes in vertex positions can change
+the triangulation. We will consider both triangulations of each rhombus facet, since this
+will make our algorithm robust against relatively large atomic displacements.
+
+We can represent the convex hull triangulations in graph form; vertices and edges
+in the convex hull triangulation correspond to vertices and edges in the graph. By
+representing a convex hull as a graph, we move from a metric space to a purely
+topological space. Steinitz’s theorem [15] states that the skeleton of a three-dimensional
+convex polyhedron is a tri-connected planar graph. Conversely, any tri-connected planar
+graph has two embeddings in R3, i.e. it corresponds to two polyhedra that are mirror
+images of each other [16]. Figure 3 shows the planar graph representations of the convex
+hulls shown in Figure 1. Since the FCC, HCP and BCC convex hull triangulations are
+not unique, neither are their planar graph representations.
+
+We will use graph isomorphism to determine possible structure matches. Two
+graphs G = (V, E) and H = (W, F ) (where V and W are the graph vertices and E
+and F are the graph edges) are said to be isomorphic if there exists a bijective function
+
+Robust Structural Identiﬁcation via Polyhedral Template Matching
+
+6
+
+Simple Cubic
+
+FCC
+
+HCP
+
+Icosahedral
+
+Figure 3. Convex hulls in planar graph form. The simple cubic and icosahedral
+graphs are unique, and are shown here as Tutte embeddings [17]. The FCC and HCP
+convex hulls do not have unique triangulations. The regions of the planar graphs which
+correspond to the square facets have been shaded. The dotted lines represent the two
+possible triangulations of each square facet. The BCC convex hull has no triangular
+facets, and cannot therefore be represented in the above manner.
+
+{v, w} ∈ E ⇔ {f (v), f (w)} ∈ F . An
+f : V → W such that for all v, w ∈ V :
+automorphism is an isomorphism of G to itself. Many practical algorithms determine
+graph isomorphism by computing the canonical form of each graph. The canonical form
+of a graph G is a uniquely deﬁned automorphism of G such that any two graphs are
+isomorphic if and only if their canonical forms are identical. Weinberg [18] provides a
+simple method for deﬁning the canonical forms and ﬁnding the automorphisms of tri-
+connected planar graphs (a more readable description is given by Kukluk et al. [19]).
+Weinberg’s algorithm ﬁnds the canonical form by investigating both possible embeddings
+of a planar graph. Since we are dealing with the graphs of polyhedra in R3, an
+embedding already exists. We have therefore adapted the algorithm to investigate only a
+single embedding. By doing so, we restrict graph isomorphism to orientation-preserving
+isomorphism. Orientation-preserving isomorphism extends the above deﬁnition of graph
+isomorphism (we use the notation of Brinkmann et al. [20]): two embedded graphs
+are said to be orientation-preservingly isomorphic if there exists a bijective function
+fe : E → F such that if {e1, e2, . . . ..., ek} is the set of edges incident with a vertex
+v ∈ V , in clockwise order, then {fe(e1), fe(e2), . . . , fe(ek)} is the set of edges incident
+with the vertex f (v) ∈ W , in clockwise order. An orientation-preserving automorphism
+is an orientation-preserving isomorphism of G to itself. Henceforth, when we refer to
+isomorphisms and automorphisms, the orientation preserving variants are implied.
+
+Using the planar graphs we can rule out impossible structure matches:
+
+in order
+for a set of points to match a reference template, the planar graphs of their convex
+hulls must be isomorphic. Unfortunately, the converse is not true; due to the multiple
+triangulations of the FCC and HCP convex hulls, the planar graphs are insuﬃcient to
+identify structures uniquely. There are triangulations of FCC and HCP convex hulls
+whose planar graphs are isomorphic, and triangulations of both which are isomorphic
+to the icosahedral planar graph. As such, using planar graph isomorphism alone would
+sometimes lead to more than one matching structure. Nevertheless, the planar graph
+representation gives us a set of point-to-point correspondences to investigate, one of
+which is the optimal correspondence. We deﬁne the optimal correspondence as the
+
+Robust Structural Identiﬁcation via Polyhedral Template Matching
+
+7
+
+one which minimizes the RMSD between a set of points and a reference template after
+superposition (as deﬁned in Equation (3)). The total number of possible correspondences
+to investigate for each reference template is the product of the number triangulations
+of the convex hull, the number of automorphisms of each planar graph, and the two
+embeddings of each planar graph in R3. In practice, both the number of triangulations
+and automorphisms required is greatly reduced by the symmetries of each reference
+template (24-fold symmetry for simple cubic, BCC and FCC, 6-fold symmetry for HCP,
+60-fold symmetry for icosahedral); the algorithm for generating the set of symmetrically
+inequivalent triangulations and automorphisms is described in Appendix A.
+
+The structural identiﬁcation process is described in Algorithm 1. An outline of
+the algorithm is as follows:
+for each atom, we loop over the possible structures to
+identify. The convex hull formed by the neighbouring atoms is calculated (the number
+of neighbouring atoms depends on the candidate structure), and the canonical form
+of the corresponding graph is found. We then loop over all possible triangulations
+of the reference structure (skipping triangulations that are symmetrically equivalent),
+and calculate the corresponding canonical form. If the canonical form of the reference
+structure is identical to the canonical form of the actual complex hull, we have a possible
+structural match. The quality of that match is then tested. This test is done by iterating
+over all symmetrically inequivalent automorphisms of the candidate graph, generating
+all possible structural templates which are then tested against the actual positions
+of the neighbouring atoms by optimizing the RMSD in Equation (3). The structure
+with the lowest RMSD is identiﬁed, and the algorithm returns the RMSD value, the
+corresponding rotation and the kind of structure identiﬁed.
+
+4. Results
+
+4.1. Copper Precipitate Benchmark
+
+To measure the capabilites of the method, we will ﬁrst make a comparison with
+two existing structural identiﬁcation methods, Adaptive Common Neighbour Analysis
+(ACNA) and Neighbour Distance Analysis (NDA), both due to Stukowski
+[11].
+Stukowski uses a Cu-rich 9R precipitate in a BCC-Fe system with 88737 atoms in
+total as a benchmark to compare a number of structural classiﬁcation methods. The
+benchmarked system, which is publicly available [21], is a case where CNA [2], Bond-
+Angle Analysis [22] and Voronoi-analysis perform badly, and ACNA and NDA perform
+very well.
+
+We have applied our PTM algorithm to the same benchmark system. Figure 4
+compares the RMSD values of the structures identiﬁed as BCC, HCP and FCC. A
+RMSD-histogram allows us to choose a sensible cut-oﬀ for RMSDmax. Table 2 compares
+the performance of these two methods with PTM, both with no cut-oﬀ (RMSDmax = ∞)
+and with a sensible cut-oﬀ (RMSDmax = 0.12). PTM is capable of indexing even highly
+distorted structures, which is very useful at high temperatures. However, in highly
+
+Robust Structural Identiﬁcation via Polyhedral Template Matching
+
+8
+
+Algorithm 1 Pseudocode for determining local structure around a single atom. As
+argument, the procedure takes the positions of the atom and its neighbours, sorted in
+distance from the central atom. The algorithm returns the RMSD of the match found (or
+inﬁnity if no match), the rotation matrix corresponding to the match, and the structure.
+
+procedure DetermineStructure(A)
+
+(cid:46) A is the set of positions of central atom and its nearest neighbours
+(cid:46) A must be sorted by distance from the central atom
+(cid:46) RMSD of best match
+(cid:46) Unit rotation
+(cid:46) No structure identiﬁed (yet)
+
+r∗ := ∞
+Q∗ := 1
+S∗ := disordered
+for S ∈ {SC, FCC, HCP, ICO, BCC} do
+
+W := ReferenceTemplate(S)
+U = { (cid:126)aj ∈ A | j ≤ |W|}
+C := Conv(U)
+if (cid:126)a1 /∈ C then
+
+(cid:46) Select innermost atoms
+(cid:46) Calculate convex hull of U
+(cid:46) Convex hull must not contain central atom
+
+G := CanonicalForm(Graph(C))
+for each triangulation Ti of Conv(W) do
+
+Gref := CanonicalForm(Graph(Ti))
+if G = Gref then
+
+(cid:46) Test graph isomorphism
+
+for each automorphism Aj of G do
+
+U(cid:48) := U ◦ Aj
+{r, Q} := RMSD(U(cid:48), W)
+if r < r∗ then
+
+(cid:46) Permute by automorphism
+(cid:46) Optimal superposition (c.f. Eq. 3)
+
+r∗ := r
+Q∗ := Q
+S∗ := S
+
+end if
+
+end for
+
+end if
+
+end for
+
+end if
+
+end for
+return {r∗, Q∗, S∗}
+
+end procedure
+
+Robust Structural Identiﬁcation via Polyhedral Template Matching
+
+9
+
+Figure 4. RMSD histograms of BCC, HCP and FCC structures in a Cu-rich 9R
+precipitate in BCC-Fe system. The BCC atoms have very low RMSD values, which
+means the local structure is highly ordered. The HCP and FCC structures have higher
+RMSD values, meaning that the atom positions have larger deviations from a perfect
+lattice structure. Histograms for SC and ICO are not shown here, as they are high-
+RMSD spurious identiﬁcations.
+
+Analysis Method
+ACNA†
+NDA†
+PTM RMSDmax = 0.12
+PTM RMSDmax = ∞
+
+Time (s) Disordered
+
+0.66
+5.86
+0.83
+0.83
+
+12789
+13260
+12901
+7115
+
+SC FCC HCP ICO BCC
+0
+65702
+64199
+0
+65705
+0
+66431
+
+3138
+3453
+3160
+3421
+
+2797
+
+7108
+7825
+6971
+8965
+
+0
+0
+0
+8
+
+Table 2. Comparison of of PTM with two other structural analysis methods: Adaptive
+Common Neighbour Analysis (ACNA) and Neighbour Distance Analysis (NDA). PTM
+gives similar results to both methods, though with a longer running time than ACNA.
+A good RMSDmax cut-oﬀ is required to avoid false positives. †Both the benchmark
+data and the implementations of ACNA and NDA are avaible at [21]. Running times
+are for analysis only and do not include neighbour-list generation. They were measured
+on a 2014 MacBook Pro with an Intel Core i7-4770HQ 2.20GHz CPU and 16GB RAM.
+
+ordered systems a good cut-oﬀ is required to avoid spurious classiﬁcations, such as the
+SC and ICO classiﬁcations shown in Table 2.
+
+Note that the system here has been quenched, and as a consequence the local
+In this case PTM does not provide any real
+structures exhibit little distortion.
+improvements in structural identiﬁcation compared to ACNA and NDA. The signiﬁcant
+beneﬁts of PTM are to be found in high-temperature systems.
+
+4.2. Copper-Platium Alloy System at High Temperature
+
+The PTM method is very robust against thermal displacements and strain, and
+in high-temperature simulations it provides a signiﬁcant improvement over existing
+identiﬁcation methods. We demonstrate this here with a simulated Cu3Pt alloy sample
+
+Robust Structural Identiﬁcation via Polyhedral Template Matching
+
+10
+
+Polyhedral Template Matching
+
+Adaptive Common Neighbour Analysis
+
+500K
+
+1100K
+
+1300K
+
+Legend:
+
+FCC
+
+HCP
+
+Disordered
+
+Figure 5. Comparison of PTM with ACNA at three diﬀerent temperatures on Cu3Pt
+systems containing 2.8 million atoms. At 500K PTM oﬀers only little improvement
+over ACNA. With increasing temperature, the robustness of PTM is more evident. At
+1300K the system is in the process of melting from the grain boundaries. Here, PTM
+ﬁnds twice the number of FCC atoms as ACNA. The RMSDmax values used for PTM
+are 0.11, 0.15 and 0.17 respectively. The choice of RMSD values is motivated by the
+histograms in Figure 6. The ACNA analyses shown here as well as all renders were
+performed with OVITO [23].
+
+containing 2.8 million atoms, with periodic boundary conditions. The sample initially
+contains 30 grains, with randomly selected centres and orientations. The grain volumes
+have been constructed by computing the Voronoi cells of the grain centres. The atoms
+within the grains are initially ordered with a perfect L12 structure. This structure,
+which is the stable low-temperature phase of this system, can be considered as an FCC
+structure with three Cu atoms and one Pt atom in the unit cell. It should therefore be
+identiﬁed as FCC by the PTM algorithm.
+
+The sample has ﬁrst been quenched using the FIRE minimization method [24], and
+subsequently annealed at 1100K for 820 picoseconds using molecular dynamics with a
+
+Robust Structural Identiﬁcation via Polyhedral Template Matching
+
+11
+
+5 fs time step. The interatomic potential is the Eﬀective Medium Theory potential [25]
+and the temperature is controlled with a Berendsen thermostat [26]. After annealing,
+the sample has been separately heated to 1300K and cooled to 900K, 700K and 500K.
+Figure 5 compares the performance of ACNA and PTM on the Cu3Pt systems at 500K
+and 1100K (both below the melting point temperature) and 1300K (near the melting
+point temperature). Despite the system at 1300K being in the process of melting from
+the grain boundaries, PTM correctly identiﬁes the majority of FCC structures in the
+non-melted volumes.
+
+Figure 6 shows the eﬀect of temperature on the RMSD distribution of the structures
+identiﬁed as FCC. Higher temperatures lead to more distorted structures. By choosing
+good values for RMSDmax, spurious identiﬁcations (in this case SC, ICO and BCC) are
+signiﬁcantly reduced. Figure 7 shows the proportion of each structure type identiﬁed
+for the systems shown in Figure 5.
+
+Figure 6.
+Histograms of
+RMSD values for the FCC
+atoms
+in a polycrystalline
+Cu3Pt
+system at diﬀerent
+temperatures. With increas-
+ing temperature the thermal
+displacements result in larger
+RMSD values.
+
+FCC
+
+HCP
+
+Disordered
+
+Figure 7. Relative propor-
+tions of FCC, HCP and dis-
+ordered structures found with
+ACNA and PTM at diﬀerent
+temperatures. The SC, ICO
+and BCC classiﬁcations have
+been counted as disordered.
+
+5. Alloy Structures
+
+Since PTM ﬁnds the optimal point-to-point correspondences between a set of points and
+an ideal reference template, we can easily identify alloy structures. A good description of
+the possible lattice structures of FCC and BCC alloys is given in [27]. Some ﬁgures are
+recreated in Figure 8. Here, we will only consider binary alloys, though multi-element
+alloys would be a simple extension.
+
+Identiﬁcation of the A1 and A2 structures is trivial; all nearest neighbours must
+have the same atom type as the central atom. The B2 structure is equally simple to
+
+Robust Structural Identiﬁcation via Polyhedral Template Matching
+
+12
+
+(a) A1 (Cu)
+
+(b) L10 (CuAu) (c) L12 (Cu3Au)
+
+(d) A2 (W)
+
+(e) B2 (CsCl)
+
+Figure 8. Lattice structures of the three FCC lattice types (a)-(c), and the two BCC
+lattice types (d)-(e).
+
+identify; the types of all the atoms in the ﬁrst shell of neighbours must be the opposite
+of the central atom, and all the atoms in the second shell must have the same type as
+the central atom. For the L10 and L12 structures, it is instructive to view the structures
+from the central atom. This is shown in Figure 9.
+
+Using the point-to-point correspondences, the atom types of a distorted structure
+can be mapped onto the ideal FCC lattice structure. The alloy type can then be
+determined by examining the types of coplanar neighbours. Table 3 summarizes the
+rules for determining FCC alloy structures.
+
+To illustrate the method described here, we have determined the alloy structures of
+the Cu3Pt system described in section 4.2, both before annealing and after annealing.
+After the sample grains have been initialized by Voronoi cell construction, with perfect
+L12 ordering, the sample has been quenched. The sample has also been quenched, post-
+annealing, to allow the alloy structures to be compared. The alloy structures of each
+
+(a) A1 Cu-type (b) L10 Cu-type (c) L10 Au-type (d) L12 Cu-type (e) L12 Au-type
+
+Figure 9. Alloy lattice structures of a central atom and the ﬁrst shell of nearest
+neighbours in a FCC lattice, for diﬀerent central atom types. Diﬀerent alloy types can
+be determined by counting the atom types of coplanar neighbours.
+
+Alloy structure Atom Type Neighbours
+
+A1
+A1
+L10
+L10
+L12
+L12
+
+Cu
+Au
+Cu
+Au
+Cu
+Au
+
+3 x 4 coplanar Cu-type (all Cu-type)
+3 x 4 coplanar Au-type (all Au-type)
+2 x 4 coplanar Au-type, 4 coplanar Cu-type
+2 x 4 coplanar Cu-type, 4 coplanar Au-type
+2 x 4 coplanar Cu-type, 4 coplanar Au-type
+3 x 4 coplanar Cu-type (all Cu-type)
+
+Table 3. Rules for determining FCC binary alloy types using the types of coplanar
+neighbours.
+
+Robust Structural Identiﬁcation via Polyhedral Template Matching
+
+13
+
+Pre-annealing
+
+Post-annealing
+
+Legend:
+
+L12 FCC
+
+Disordered FCC
+
+Non-FCC
+
+Figure 10. Alloy structures in quenched polycrystalline Cu3Pt systems. Before
+annealing (left), the grains have been initialized with perfect L12 ordering. After
+annealing at 1100K for 820 picoseconds (right), the atoms which have passed through
+a grain boundary have disordered FCC alloy structure. The cut-oﬀ used is RMSDmax =
+0.05.
+
+system are shown in Figure 10. It can be seen that grain boundary migration aﬀects
+the alloy structure; despite the atoms still having FCC structure after passing through
+a grain boundary, the L12 ordering has been lost. Before annealing, less than 0.5% of
+the FCC atoms were not identiﬁed as being in the L12 structure. After annealing, this
+percentage had grown to approximately 12%.
+
+6. Lattice Orientations
+
+A consequence of PTM identifying structures by minimizing the RMSD (c.f.
+Equation (3)) is that the orientation is deﬁned for each atom, at no extra computational
+cost. Furthermore, due to the optimal point-to-point correspondence being determined,
+the orientation is robustly determined. Figure 11 shows the lattice orientation of the
+FCC atoms in the Cu3Pt system, post-annealing. The non-FCC atoms have not been
+included in the render. The colours used are obtained by rotation of the orientation of
+each atom into its fundamental zone and projection into Rodrigues-Frank space. For
+materials with cubic symmetry, the fundamental zone (in Rodrigues-Frank space) is a
+truncated octahedron [28], which permits a straightforward mapping into RGB colour
+space [29, 30]. A drawback of the colour scheme is that grains containing atoms whose
+fundamental orientations lie close to the faces of the fundamental zone can have very
+diﬀerent colours. This can be seen in the blue/beige grain (lower right) in Figure 11.
+Nevertheless, the colour scheme conveys the relationship between the grain orientations
+well.
+
+Robust Structural Identiﬁcation via Polyhedral Template Matching
+
+14
+
+Figure 11. Orientations of FCC atoms in a polycrystalline Cu3Pt system, with
+RMSDmax = 0.05.
+
+7. Local Strain
+
+We have the optimal point-to-point correspondences between the actual atomic positions
+and the positions of the ideal structure. As such, the local strain is easily obtained. First,
+we ﬁnd the deformation gradient using a least-squares ﬁt:
+
+||vAT − w||2
+
+A
+
+r = min
+
+(5)
+where r is the residual term, v and w are 3 × N matrices containing the positions
+of the ideal positions and the optimally permuted actual postions respectively, and
+the deformation gradient, A, is the aﬃne transformation which minimizes the residual
+term. The residual term is equivalent to Falk and Langers D2
+min term for identifying
+local irreversible shear transformations [31]. Prior to ﬁtting the deformation gradient,
+the ideal and actual postions are translated such that the barycentre of each set lies
+at the origin, and scaled such that the mean vertex distance is 1, as in Equation (4).
+Although the deformation gradient obtained is scale-invariant, the scale factor can be
+used to recover the hydrostatic component. The orientation and strain matrices are
+obtained via a left-sided polar decomposition of the deformation gradient:
+
+PU = A
+
+(6)
+
+where U is an orthogonal right-handed matrix (the rotation matrix), and P is a
+symmetric matrix (the strain matrix). The choice of a left-sided polar decomposition is
+arbitrary, but we ﬁnd the strain in the same frame of reference preferable for comparison
+of strains across diﬀerent grains. In the case where P is not the identity matrix, U is not
+the same rotation found by minimizing the RMSD, since the addition of strain means
+we no longer have a rigid-body transformation. The residual term in Equation (5) could
+be used to determine the local structure instead of the RMSD, however, the strains in
+
+Robust Structural Identiﬁcation via Polyhedral Template Matching
+
+15
+
+Figure 12. Local Von-Mises shear strain of FCC atoms in a single crystal CuPt3
+system, with RMSDmax = 0.02. Regions of strain occur around the wedge tip, close to
+surfaces and near dislocations. Strain analysis requires quenching or time-averaging of
+positions, to avoid strains being dominated by atomic thermal displacements.
+
+MD simulations are typically less than 5%, and the extra degree of freedom provided
+by the strain matrix often results in highly-strained spurious structural identiﬁcations.
+Figure 12 shows the Von-Mises shear strain for the FCC atoms in a CuPt3 system.
+
+The Von-Mises shear strain is given by:
+
+(cid:114)3
+
+εVM =
+
+PijPij − 1
+2
+
+(Pkk)2
+
+(7)
+
+2
+
+where summation over repeated indices is implied. This is the strain equivalent of
+the Von Mises shear stress, deﬁned in most solid mechanics textbooks [32]. A wedge
+has been cut out along the length of the system, and a hydrostatic strain of 5% has
+been applied transverse to the wedge tip direction. Periodic boundary conditions have
+been applied along the wedge tip and strain directions. The system was initially a
+single crystal (to avoid the strain ﬁeld being dominated by grain boundaries) and has
+been annealed at 700K for 15000 steps of 5fs to allow stacking faults and dislocations to
+form. Unfortunately, either quenching or time-averaging of atomic positions is necessary
+for strain analysis; since the strains are very small, they are dominated by thermal
+displacements at even moderate temperatures. As such we have quenched the system
+using the FIRE [24] method. As expected, stress concentrations are seen near dislocation
+cores and at the tip of the wedge.
+
+8. Implementation
+
+The core components of the PTM algorithm (RMSD optimization, convex hull
+computation and graph canonization) can be computationally expensive if not
+implemented carefully. The RMSD optimization is solved using the library provided by
+
+Robust Structural Identiﬁcation via Polyhedral Template Matching
+
+16
+
+D.L. Theobald [14, 33], which is much faster than SVD based calculations. Commonly
+used convex hull libraries, such as QHull [34] and CGAL [35], implement the QuickHull
+algorithm (with expected running time O(n log n)) and are designed to achieve good
+performance on large point sets. On small point sets such as ours theoretical running
+times are less important to performance than eﬃcient memory allocation, layout and
+accesses. As such, we have implemented a stack-allocated incremental convex hull
+algorithm [36] which, despite having a O(n2) theoretical running time, is 15 times faster
+than QHull for our point sets. For graph canonization, we have implemented a single-
+embedding adaptation of Weinberg’s algorithm [18], again with stack allocation. Rather
+than representing the optimal Weinberg code as a list of edges, we have devised a hash
+function which uniquely represents all triconnected planar graphs as a 64-bit integer.
+We have ensured that no hash collisions occur by generating all possible graphs of this
+type (up to 15 vertices) using the plantri program [20]. The deformation gradients
+in Equation (5) are solved by precomputing a Moore-Penrose matrix inverse matrix for
+each structure. This reduces solution of a least-squares problem to matrix multiplication.
+The polar decomposition of the deformation gradient is computed using a SVD library
+optimized for 3 × 3 matrices [37]. For the benchmark system used in section 4.1, the
+main components account for the following percentages of the total running time: 46%
+- convex hull construction, 20% - canonical form calculation, 15% - RMSD optimization
+(including scaling and translation of the points), and 9% - strain calculation. The source
+code is available at [13].
+
+9. Conclusions
+
+We have presented a computationally eﬃcient yet robust method for identifying the local
+structure in atomic-scale simulations. The method is based on using the topology of the
+convex hull formed by the neighbours of an atom to construct a small set of candidate
+structures, the best of which is chosen based on the root-mean-square deviation of
+the positions from their expected positions. In case of local crystalline symmetry, the
+method also identiﬁes the local orientation of the crystalline axes, and optionally the
+strain tensor. At low to moderate temperatures, the performance of the method is very
+similar to preexisting methods such as Adaptive Common Neighbour Analysis, but at
+higher temperatures it is more robust, and can with high reliability identify the structure
+of a crystalline phase for all temperatures up to the melting point.
+
+Acknowledgments
+
+We gratefully acknowledge funding from The Danish National Research Foundation’s
+Center for Individual Nanoparticle Functionality (DNRF54).
+
+Robust Structural Identiﬁcation via Polyhedral Template Matching
+
+17
+
+FCC
+
+HCP
+
+Figure A1. The two diﬀerent edge types in the convex hull graphs of the FCC and
+HCP structures; edges which cross a square facet (red) and edges which do not (blue).
+
+Appendix A. Symmetrically Inequivalent Triangulations
+
+In section 3 we described how a convex hull can have multiple triangulations of its
+surface. Here we describe how the symmetrically unique triangulations can be generated,
+which results in a smaller number of templates to match against a structure.
+
+respectively,
+
+The SC and ICO structures are simple cases. They both have single convex hull
+triangulations. Whilst the graph of their convex hulls have 24 and 60 orientation-
+preserving automorphisms
+these automorphisms are symmetrically
+equivalent. The FCC and HCP cases are slightly more complex. We can generate
+the unique triangulations by assigning colours to the edges in the convex hull graph.
+There are two edge lengths in the convex hull; edges which cross a square facet and edges
+which do not. This is shown in Figure A1. The unique graphs are now the unique edge-
+colour-preserving and orientation-preserving isomorphisms. The symmetrically unique
+automorphisms can be determined either by ﬁnding the unique RMSD values, or by
+colouring the facets by type (equilateral triangle or half a square facet) and ﬁnding the
+unique orientation-preserving isomorphisms of the dual graph.
+
+The unique BCC triangulations can be found by colouring the vertices by shell
+number, and ﬁnding the unique vertex-colour-preserving and orientation-preserving
+isomorphisms. The unique automorphisms can be found either by ﬁnding the unique
+RMSD values, or by colouring the facets according to the number of vertices in each shell
+and ﬁnding the unique orientation-preserving isomorphisms of the dual graph. Whilst we
+assign colours to edges and vertices during template generation, no colours are assigned
+during template matching. Colour assignment requires prior knowledge of facet types
+and, in the BCC case, the neighbour vertex shell numbers. However, the purpose of
+template matching is to accurately determine the structure. The lack of assumptions
+about facet types and shell numbers results in robust structural identiﬁcations even in
+highly distorted structures.
+
+References
+
+[1] Kelchner C L, Plimpton S J and Hamilton J C 1998 Phys. Rev. B 58 11085–11088
+[2] Honeycutt J D and Andersen H C 1987 J. Phys. Chem. 91 4950–4963
+[3] Faken D and J´onsson H 1994 Comput. Mater. Sci. 2 279–286
+
+Robust Structural Identiﬁcation via Polyhedral Template Matching
+
+18
+
+[4] Schiøtz J and Jacobsen K W 2003 Science 301 1357
+[5] Yamakov V, Wolf D, Phillpot S R, Mukherjee A K and Gleiter H 2003 Philos. Mag. Lett. 83
+
+385–393
+
+[6] Brandl C, Derlet P M and Van Swygenhoven H 2011 19 074005
+[7] J´onsson H and Andersen H C 1988 Phys. Rev. Lett. 60 2295–2298
+[8] Bailey N P, Schiøtz J and Jacobsen K W 2004 Phys. Rev. B 69
+[9] Qi Y, C¸ a˘gin T, Johnson W L and Goddard W A 2001 J. Chem. Phys. 115 385–394
+[10] Wells D M, Rossi G, Ferrando R and Palmer R E 2015 Nanoscale 7 6498–6503
+[11] Stukowski A 2012 Modelling Simul. Mater. Sci. Eng. 20 045021
+[12] Lazar E A, Han J and Srolovitz D J 2015 Proc. Natl. Acad. Sci. USA 112 E5769–E5776
+[13] Larsen P M, Schmidt S and Schiøtz J 2016 Polyhedral Template Matching - Source Code
+
+Repository http://github.com/pmla/polyhedral-template-matching
+
+[14] Theobald D L 2005 Acta Crystallogr. A 61 478–480
+[15] Steinitz E 1916 Polyeder und Raumeinteilungen (Teubner)
+[16] Whitney H 1933 Am. J. Math. 55 231
+[17] Tutte W T 1963 Proc. London Math. Soc. s3-13 743–767
+[18] Weinberg L 1966 IEEE Trans. Circuit Theory 13 142–148
+[19] Kukluk J P, Holder L B and Cook D J 2004 J. Graph Algorithms Appl. 8 313–356
+[20] Brinkmann G and McKay B D 2007 MATCH Commun. Math. Comput. Chem. 58 323–357
+[21] Stukowski A 2012 Atomic structure analysis algorithms http://asa.ovito.org
+[22] Ackland G J and Jones A P 2006 Phys. Rev. B 73 054104
+[23] Stukowski A 2010 Modelling Simul. Mater. Sci. Eng. 18 015012
+[24] Bitzek E, Koskinen P, G¨ahler F, Moseler M and Gumbsch P 2006 Phys. Rev. Lett. 97 170201
+[25] Jacobsen K W, Stoltze P and Nørskov J K 1996 Surf. Sci. 366 394–402
+[26] Berendsen H J C, Postma J P M, van Gunsteren W F, DiNola A and Haak J R 1984 J. Chem.
+
+Phys. 81 3684–3690
+
+[27] Laughlin D E 1988 Long-range order in alloys Encyclopedia of Materials Science and Engineering,
+
+Supp. Vol. 1. (Pergamon Press) pp 263–268
+
+[28] He Y and Jonas J J 2008 Rodrigues-Frank Spaces for Misorientations and Orientation Relationships
+between Crystals of Any Two Crystallographic Point Groups Applications of Texture Analysis
+Ceramic Transactions (Hoboken, NJ, USA: John Wiley & Sons, Inc.) pp 269–280
+
+[29] Albou A, Driver J H and Maurice C 2010 Acta Mater. 58 3022–3034
+[30] Van Boxel S, Seefeldt M, Verlinden B and van Houtte P 2005 J. Microsc. 218 104–114
+[31] Falk M L and Langer J S 1998 Phys. Rev. E 57 7192–7205
+[32] Budynas R G and Nisbett J K 2011 Shigley’s Mechanical Engineering Design McGraw-Hill series
+
+in mechanical engineering (McGraw-Hill)
+
+[33] Liu P, Agraﬁotis D K and Theobald D L 2010 J. Comput. Chem. 1561–1563
+[34] Barber C B, Dobkin D P and Huhdanpaa H 1996 ACM Trans. Math. Software 22 469–483
+[35] Hert S and Schirra S 2013 3D Convex Hulls CGAL User and Reference Manual
+(CGAL Editorial Board) URL http://doc.cgal.org/4.2/CGAL.CGAL/html/packages.html#
+PkgConvexHull3Summary
+
+[36] O’Rourke J 1998 Computational geometry in C (Cambridge University Press)
+[37] McAdams A, Selle A, Tamstorf R, Teran J and Sifakis E 2011 Computing the singular value
+decomposition of 3× 3 matrices with minimal branching and elementary ﬂoating point operations
+Tech. Rep. 1690 University of Wisconsin-Madison
+
+

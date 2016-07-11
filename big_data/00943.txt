@@ -1,0 +1,346 @@
+CVXPY: A Python-Embedded Modeling Language for
+
+Convex Optimization
+
+Steven Diamond and Stephen Boyd
+
+March 4, 2016
+
+Abstract
+
+CVXPY is a domain-speciﬁc language for convex optimization embedded in Python.
+It allows the user to express convex optimization problems in a natural syntax that fol-
+lows the math, rather than in the restrictive standard form required by solvers. CVXPY
+makes it easy to combine convex optimization with high-level features of Python such as
+parallelism and object-oriented design. CVXPY is available at http://www.cvxpy.org/
+under the GPL license, along with documentation and examples.
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+3
+
+ 
+
+ 
+ 
+]
+
+.
+
+C
+O
+h
+t
+a
+m
+
+[
+ 
+ 
+
+1
+v
+3
+4
+9
+0
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+1
+
+Introduction
+
+Convex optimization has many applications to ﬁelds as diverse as machine learning, control,
+ﬁnance, and signal and image processing [BV04]. Using convex optimization in an applica-
+tion requires either developing a custom solver or converting the problem into a standard
+form. Both of these tasks require expertise, and are time-consuming and error prone. An
+alternative is to use a domain-speciﬁc language (DSL) for convex optimization, which allows
+the user to specify the problem in a natural way that follows the math; this speciﬁcation
+is then automatically converted into the standard form required by generic solvers. CVX
+[GB14], YALMIP [L¨04], CVXGEN [MB12], QCML [CPDB13], PICOS [Sag15], and Convex.jl
+[UMZ+14] are examples of such DSLs for convex optimization.
+
+CVXPY is a new DSL for convex optimization. It is based on CVX [GB14], but intro-
+duces new features such as signed disciplined convex programming analysis and parameters.
+CVXPY is an ordinary Python library, which makes it easy to combine convex optimization
+with high-level features of Python such as parallelism and object-oriented design.
+
+CVXPY has been downloaded by thousands of users and used to teach multiple courses
+[Boy15]. Many tools have been built on top of CVXPY, such as an extension for stochastic
+optimization [AKDB15].
+
+1
+
+2 CVXPY syntax
+
+CVXPY has a simple, readable syntax inspired by CVX [GB14]. The following code con-
+structs and solves a least squares problem where the variable’s entries are constrained to be
+between 0 and 1. The problem data A ∈ Rm×n and b ∈ Rm could be encoded as NumPy
+ndarrays or one of several other common matrix representations in Python.
+
+# Construct the problem.
+x = Variable(n)
+objective = Minimize(sum_squares(A*x - b))
+constraints = [0 <= x, x <= 1]
+prob = Problem(objective, constraints)
+
+# The optimal objective is returned by prob.solve().
+result = prob.solve()
+# The optimal value for x is stored in x.value.
+print x.value
+
+The variable, objective, and constraints are each constructed separately and combined
+in the ﬁnal problem. In CVX, by constrast, these objects are created within the scope of a
+particular problem. Allowing variables and other objects to be created in isolation makes it
+easier to write high-level code that constructs problems (see §6).
+
+3 Solvers
+
+CVXPY converts problems into a standard form known as conic form [NN92], a general-
+ization of a linear program. The conversion is done using graph implementations of convex
+functions [GB08]. The resulting cone program is equivalent to the original problem, so by
+solving it we obtain a solution of the original problem.
+
+Solvers that handle conic form are known as cone solvers; each one can handle com-
+binations of several types of cones. CVXPY interfaces with the open-source cone solvers
+CVXOPT [ADV15], ECOS [DCB13], and SCS [OCPB15], which are implemented in com-
+binations of Python and C. These solvers have diﬀerent characteristics, such as the types
+of cones they can handle and the type of algorithms employed. CVXOPT and ECOS are
+interior-point solvers, which reliably attain high accuracy for small and medium scale prob-
+lems; SCS is a ﬁrst-order solver, which uses OpenMP to target multiple cores and scales to
+large problems with modest accuracy.
+
+4 Signed DCP
+
+Like CVX, CVXPY uses disciplined convex programming (DCP) to verify problem convexity
+[GBY06]. In DCP, problems are constructed from a ﬁxed library of functions with known
+
+2
+
+curvature and monotonicity properties. Functions must be composed according to a simple
+set of rules such that the composition’s curvature is known. For a visualization of the DCP
+rules, visit dcp.stanford.edu.
+
+CVXPY extends the DCP rules used in CVX by keeping track of the signs of expres-
+sions. The monotonicity of many functions depends on the sign of their argument, so keeping
+track of signs allows more compositions to be veriﬁed as convex. For example, the composi-
+tion square(square(x)) would not be veriﬁed as convex under standard DCP because the
+square function is nonmonotonic. But the composition is veriﬁed as convex under signed
+DCP because square is increasing for nonnegative arguments and square(x) is nonnegative.
+
+5 Parameters
+
+Another improvement in CVXPY is the introduction of parameters. Parameters are con-
+stants whose symbolic properties (e.g., dimensions and sign) are ﬁxed but whose numeric
+value can change. A problem involving parameters can be solved repeatedly for diﬀerent val-
+ues of the parameters without repeating computations that do not depend on the parameter
+values. Parameters are an old idea in DSLs for optimization, appearing in AMPL [FGK02].
+A common use case for parameters is computing a trade-oﬀ curve. The following code
+constructs a LASSO problem [BV04] where the positive parameter γ trades oﬀ the sum of
+squares error and the regularization term. The problem data are A ∈ Rm×n and b ∈ Rm.
+
+x = Variable(n)
+gamma = Parameter(sign="positive") # Must be positive due to DCP rules.
+error = sum_squares(A*x - b)
+regularization = norm(x, 1)
+prob = Problem(Minimize(error + gamma*regularization))
+
+Computing a trade-oﬀ curve is trivially parallelizable, since each problem can be solved
+independently. CVXPY can be combined with Python multiprocessing (or any other paral-
+lelism library) to distribute the trade-oﬀ curve computation across many processes.
+
+# Assign a value to gamma and find the optimal x.
+def get_x(gamma_value):
+
+gamma.value = gamma_value
+result = prob.solve()
+return x.value
+
+# Get a range of gamma values with NumPy.
+gamma_vals = numpy.logspace(-4, 6)
+# Do parallel computation with multiprocessing.
+pool = multiprocessing.Pool(processes = N)
+x_values = pool.map(get_x, gamma_vals)
+
+3
+
+6 Object-oriented convex optimization
+
+CVXPY enables an object-oriented approach to constructing optimization problems. As an
+example, consider an optimal ﬂow problem on a directed graph G = (V, E) with vertex set
+V and (directed) edge set E. Each edge e ∈ E carries a ﬂow fe ∈ R, and each vertex v ∈ V
+has an internal source that generates sv ∈ R ﬂow. (Negative values correspond to ﬂow in
+the opposite direction, or a sink at a vertex.) The (single commodity) ﬂow problem is (with
+variables fe and sv)
+
+minimize Pe∈E φe(fe) + Pv∈V ψv(sv),
+subject to sv + Pe∈I(v) fe = Pe∈O(v) fe,
+
+for all v ∈ V,
+
+where the φe and ψv are convex cost functions and I(v) and O(v) give vertex v’s incoming
+and outgoing edges, respectively.
+
+To express the problem in CVXPY, we construct vertex and edge objects, which store
+local information such as optimization variables, constraints, and an associated objective
+term. These are exported as a CVXPY problem for each vertex and each edge.
+
+class Vertex(object):
+
+def __init__(self, cost):
+
+self.source = Variable()
+self.cost = cost(self.source)
+self.edge_flows = []
+
+def prob(self):
+
+net_flow = sum(self.edge_flows) + self.source
+return Problem(Minimize(self.cost), [net_flow == 0])
+
+class Edge(object):
+
+def __init__(self, cost):
+
+self.flow = Variable()
+self.cost = cost(self.flow)
+
+def connect(self, in_vertex, out_vertex):
+
+in_vertex.edge_flows.append(-self.flow)
+out_vertex.edge_flows.append(self.flow)
+
+def prob(self):
+
+return Problem(Minimize(self.cost))
+
+The vertex and edge objects are composed into a graph using the edges’ connect method.
+To construct the single commodity ﬂow problem, we sum the vertices and edges’ local prob-
+lems. (Addition of problems is overloaded in CVXPY to add the objectives together and
+concatenate the constraints.)
+
+4
+
+prob = sum([object.prob() for object in vertices + edges])
+prob.solve() # Solve the single commodity flow problem.
+
+Acknowledgements
+
+We would like to thank Eric Chu, AJ Friend, and the many other contributors to CVXPY.
+
+5
+
+References
+
+[ADV15] M. Andersen, J. Dahl, and L. Vandenberghe. CVXOPT: Python software for
+
+convex optimization, version 1.1. http://cvxopt.org/, May 2015.
+
+[AKDB15] A. Ali, Z. Kolter, S. Diamond, and S. Boyd. Disciplined convex stochastic pro-
+gramming: A new framework for stochastic optimization. In Proceedings of the
+31st Conference on Uncertainty in Artiﬁal Intelligence, pages 62–71, 2015.
+
+[Boy15]
+
+[BV04]
+
+Boyd.
+
+S.
+http://stanford.edu/class/ee364a/, December 2015.
+
+EE364a:
+
+Convex
+
+optimization
+
+I.
+
+S. Boyd and L. Vandenberghe. Convex Optimization. Cambridge University
+Press, 2004.
+
+[CPDB13] E. Chu, N. Parikh, A. Domahidi, and S. Boyd. Code generation for embedded
+second-order cone programming. In Proceedings of the European Control Confer-
+ence, pages 1547–1552, 2013.
+
+[DCB13] A. Domahidi, E. Chu, and S. Boyd. ECOS: An SOCP solver for embedded
+systems. In Proceedings of the European Control Conference, pages 3071–3076,
+2013.
+
+[FGK02] R. Fourer, D. Gay, and B. Kernighan. AMPL: A Modeling Language for Mathe-
+
+matical Programming. Cengage Learning, 2002.
+
+[GB08]
+
+M. Grant and S. Boyd. Graph implementations for nonsmooth convex programs.
+In V. Blondel, S. Boyd, and H. Kimura, editors, Recent Advances in Learning
+and Control, Lecture Notes in Control and Information Sciences, pages 95–110.
+Springer, 2008.
+
+[GB14]
+
+M. Grant and S. Boyd. CVX: MATLAB software for disciplined convex program-
+ming, version 2.1. http://cvxr.com/cvx, March 2014.
+
+[GBY06] M. Grant, S. Boyd, and Y. Ye. Disciplined convex programming. In L. Liberti
+and N. Maculan, editors, Global Optimization: From Theory to Implementation,
+Nonconvex Optimization and its Applications, pages 155–210. Springer, 2006.
+
+[L¨04]
+
+[MB12]
+
+[NN92]
+
+J. L¨ofberg. YALMIP : A toolbox for modeling and optimization in MATLAB.
+In Proceedings of the CACSD Conference, Taipei, Taiwan, 2004.
+
+J. Mattingley and S. Boyd. CVXGEN: A code generator for embedded convex
+optimization. Optimization and Engineering, 13(1):1–27, 2012.
+
+Y. Nesterov and A. Nemirovsky. Conic formulation of a convex programming
+problem and duality. Optimization Methods and Software, 1(2):95–115, 1992.
+
+6
+
+[OCPB15] B. O’Donoghue, E. Chu, N. Parikh, and S. Boyd. Conic optimization via
+Preprint, 2015.
+
+operator splitting and homogeneous self-dual embedding.
+http://stanford.edu/~boyd/papers/pdf/scs.pdf.
+
+[Sag15]
+
+G. Sagnol. PICOS: A Python interface for conic optimization solvers, version
+1.1. http://picos.zib.de/index.html, April 2015.
+
+[UMZ+14] M. Udell, K. Mohan, D. Zeng, J. Hong, S. Diamond, and S. Boyd. Convex op-
+timization in Julia. SC14 Workshop on High Performance Technical Computing
+in Dynamic Languages, 2014.
+
+7
+
+

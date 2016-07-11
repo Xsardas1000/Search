@@ -1,0 +1,1555 @@
+A Fast Uniﬁed Model for Parsing and Sentence Understanding
+Abhinav Rastogi4,5
+
+Jon Gauthier2,3,5,∗
+
+Samuel R. Bowman1,2,5,∗
+
+sbowman@stanford.edu
+
+jgauthie@stanford.edu
+
+arastogi@stanford.edu
+
+Raghav Gupta6
+
+Christopher D. Manning1,2,5,6
+
+rgupta93@stanford.edu
+
+manning@stanford.edu
+
+Christopher Potts1
+cgpotts@stanford.edu
+
+1Stanford Linguistics
+
+2Stanford NLP Group 3Stanford Symbolic Systems
+
+4Stanford Electrical Engineering 5Stanford AI Lab 6Stanford Computer Science
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+9
+1
+
+ 
+ 
+]
+L
+C
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+1
+2
+0
+6
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Abstract
+
+Tree-structured neural networks exploit
+valuable syntactic parse information as
+they interpret the meanings of sentences.
+However, they suffer from two key tech-
+nical problems that make them slow
+and unwieldy for large-scale NLP tasks:
+they can only operate on parsed sen-
+tences and they do not directly sup-
+port batched computation. We address
+these issues by introducing the Stack-
+augmented Parser-Interpreter Neural Net-
+work (SPINN), which combines parsing
+and interpretation within a single tree-
+sequence hybrid model by integrating tree-
+structured sentence interpretation into the
+linear sequential structure of a shift-reduce
+parser. Our model supports batched com-
+putation for a speedup of up to 25x over
+other tree-structured models, and its inte-
+grated parser allows it to operate on un-
+parsed data with little loss of accuracy. We
+evaluate it on the Stanford NLI entailment
+task and show that it signiﬁcantly outper-
+forms other sentence-encoding models.
+
+1
+
+Introduction
+
+A wide range of current models in NLP are built
+around a neural network component
+that pro-
+duces vector representations of sentence mean-
+ing (e.g., Sutskever et al., 2014; Tai et al., 2015).
+This component, the sentence encoder, is gen-
+erally formulated as a learned parametric func-
+tion from a sequence of word vectors to a sen-
+tence vector, and this function can take a range
+of different forms. Common sentence encoders
+include sequence-based recurrent neural network
+
+∗The ﬁrst two authors contributed equally.
+
+...
+
+...
+
+the
+
+old
+
+cat
+
+ate
+
+the
+
+cat
+
+sat
+
+down
+
+(a) A conventional sequence-based RNN for two sentences.
+
+...
+
+...
+
+the old cat ate
+
+the cat sat down
+
+the old cat
+
+ate
+
+the cat
+
+sat down
+
+the
+
+old cat
+
+the
+
+cat
+
+sat
+
+down
+
+old
+
+cat
+
+(b) A conventional TreeRNN for two sentences.
+
+Figure 1: An illustration of two standard de-
+signs for sentence encoders. The TreeRNN, unlike
+the sequence-based RNN, requires a substantially
+different connection structure for each sentence,
+making batched computation impractical.
+
+models (RNNs, see Figure 1a) with Long Short-
+Term Memory (LSTM, Hochreiter and Schmidhu-
+ber, 1997), which accumulate information over the
+sentence sequentially; convolutional neural net-
+works (Kalchbrenner et al., 2014; Zhang et al.,
+2015), which accumulate information using ﬁl-
+ters over short local sequences of words or charac-
+ters; and tree-structured recursive neural networks
+(TreeRNNs, Goller and K¨uchler, 1996; Socher
+et al., 2011a, see Figure 1b), which propagate in-
+formation up a binary parse tree.
+
+Of these, the TreeRNN appears to be the prin-
+cipled choice, since meaning in natural language
+sentences is known to be constructed recursively
+according to a tree structure (Dowty, 2007, i.a.).
+TreeRNNs have shown promise (Tai et al., 2015;
+Li et al., 2015; Bowman et al., 2015b), but have
+largely been overlooked in favor of sequence-
+based RNNs because of their incompatibility with
+
+stack
+
+the
+cat
+
+tracking
+
+sat
+down
+
+buffer
+
+composition
+
+the cat
+
+composition
+
+REDUCE
+
+transition
+
+SHIFT
+
+transition
+
+tracking
+
+sat
+down
+
+the cat
+
+sat
+
+tracking
+
+down
+
+(a) The SPINN unrolled for two transitions during the processing of the sentence the cat sat down. ‘Tracking’, ‘transition’, and
+‘composition’ are neural network layers. Gray arrows indicate connections which are blocked by a gating function.
+
+t = 0
+
+t = 1
+
+stack
+
+buffer
+
+SHIFT
+
+the
+cat
+sat
+down
+
+the
+
+SHIFT
+
+cat
+sat
+down
+
+t = 2
+
+the
+cat
+
+REDUCE
+
+sat
+down
+
+t = 3
+
+the cat
+
+SHIFT
+
+sat
+down
+
+t = 4
+
+the cat
+
+sat
+
+SHIFT
+
+down
+
+t = 5
+
+the cat
+
+sat
+down
+
+t = 6
+
+t = 7 = T
+
+the cat
+sat down
+
+(the cat) (sat down)
+
+REDUCE
+
+REDUCE
+
+output to model
+for semantic task
+
+(b) The fully unrolled SPINN for the cat sat down, with neural network layers omitted for clarity.
+
+Figure 2: Two views of the SPINN.
+
+batched computation and their reliance on external
+parsers. Batched computation—performing syn-
+chronized computation across many examples at
+once—yields order-of-magnitude improvements
+in model run time, and is crucial in enabling neural
+networks to be trained efﬁciently on large datasets.
+Because TreeRNNs use a different model struc-
+ture for each sentence, as in Figure 1, batching is
+impossible in standard implementations. In addi-
+tion, standard TreeRNN models can only operate
+on sentences that have already been processed by a
+syntactic parser, which slows and complicates the
+use of these models at test time for most applica-
+tions.
+
+This paper introduces a new model to address
+both these issues:
+the Stack-augmented Parser-
+Interpreter Neural Network, or SPINN, shown in
+Figure 2. SPINN executes the computations of
+a tree-structured model in a linearized sequence,
+and can incorporate a neural network parser that
+produces the required parse structure on the ﬂy.
+This design improves upon the TreeRNN archi-
+tecture in three ways: At test time, it can simul-
+taneously parse and interpret unparsed sentences
+without incurring a substantial additional com-
+putational cost, removing the dependence on an
+external parser.
+In addition, it supports batched
+computation for both parsed and unparsed sen-
+tences, which yields dramatic speedups over stan-
+dard TreeRNNs. Finally, it supports a novel tree-
+
+sequence hybrid mechanism for handling local
+context in sentence interpretation that yields sub-
+stantial gains in accuracy over pure sequence- or
+tree-based models.
+
+We evaluate SPINN on the Stanford Natural
+Language Inference entailment task (SNLI, Bow-
+man et al., 2015a), and ﬁnd that it signiﬁcantly
+outperforms other sentence-encoding-based mod-
+els, and that it yields speed increases of up to 25x
+over a standard TreeRNN implementation.
+
+2 Related work
+
+There is a fairly long history of work on building
+neural network-based parsers that use the core op-
+erations and data structures from transition-based
+parsing, of which shift-reduce parsing is a vari-
+ant (Henderson, 2004; Emami and Jelinek, 2005;
+Titov and Henderson, 2010; Chen and Manning,
+2014; Buys and Blunsom, 2015; Dyer et al., 2015;
+Kiperwasser and Goldberg, 2016).
+In addition,
+there has been recent work proposing models de-
+signed primarily for generative language model-
+ing tasks that use this architecture as well (Zhang
+et al., 2016; Dyer et al., 2016). To our knowledge,
+SPINN is the ﬁrst model to use this architecture
+for the purpose of sentence interpretation, rather
+than parsing or generation.
+
+Socher et al. (2011a,b) present versions of the
+TreeRNN model which are capable of operating
+over unparsed inputs. However, these methods re-
+
+quire an expensive search process at test time. Our
+model presents a fast alternative approach.
+
+3 Our model: SPINN
+3.1 Background: Shift-reduce parsing
+SPINN is inspired by the shift-reduce parsing for-
+malism (Aho and Ullman, 1972), which builds a
+tree structure over a sequence (e.g., a natural lan-
+guage sentence) by a single left-to-right scan over
+its tokens. The formalism is widely used in nat-
+ural language parsing (e.g., Shieber, 1983; Nivre,
+2003).
+
+A shift-reduce parser accepts a sequence of in-
+put tokens x = (x0, . . . , xN−1) and consumes
+transitions t = (t0, . . . , tT−1), where each tt ∈
+{SHIFT, REDUCE} speciﬁes one step of the pars-
+ing process.
+In general a parser may also gen-
+erate these transitions on the ﬂy as it reads the
+tokens. It proceeds left-to-right through a transi-
+tion sequence, combining the input tokens x in-
+crementally into a tree structure. For any binary-
+branching tree structure over N words, this re-
+quires 2N − 1 transitions.
+
+The parser uses two auxiliary data structures:
+a stack S of partially completed subtrees and a
+buffer B of tokens yet to be parsed. The parser is
+initialized with the stack empty and the buffer con-
+taining the tokens x of the sentence in order. Let
+(cid:104)S, B(cid:105) = (cid:104)∅, x(cid:105) denote this starting state. It next
+proceeds through the transition sequence, where
+each transition tt selects one of the two following
+operations. Below, the | symbol denotes the cons
+(concatenation) operator. We arbitrarily choose to
+always cons on the left in the notation below.
+SHIFT: (cid:104)S, x | B(cid:105) → (cid:104)x | S, B(cid:105). This operation
+pops an element from the buffer and pushes
+it onto the top of the stack.
+
+REDUCE: (cid:104)x | y | S, B(cid:105) → (cid:104)(x, y) | S, B(cid:105). This
+operation pops the top two elements from the
+stack, merges them into a binary tree with
+children (x, y), and pushes the result back
+onto the stack.
+
+3.2 Composition and representation
+SPINN is based on a shift-reduce parser, but it is
+designed to produce a vector representation of a
+sentence as its output, rather than a tree as in stan-
+dard shift-reduce parsing.
+It modiﬁes the shift-
+reduce formalism by using ﬁxed length vectors to
+represent each entry in the stack and the buffer.
+
+Correspondingly, its REDUCE operation combines
+two vector representations from the stack into an-
+other vector using a neural network function.
+The composition function When a REDUCE op-
+eration is performed, the vector representations of
+two tree nodes are popped off of the stack and fed
+into a composition function, which is a neural net-
+work function that produces a representation for a
+new tree node that is the parent of the two popped
+nodes. This new node is pushed on to the stack.
+
+The TreeLSTM composition function (Tai et al.,
+2015) generalizes the LSTM neural network layer
+to tree- rather than sequence-based inputs, and it
+shares with the LSTM the idea of representing in-
+termediate states as a pair of a fast-changing state
+representation (cid:126)h and a slower-changing memory
+representation (cid:126)c. Our version is formulated as:
+
+ + (cid:126)bcomp
+
+
+
+(cid:126)h1
+
+s
+(cid:126)h2
+s
+(cid:126)e
+
+(1)
+
+
+
+
+
+ =
+
+(cid:126)i
+(cid:126)fl
+(cid:126)fr
+(cid:126)o
+(cid:126)g
+(cid:126)c = (cid:126)fl (cid:12) (cid:126)c 2
+(cid:126)h = (cid:126)o (cid:12) (cid:126)c
+
+
+
+Wcomp
+
+σ
+σ
+σ
+σ
+tanh
+s + (cid:126)fr (cid:12) (cid:126)c 1
+
+s +(cid:126)i (cid:12) (cid:126)g
+
+s, (cid:126)c 1
+
+s, (cid:126)c 2
+
+(2)
+(3)
+where σ is the sigmoid activation function, (cid:12) is
+the elementwise product, the pairs (cid:104)(cid:126)h1
+s (cid:105) and
+(cid:104)(cid:126)h2
+s (cid:105) are the two input tree nodes popped off
+the stack, and (cid:126)e is an optional vector-valued in-
+put argument which is either empty or comes from
+from an external source like the tracking LSTM
+(see Section 3.3). The result of this function, the
+pair (cid:104)(cid:126)h, (cid:126)c(cid:105), is placed back on the stack. Each
+vector-valued variable listed is of dimension D ex-
+cept (cid:126)e, of the independent dimension Dtracking.
+The stack and buffer The stack and the buffer
+are arrays of N elements each (for sentences of up
+to N words), with the two D-dimensional vectors
+(cid:126)h and (cid:126)c in each element.
+Word representations We use word represen-
+tations based on the standard 300D vector pack-
+age provided with GloVe (Pennington et al., 2014).
+We do not update these representations during
+training. Instead, we use a learned linear transfor-
+mation to map each input word vector (cid:126)xGloVe into
+a vector pair (cid:104)(cid:126)h, (cid:126)c(cid:105) that is stored in the buffer:
+
+(cid:20)(cid:126)h
+(cid:21)
+
+(cid:126)c
+
+(4)
+
+= Wwd(cid:126)xGloVe + (cid:126)bwd
+
+3.3 The tracking LSTM
+In addition to the stack, the buffer, and the com-
+position function, our full model includes an ad-
+ditional component: the tracking LSTM. This is
+a simple low-dimensional sequence-based LSTM
+RNN that operates in tandem with the model, tak-
+ing inputs from the buffer and stack at each step. It
+is meant to maintain a low-resolution summary of
+the portion of the sentence that has been processed
+so far, which is used for two purposes: it supplies
+feature representations to the transition classiﬁer,
+which allows the model to stand alone as a parser,
+and it additionally supplies a secondary input (cid:126)e
+(see Equation 1) to the composition function, al-
+lowing context information to leak into the con-
+struction of sentence meaning, and forming what
+is effectively a tree-sequence hybrid model.
+
+s and (cid:126)h2
+
+The tracking LSTM’s inputs (yellow in Fig-
+ure 2) are the top element of the buffer (cid:126)h1
+b (which
+would be moved in a SHIFT operation) and the top
+two elements of the stack (cid:126)h1
+s (which would
+be composed in a REDUCE operation).
+Why a tree-sequence hybrid? Lexical ambigu-
+ity is ubiquitous in natural language. Most words
+have multiple senses or meanings, and it is gener-
+ally necessary to use the context in which a word
+occurs to determine which of its senses or mean-
+ings is meant in a given sentence. Even though
+TreeRNNs are much more effective at compos-
+ing meanings in principle, this ambiguity can give
+simpler sequence-based sentence-encoding mod-
+els an advantage: when a sequence-based model
+ﬁrst processes a word, it has direct access to a
+state vector that summarizes the left context of
+that word, which acts as a cue for disambiguation.
+In contrast, when a standard tree-structured model
+ﬁrst processes a word, it only has access to the
+constituent that the word is merging with, which
+is often just a single additional word. Feeding
+a context representation from the tracking LSTM
+into the composition function is a simple and ef-
+ﬁcient way to mitigate this disadvantage of tree-
+structured models.
+
+It would be straightforward to augment SPINN
+to support the use of some amount of right-side
+context as well, but this would add complexity to
+the model that we think is largely unnecessary: hu-
+mans are very effective at understanding the be-
+ginnings of sentences before having seen or heard
+the ends, suggesting that it is possible to get by
+without the unavailable right-side context.
+
+t
+0
+1
+2
+3
+4
+5
+
+S[t]
+
+Qt
+
+a
+b
+c
+
+(c b)
+
+((c b) a)
+
+1
+1 2
+1 2 3
+1 4
+5
+
+Table 1: The thin-stack algorithm computing a
+SHIFT-SHIFT-SHIFT-REDUCE-REDUCE sequence
+on the input sentence (a, b, c). S is shown in the
+second column and represents the top of the stack
+at each step t. The last two elements of Q (under-
+lined) specify which rows t would be involved in
+a REDUCE operation at the next step.
+
+3.4 Parsing: Predicting transitions
+For SPINN to operate on unparsed inputs, it needs
+to be able to produce its own transition sequence
+t rather than relying on an external parser to sup-
+ply it as part of the input. To do this, the model
+predicts tt at each step using a simple two-way
+softmax classiﬁer whose input is the state of the
+tracking LSTM:
+
+(5) (cid:126)pt = softmax(Wtrans(cid:126)htracking + (cid:126)btrans)
+
+At test time, the model uses whichever transition
+(i.e., SHIFT or REDUCE) is assigned a higher prob-
+ability. The prediction function is trained to mimic
+the decisions of an external parser, and these deci-
+sions are used as the inputs to the model during
+training. For SNLI, we use the binary Stanford
+PCFG Parser parses that are included with the cor-
+pus. We did not ﬁnd scheduled sampling (Bengio
+et al., 2015)—allowing the model to use its own
+transition decisions in some instances at training
+time—to help.
+
+Implementation issues
+
+3.5
+Representing the stack efﬁciently A na¨ıve im-
+plementation of SPINN would require represent-
+ing a stack of size N for each timestep of each
+input sentence at training time to support back-
+propagation. This implies a per-example space re-
+quirement of N × T × D, which is prohibitively
+large for signiﬁcant batch sizes or sentence lengths
+N. Such a na¨ıve implementation would also re-
+quire copying a largely unchanged stack at each
+timestep, since each SHIFT or REDUCE operation
+writes only one new representation to the stack.
+
+if op = SHIFT then
+
+S[t] := bufferTop
+
+Algorithm 1 The thin stack algorithm
+1: function STEP(bufferTop, op, t, S, Q)
+2:
+3:
+4:
+5:
+6:
+7:
+8:
+
+right := S[Q.pop()]
+left := S[Q.pop()]
+S[t] := COMPOSE(left, right)
+
+else if op = REDUCE then
+
+Q.push(t)
+
+We propose an alternative space-efﬁcient stack
+representation inspired by the zipper technique
+(Huet, 1997), that we call thin stack. For each in-
+put sentence, we represent the stack with a single
+T × D matrix S. Each row St represents the top
+of the actual stack at timestep t. We maintain a
+queue of backpointers onto S that indicates which
+elements would be involved in a REDUCE opera-
+tion at any given step. Algorithm 1 describes the
+full mechanics of a stack feedforward in this com-
+pressed representation.
+It operates on the com-
+pressed T × D matrix S and a backpointer queue
+Q. Table 1 shows an example run.
+
+This stack representation requires substantially
+less space. It stores each element involved in the
+feedforward computation exactly once, meaning
+that this representation can still support efﬁcient
+backpropagation. Furthermore, all of the updates
+to S and Q can be performed batched and in-place
+on a GPU, yielding substantial speed gains. We
+describe speed results in Section 3.7.
+
+A simpler variant of this technique can be used
+to represent the buffer, since information is not
+written to the buffer during model operation.
+It
+can be stored as a single ﬁxed matrix with a scalar
+pointer variable indicating which element is the
+head at each step.
+
+Preparing the data At training time, SPINN re-
+quires both a transition sequence t and a token se-
+quence x as its inputs for each sentence. The token
+sequence is simply the words in the sentence in or-
+der. t can be obtained from any constituency parse
+for the sentence by ﬁrst converting that parse into
+an unlabeled binary parse, then linearizing it (with
+the usual in-order traversal), then taking each word
+token as a SHIFT transition and each ‘)’ as a RE-
+DUCE transition, as here:
+
+Unlabeled binary parse: ( ( the cat ) ( sat down ) )
+t: SHIFT, SHIFT, REDUCE, SHIFT, SHIFT, REDUCE, REDUCE
+
+x: the, cat, sat, down
+Handling variable sentence lengths For any
+sentence model to be trained with batched compu-
+tation, it is necessary to pad or crop sentences to a
+ﬁxed length. We ﬁx this length at N = 25 words,
+longer than about 98% of sentences in SNLI. Tran-
+sition sequences t are cropped at the left or padded
+at the left with SHIFTs. Token sequences x are
+then cropped or padded with empty tokens at the
+left to match the number of SHIFTs added or re-
+moved from t, and can then be padded with empty
+tokens at the right to meet the desired length N.
+
+the addition of
+
+3.6 TreeRNN-equivalence
+Without
+the tracking LSTM,
+SPINN (in particular the SPINN-PI-NT variant,
+for parsed input, no tracking) is precisely equiv-
+alent to a conventional tree-structured neural net-
+work model in the function that it computes, and
+therefore also has the same learning dynamics.
+In both, the representation of each sentence con-
+sists of the representations of the words combined
+recursively using a TreeRNN composition func-
+tion (in our case, the TreeLSTM function). The
+SPINN, however, is dramatically faster, and sup-
+ports both integrated parsing and a novel approach
+to context through the tracking LSTM.
+
+Inference speed
+
+3.7
+In this section, we compare the test time speed
+of our SPINN-PI-NT with an equivalent TreeRNN
+implemented in the conventional fashion and with
+a standard RNN sequence model. While the
+full models evaluated below are implemented
+and trained using Theano (Bergstra et al., 2010;
+Bastien et al., 2012), which is reasonably efﬁcient
+but not perfect for our model, we wish to com-
+pare well-optimized implementations of all three
+models. To do this, we reimplement the feedfor-
+ward1 of SPINN-PI-NT and an LSTM RNN base-
+line in C++/CUDA, and compare that implemen-
+tation with a CPU-based C++/Eigen TreeRNN im-
+plementation from Irsoy and Cardie (2014), which
+we modiﬁed to perform exactly the same compu-
+tations as SPINN-PI-NT.2 TreeRNNs like this can
+1We chose to reimplement and evaluate only the feedfor-
+ward/inference pass, as inference speed is the relevant perfor-
+mance metric for most practical applications.
+
+2The original code for Irsoy & Cardie’s model is available
+at https://github.com/oir/deep-recursive.
+We plan to release our modiﬁed code at publication time,
+alongside the optimized C++/CUDA models and the Theano
+source code for the full SPINN.
+
+Thin-stack GPU
+
+CPU (Irsoy and Cardie, 2014)
+
+RNN
+
+25
+
+20
+
+15
+
+10
+
+5
+
+)
+c
+e
+s
+(
+
+e
+m
+
+i
+t
+
+d
+r
+a
+w
+r
+o
+f
+d
+e
+e
+F
+
+0
+
+0
+
+256 512
+
+1,024
+Batch size
+
+2,048
+
+Figure 3: Feedforward speed comparison.
+
+only operate on a single example at a time and are
+thus poorly suited for GPU computation.
+
+Each model is restricted to run on sentences of
+30 tokens or fewer. We ﬁx the model dimension
+D and the word embedding dimension at 300. We
+run the CPU performance test on a 2.20-GHz 16-
+core Intel Xeon E5-2660 processor with hyper-
+threading enabled. We test our thin-stack imple-
+mentation and the RNN model on an NVIDIA Ti-
+tan X GPU.
+
+Figure 3 compares the sentence encoding speed
+of the three models on random input data. We ob-
+serve a substantial difference in runtime between
+the CPU and thin-stack implementations that in-
+creases with batch size. With a large but practi-
+cal batch size of 512, the largest we on which we
+tested the TreeRNN, our model is about 25x faster
+than the standard CPU implementation, and about
+4x slower than the RNN baseline.
+
+Though this experiment only covers SPINN-
+PI-NT, the results should be similar for the full
+SPINN model: most of the computation involved
+in running SPINN is involved in populating the
+buffer, applying the composition function, and
+manipulating the buffer and the stack, with the
+low-dimensional tracking and parsing components
+adding only a small additional load.
+
+4 NLI Experiments
+
+We evaluate SPINN on the task of natural lan-
+guage inference (NLI, a.k.a. recognizing textual
+entailment, or RTE; Dagan et al., 2006). NLI is a
+sentence pair classiﬁcation task, in which a model
+reads two sentences (a premise and a hypothesis),
+and outputs a judgment of entailment, contradic-
+tion, or neutral, reﬂecting the relationship between
+the meanings of the two sentences, as in this exam-
+ple from the SNLI corpus, which we use:
+
+Premise: Girl in a red coat, blue head wrap and jeans is
+making a snow angel.
+Hypothesis: A girl outside plays in the snow.
+Label: entailment
+Although NLI is framed as a simple three-way
+classiﬁcation task, it is nonetheless an effective
+way of evaluating the ability of some model to
+extract broadly informative representations of sen-
+tence meaning. In order for a model to perform re-
+liably well on NLI, it must be able to represent and
+reason with the core phenomena of natural lan-
+guage semantics, including quantiﬁcation, coref-
+erence, scope, and several types of ambiguity.
+
+SNLI is a corpus of 570k human-labeled pairs
+of scene descriptions like the one above. We use
+the standard train–test split and ignore unlabeled
+examples, which leaves about 549k examples for
+training, 9,842 for development, and 9,824 for
+testing. SNLI labels are roughly balanced, with
+the most frequent label, entailment, making up
+34.2% of the test set.
+
+4.1 Applying SPINN to SNLI
+Creating a sentence-pair classiﬁer To clas-
+sify an SNLI sentence pair, we run two copies
+of SPINN with shared parameters: one on the
+premise sentence and another on the hypothesis
+sentence. We then use their outputs (the (cid:126)h states
+at the top of each stack at time t = T ) to construct
+a feature vector (cid:126)xclassiﬁer for the pair. This feature
+vector consists of the concatenation of these two
+sentence vectors, their difference, and their ele-
+mentwise product (following Mou et al., 2015):
+
+(6) (cid:126)xclassiﬁer =
+
+Following Bowman et al. (2015a), this feature vec-
+tor is then passed to a series of 1024D ReLU
+neural network layers (i.e., an MLP; the num-
+ber of layers is tuned as a hyperparameter), then
+passed into a linear transformation, and then ﬁ-
+nally passed to a softmax layer, which yields a dis-
+tribution over the three labels.
+
+The objective function Our objective combines
+a cross-entropy objective Ls for the SNLI classiﬁ-
+cation task, a cross-entropy objective {Lp
+t } for
+each parsing decision for each of the sentences at
+each step t, and an L2 regularization term on the
+
+t ,Lh
+
+
+
+(cid:126)hpremise
+(cid:126)hhypothesis
+
+(cid:126)hpremise − (cid:126)hhypothesis
+(cid:126)hpremise (cid:12) (cid:126)hhypothesis
+
+
+
+Model
+
+Params.
+
+Trans. acc. (%)
+
+Train acc. (%)
+
+Test acc. (%)
+
+Lexicalized classiﬁer (Bowman et al., 2015a)
+
+Previous non-NN results
+
+—
+
+Previous sentence encoder-based NN results
+
+100D LSTM encoders (Bowman et al., 2015a)
+1024D pretrained GRU encoders (Vendrov et al., 2015)
+300D Tree-based CNN encoders (Mou et al., 2015)
+
+300D LSTM RNN encoders
+300D SPINN-PI-NT (parsed input, no tracking) encoders
+300D SPINN-PI (parsed input) encoders
+300D SPINN (unparsed input) encoders
+
+Our results
+
+221k
+15m
+3.5m
+
+3.0m
+3.4m
+3.7m
+2.7m
+
+—
+
+—
+—
+—
+
+—
+—
+—
+92.4
+
+99.7
+
+84.8
+98.8
+83.4
+
+83.9
+84.4
+89.2
+87.2
+
+78.2
+
+77.6
+81.4
+82.1
+
+80.6
+80.9
+83.2
+82.6
+
+Table 2: Results on SNLI 3-way inference classiﬁcation. Params. is the approximate number of trained
+parameters (excluding word embeddings for all models). Trans. acc. is the model’s accuracy in predict-
+ing parsing transitions at test time. Train and test are SNLI classiﬁcation accuracy.
+
+T−1(cid:88)
+
+trained parameters. The terms are weighted using
+the tuned hyperparameters α and λ:
+
+(7) Lm =Ls + α
+
+(Lp
+
+t + Lh
+
+t ) + λ|θ|2
+
+2
+
+t=0
+
+Initialization, optimization, and tuning We
+initialize the model parameters using the nonpara-
+metric strategy of He et al. (2015), with the excep-
+tion of the softmax classiﬁer parameters, which
+we initialize using random uniform samples from
+[−0.005, 0.005].
+
+We use minibatch SGD with the RMSProp op-
+timizer (Tieleman and Hinton, 2012) and a tuned
+starting learning rate that decays by a factor of
+0.75 every 10k steps. We apply both dropout (Sri-
+vastava et al., 2014) and batch normalization (Ioffe
+and Szegedy, 2015) to the output of the word em-
+bedding projection layer and to the feature vectors
+that serve as the inputs and outputs to the MLP that
+precedes the ﬁnal entailment classiﬁer.
+
+We train each model for 250k steps in each run,
+using a batch size of 32. We track each model’s
+performance on the development set during train-
+ing and save parameters when this performance
+reaches a new peak. We use early stopping, evalu-
+ating on the test set using the parameters that per-
+form best on the development set.
+
+An appendix discusses hyperparameter tuning.
+
+4.2 Models evaluated
+We evaluate four models. The four all use the
+sentence-pair classiﬁer architecture described in
+Section 4.1, and differ only in the function com-
+puting the sentence encodings. First, a single-
+layer LSTM RNN (similar to that of Bowman
+
+et al., 2015a) serves as a baseline encoder. Next,
+the minimal SPINN-PI-NT model (equivalent to a
+TreeLSTM) introduces the SPINN model design.
+SPINN-PI adds the tracking LSTM to that design.
+Finally, the full SPINN adds the integrated parser.
+We compare our models against several base-
+lines, including the strongest published non-neural
+network-based result from Bowman et al. (2015a)
+and previous neural network models built around
+several types of sentence encoders.
+
+4.3 Results
+Table 2 shows our results on SNLI inference clas-
+siﬁcation. For the full SPINN, we also report a
+measure of agreement between this model’s parses
+and the parses included with SNLI, calculated as
+classiﬁcation accuracy over transitions averaged
+across timesteps.
+
+We ﬁnd that the bare SPINN-PI-NT model per-
+forms little better than the RNN baseline, but that
+SPINN-PI with the added tracking LSTM per-
+forms well. The success of SPINN-PI, which is a
+hybrid tree-sequence model, suggests that the tree-
+and sequence-based encoding methods are at least
+partially complementary. The full SPINN model
+with its relatively weak internal parser performs
+slightly less well, but nonetheless robustly exceeds
+the performance of the RNN baseline.
+
+Both SPINN-PI and the full SPINN signiﬁ-
+cantly outperform all previous sentence-encoding
+models. Most notably, these models outperform
+the tree-based CNN of Mou et al. (2015), which
+also uses tree-structured composition for local fea-
+ture extraction, but uses simpler pooling tech-
+niques to build sentence features in the interest of
+efﬁciency. Our results show that a model that uses
+
+tree-structured composition fully (SPINN) outper-
+forms one which uses it only partially (tree-based
+CNN), which in turn outperforms one which does
+not use it at all (RNN).
+
+The full SPINN performed moderately well at
+reproducing the Stanford Parser’s parses of the
+SNLI data at a transition-by-transition level, with
+92.4% accuracy at test time. However, its tran-
+sition prediction errors were fairly evenly dis-
+tributed across sentences, and most sentences were
+assigned partially invalid transition sequences that
+either left a few words out of the ﬁnal representa-
+tion or incorporated a few padding tokens into the
+ﬁnal representation.
+
+4.4 Discussion
+The use of tree structure improves the perfor-
+mance of sentence-encoding models for SNLI.
+We suspect that this improvement is largely at-
+tributable to the more efﬁcient learning of accu-
+rate generalizations overall, and not to any partic-
+ular few phenomena. However, some patterns are
+identiﬁable in the results. In particular, it seems
+that tree-structured models are better able to fo-
+cus on the key actors and events named in a sen-
+tence (possibly by learning an approximation of
+the linguistic notion of headedness), and that this
+allows them to better focus on the central actors
+and events described in a sentence. For example,
+this pair was classiﬁed successfully by all three
+SPINN variants, but not by the RNN baseline (key
+words emphasized):
+Premise: A woman in red blouse is standing with small
+blond child in front of a small folding chalkboard.
+Hypothesis: a woman stands with her child
+Label: neutral
+The tree-sequence hybrid models seem to be
+especially good at reasoning over pairs of sen-
+tences with very different structures, for which it
+is helpful to use strict compositionality with the
+tree-structured component to get the meanings of
+the sentence parts, but then to also accumulate a
+broad sentence summary that abstracts away from
+the precise structures of each sentences. For exam-
+ple, this pair is classiﬁed correctly by both hybrid
+models, but not by the RNN or the SPINN-PI-NT:
+Premise: Nurses in a medical setting conversing over a
+plastic cup.
+Hypothesis: The nurses are discussing a patient.
+Label: neutral
+We suspect that the hybrid nature of the full
+SPINN model is also responsible for its ability to
+
+perform better than an RNN baseline even when
+its internal parser is relatively ineffective at pro-
+ducing correct full-sentence parses. We suspect
+that it is acting somewhat like the tree-based CNN,
+only with access to larger trees: using tree struc-
+ture to build up local phrase meanings, and then
+using the tracking LSTM, at least in part, to com-
+bine those meanings.
+
+5 Conclusions and future work
+We introduce a model architecture (SPINN-PI-
+NT) that is equivalent to a TreeLSTM, but an or-
+der of magnitude faster at test time. We expand
+that architecture into a tree-sequence hybrid model
+(SPINN-PI), and show that this yields signiﬁcant
+gains on the SNLI entailment task. Finally, we
+show that it is possible to exploit the strengths of
+this model without the need for an external parser
+by integrating a fast parser into the model (as in
+the full SPINN), and that the lack of external parse
+information yields little loss in accuracy.
+
+Because this paper aims to introduce a general
+purpose model for sentence encoding, we do not
+pursue the use of soft attention (Bahdanau et al.,
+2015; Rockt¨aschel et al., 2015), despite its demon-
+strated effectiveness on the SNLI task.3 However,
+we expect that it should be possible to produc-
+tively combine our model with soft attention to
+reach state-of-the-art performance.
+
+Our tracking LSTM uses only simple, quick-
+to-compute features drawn from the head of the
+buffer and the head of the stack. It is plausible that
+giving the tracking LSTM access to more informa-
+tion from the buffer and stack at each step would
+allow it to better represent the context at each tree
+node, yielding both better parsing and better sen-
+tence encoding. One promising way to pursue this
+goal would be to encode the full contents of the
+stack and buffer at each time step following the
+method used by Dyer et al. (2015).
+
+For a more ambitious goal, we expect that
+it should be possible to implement a variant of
+SPINN on top of a modiﬁed stack data structure
+with differentiable PUSH and POP operations (as
+in Grefenstette et al., 2015; Joulin and Mikolov,
+2015). This would make it possible for the model
+to learn to parse using guidance from the seman-
+tic representation objective, essentially allowing it
+
+3Attention based models like Rockt¨aschel et al. (2015)
+and the unpublished Cheng et al. (2016) have shown accu-
+racies as high as 89.0% on SNLI, but are more narrowly en-
+gineered to suit the task, and do not yield sentence encodings.
+
+to learn to produce parses that are, in aggregate,
+better suited to supporting semantic interpretation
+than those supplied in the training data.
+Acknowledgments
+We acknowledge funding from a Google Faculty
+Research Award and the Stanford Data Science
+Initiative. In addition, this material is based upon
+work supported by the National Science Founda-
+tion under Grant No. BCS 1456077. Any opin-
+ions, ﬁndings, and conclusions or recommenda-
+tions expressed in this material are those of the
+authors and do not necessarily reﬂect the views
+of the National Science Foundation. Some of the
+Tesla K40s used for this research were donated by
+the NVIDIA Corporation.
+
+References
+Alfred V. Aho and Jeffrey D. Ullman. 1972. The
+theory of parsing, translation, and compiling.
+Prentice-Hall, Inc.
+
+Dzmitry Bahdanau, Kyunghyun Cho, and Yoshua
+Bengio. 2015. Neural machine translation by
+jointly learning to align and translate. In Proc.
+ICLR.
+
+Fr´ed´eric Bastien, Pascal Lamblin, Razvan Pas-
+canu, James Bergstra, Ian J. Goodfellow, Ar-
+naud Bergeron, Nicolas Bouchard, and Yoshua
+Bengio. 2012. Theano: new features and speed
+improvements. Deep Learning and Unsuper-
+vised Feature Learning NIPS 2012 Workshop.
+Samy Bengio, Oriol Vinyals, Navdeep Jaitly, and
+Noam Shazeer. 2015. Scheduled sampling for
+sequence prediction with recurrent neural net-
+works. In Proc. NIPS.
+
+James Bergstra, Olivier Breuleux, Fr´ed´eric
+Bastien, Pascal Lamblin, Razvan Pascanu,
+Guillaume Desjardins, Joseph Turian, David
+Warde-Farley,
+and Yoshua Bengio. 2010.
+Theano: a CPU and GPU math expression com-
+piler. In Proc. Python for Scientiﬁc Computing
+Conference (SciPy).
+
+Samuel R. Bowman, Gabor Angeli, Christopher
+Potts, and Christopher D. Manning. 2015a. A
+large annotated corpus for learning natural lan-
+guage inference. In Proc. EMNLP.
+
+Samuel R. Bowman, Christopher D. Manning,
+and Christopher Potts. 2015b. Tree-structured
+composition in neural networks without tree-
+In Proc. 2015 NIPS
+structured architectures.
+
+Workshop on Cognitive Computation: Integrat-
+ing Neural and Symbolic Approaches.
+
+Jan Buys and Phil Blunsom. 2015. Generative in-
+cremental dependency parsing with neural net-
+works. In Proc. ACL.
+
+Danqi Chen and Christopher D. Manning. 2014. A
+fast and accurate dependency parser using neu-
+ral networks. In Proc. EMNLP.
+
+Jianpeng Cheng, Li Dong, and Mirella Lapata.
+2016. Long short-term memory-networks for
+machine reading. arXiv:1601.06733.
+
+Ido Dagan, Oren Glickman,
+
+and Bernardo
+Magnini. 2006. The PASCAL recognising tex-
+tual entailment challenge. In Machine learning
+challenges. Evaluating predictive uncertainty,
+visual object classiﬁcation, and recognising tec-
+tual entailment, Springer.
+
+David Dowty. 2007. Compositionality as an em-
+In Direct Compositionality,
+
+pirical problem.
+Oxford Univ. Press.
+
+Chris Dyer, Miguel Ballesteros, Wang Ling,
+Austin Matthews, and Noah A. Smith. 2015.
+Transition-based dependency parsing with stack
+long short-term memory. In Proc. ACL.
+
+Chris Dyer, Adhiguna Kuncoro, Miguel Balles-
+teros, and Noah A. Smith. 2016. Recurrent neu-
+ral network grammars. arXiv:1602.07776.
+
+Ahmad Emami and Frederick Jelinek. 2005. A
+neural syntactic language model. Machine
+learning 60(1-3).
+
+Christoph Goller and Andreas K¨uchler. 1996.
+Learning task-dependent distributed representa-
+tions by backpropagation through structure. In
+Proc. IEEE International Conference on Neural
+Networks.
+
+Edward Grefenstette, Karl Moritz Hermann,
+Mustafa Suleyman, and Phil Blunsom. 2015.
+Learning to transduce with unbounded memory.
+arXiv:1506.02516.
+
+Kaiming He, Xiangyu Zhang, Shaoqing Ren, and
+Jian Sun. 2015. Delving deep into rectiﬁers:
+Surpassing human-level performance on ima-
+genet classiﬁcation. arXiv:1502.01852.
+
+James Henderson. 2004. Discriminative training
+of a neural network statistical parser. In Proc.
+ACL.
+
+Sepp Hochreiter and J¨urgen Schmidhuber. 1997.
+
+Long short-term memory. Neural computation
+9(8).
+
+autoencoders for predicting sentiment distribu-
+tions. In Proc. EMNLP.
+
+Ilya Sutskever,
+
+Nitish Srivastava, Geoffrey Hinton, Alex
+Krizhevsky,
+and Ruslan
+Salakhutdinov. 2014. Dropout: A simple way
+to prevent neural networks from overﬁtting.
+JMLR 15.
+
+Ilya Sutskever, Oriol Vinyals, and Quoc V. Le.
+2014. Sequence to sequence learning with neu-
+ral networks. In Proc. NIPS.
+
+Kai Sheng Tai, Richard Socher, and Christo-
+pher D. Manning. 2015.
+Improved semantic
+representations from tree-structured long short-
+term memory networks. In Proc. ACL.
+
+Tijmen Tieleman and Geoffrey Hinton. 2012.
+Lecture 6.5 – RMSProp: Divide the gradi-
+ent by a running average of its recent magni-
+tude. COURSERA: Neural Networks for Ma-
+chine Learning 4:2.
+
+Ivan Titov and James Henderson. 2010. A latent
+variable model for generative dependency pars-
+ing. In Trends in Parsing Technology, Springer.
+Ivan Vendrov, Ryan Kiros, Sanja Fidler, and
+Raquel Urtasun. 2015. Order-embeddings of
+images and language. arXiv:1511.06361.
+
+Xiang Zhang, Junbo Zhao, and Yann LeCun.
+2015. Character-level convolutional networks
+for text classiﬁcation. arXiv:1509.01626.
+
+Xingxing Zhang, Liang Lu, and Mirella Lapata.
+2016. Top-down tree long short-term memory
+networks. arXiv:1511.00060.
+
+A Hyperparameters
+We use random search to tune the hyperparame-
+ters of the model, setting the ranges for search for
+each hyperparameter heuristically (and validating
+the reasonableness of the ranges on the develop-
+ment set), and then launching eight copies of each
+experiment each with newly sampled hyperparam-
+eters from those ranges. Table 3 (on the following
+page) shows the hyperparameters used in the best
+run of each model.
+
+G´erard Huet. 1997. The zipper. Journal of func-
+
+tional programming 7(05).
+
+Sergey Ioffe and Christian Szegedy. 2015. Batch
+normalization: Accelerating deep network
+training by reducing internal covariate shift.
+arXiv:1502.03167.
+
+Ozan Irsoy and Claire Cardie. 2014. Deep re-
+cursive neural networks for compositionality in
+language. In Proc. NIPS.
+
+Armand Joulin and Tomas Mikolov. 2015. Infer-
+ring algorithmic patterns with stack-augmented
+recurrent nets. In Proc. NIPS.
+
+Nal Kalchbrenner, Edward Grefenstette, and Phil
+Blunsom. 2014. A convolutional neural net-
+work for modelling sentences. In Proc. ACL.
+
+Eliyahu Kiperwasser and Yoav Goldberg. 2016.
+Easy-ﬁrst dependency parsing with hierarchical
+tree LSTMs. arXiv:1603.00375.
+
+Jiwei Minh-Thang Luong Li, Dan Jurafsky, and
+Eudard Hovy. 2015. When are tree structures
+necessary for deep learning of representations?
+In Proc. EMNLP.
+
+Lili Mou, Men Rui, Ge Li, Yan Xu, Lu Zhang,
+Rui Yan, and Zhi Jin. 2015. Recognizing entail-
+ment and contradiction by tree-based convolu-
+tion. arXiv:1512.08422.
+
+Joakim Nivre. 2003. An efﬁcient algorithm for
+projective dependency parsing. In Proc. IWPT.
+Jeffrey Pennington, Richard Socher, and Christo-
+pher D. Manning. 2014. GloVe: Global vectors
+for word representation. In Proc. EMNLP.
+
+Tim
+
+Edward
+
+Rockt¨aschel,
+
+Grefenstette,
+Karl Moritz Hermann, Tom´aˇs Koˇcisk`y, and Phil
+Blunsom. 2015. Reasoning about entailment
+with neural attention. arXiv:1509.06664.
+
+Stuart M. Shieber. 1983. Sentence disambiguation
+In Proc.
+
+by a shift-reduce parsing technique.
+ACL.
+
+Richard Socher, Cliff C. Lin, Andrew Y. Ng, and
+Christopher D. Manning. 2011a. Parsing natu-
+ral scenes and natural language with recursive
+neural networks. In Proc. ICML.
+
+Richard Socher,
+
+Jeffrey Pennington, Eric H
+Huang, Andrew Y. Ng, and Christopher D.
+Manning. 2011b.
+Semi-supervised recursive
+
+Param.
+Initial LR
+L2 regularization λ
+Transition cost α
+Embedding transformation dropout keep rate
+Classiﬁer MLP dropout keep rate
+Tracking LSTM size Dtracking
+Classiﬁer MLP layers
+
+Range
+2e-4–2e-2
+LOG
+8e-7–3e-5
+LOG
+0.5–4.0
+LIN
+80–95% LIN
+80–95% LIN
+24–128
+LOG
+1–3
+LIN
+
+Strategy RNN SPINN-PI-NT
+3e-4
+3e-6
+—
+83%
+94%
+—
+2
+
+5e-3
+4e-6
+—
+—
+94%
+—
+2
+
+SPINN-PI
+7e-3
+2e-5
+—
+92%
+93%
+61
+2
+
+SPINN
+2e-3
+3e-5
+3.9
+86%
+94%
+79
+1
+
+Table 3: Hyperparameter ranges and values. Range shows the hyperparameter ranges explored during
+random search. Strategy indicates whether sampling from the range was uniform, or log–uniform.
+
+

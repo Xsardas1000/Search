@@ -1,0 +1,1318 @@
+Learning Binary Codes and Binary Weights for Efﬁcient Classiﬁcation
+
+Fumin Shen†, Yadong Mu‡, Wei Liu(cid:93), Yang Yang†, Heng Tao Shen†(cid:92)
+
+† University of Electronic Science and Technology of China
+
+‡ AT&T Labs Research (cid:93) Didi Research, Beijing China (cid:92) The University of Queensland
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+4
+1
+
+ 
+ 
+]
+
+V
+C
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+6
+1
+1
+4
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Abstract
+
+This paper proposes a generic formulation that signif-
+icantly expedites the training and deployment of image
+classiﬁcation models, particularly under the scenarios of
+many image categories and high feature dimensions. As a
+deﬁning property, our method represents both the images
+and learned classiﬁers using binary hash codes, which are
+simultaneously learned from the training data. Classifying
+an image thereby reduces to computing the Hamming dis-
+tance between the binary codes of the image and classiﬁers
+and selecting the class with minimal Hamming distance.
+Conventionally, compact hash codes are primarily used for
+accelerating image search. Our work is ﬁrst of its kind to
+represent classiﬁers using binary codes. Speciﬁcally, we
+formulate multi-class image classiﬁcation as an optimiza-
+tion problem over binary variables. The optimization alter-
+natively proceeds over the binary classiﬁers and image hash
+codes. Proﬁting from the special property of binary codes,
+we show that the sub-problems can be efﬁciently solved
+through either a binary quadratic program (BQP) or linear
+program. In particular, for attacking the BQP problem, we
+propose a novel bit-ﬂipping procedure which enjoys high
+efﬁcacy and local optimality guarantee. Our formulation
+supports a large family of empirical loss functions and is
+here instantiated by exponential / hinge losses. Compre-
+hensive evaluations are conducted on several representative
+image benchmarks. The experiments consistently observe
+reduced complexities of model training and deployment,
+without sacriﬁce of accuracies.
+
+1. Introduction
+
+In recent years, large-scale visual recognition problem
+has attracted tremendous research enthusiasm from both
+academia and industry owing to the explosive increase of
+data size and feature dimensionality. Classifying an image
+into thousands of categories often entails heavy compu-
+tations by using a conventional classiﬁer, exempliﬁed by
+k nearest neighbor (k-NN) and support vector machines
+(SVM), on a commodity computer. For the image recogni-
+
+tion problem with many categories, the computational and
+memory overhead primarily stems from the large number
+of classiﬁers to be learned. The complexities can be
+high at the stages of both training and deploying these
+classiﬁer. Considering a classiﬁcation task with C different
+classes and D-dimensional feature representation, even the
+simplest linear models are comprised of D × C parameters.
+As an inspiring example to our work in this paper, the Im-
+ageNet dataset [1] contains annotated images from 21,841
+classes in total. When experimenting with some state-of-
+the-art visual features (e.g., 4096-dimensional deep neural
+networks feature), a huge number of 80 million parameters
+need to be learned and stored, which clearly indicates slow
+training and low efﬁcacy at the deployment phase. Real-
+world applications (such as industrial image search engine)
+often require near-real-time response. The conventional
+ways of training multi-class image classiﬁers thus have
+much space to be improved.
+
+Compact binary hash codes [2] have demonstrated no-
+table empirical success in facilitating large-scale similarity-
+based image search, referred to as image hashing in the lit-
+erature. In a typical setting of supervised learning, the hash
+codes are optimized to ensure smaller Hamming distances
+between images of the same semantic kind.
+In practice,
+image hashing techniques have been widely utilized owing
+to its low memory footprint and theoretically-guaranteed
+scalability to large data.
+
+Though the hashing techniques for image search has
+been a well-explored research area, its application on large-
+scale optimization still remains a nascent topic in the ﬁelds
+of machine learning and computer vision. Intuitively, one
+can harness the hash codes for the image classiﬁcation
+task through naive methods such as k-NN voting. Both
+the training and testing images are indexed with identical
+hashing functions. A new image is categorized by the
+majority semantic label within the hashing bucket where it
+is projected into. However, since the hash codes are initially
+optimized for image search purpose, such a naive scheme
+does not guarantee high accuracy for image recognition.
+
+The most relevant works to ours are approximately solv-
+ing non-linear kernel SVM via hashing-based data represen-
+
+tation [3–5]. These methods ﬁrst designate a set of hashing
+functions that transform the original features into binary
+codes. The original non-linear kernels (e.g., RBF kernel)
+are theoretically proved to be approximated by the inner
+product between binary hash bits. Prominent advantages
+of such a treatment are two-folds:
+the required hash bits
+only weakly hinge on the original feature dimensionality,
+and meanwhile the non-linear optimization problem is con-
+verted into a linear alternative. As a major drawback, these
+works still rely on the regular real-valued based classiﬁers
+upon the binary features. Though it enables the direct
+application of linear solvers, the potential of binary codes
+is not fully utilized.
+
+Our work is a non-trivial extension of the aforemen-
+tioned line of research. We further elevate the efﬁcacy of
+classiﬁcation models by binarizing both the features and the
+weights of classiﬁers. In other words, our goal is to develop
+a generic multi-class classiﬁcation framework. The classi-
+ﬁer weights and image codes are simultaneously learned.
+Importantly, both of them are represented by binary hash
+bits. This way the classiﬁcation problem is transformed
+to an equivalent and simpler operation, namely searching
+the minimal Hamming distance between the query and the
+C binary weight vectors. This can be extremely fast by
+using the built-in XOR and popcount operations in modern
+CPUs. We implement this idea by formulating the problem
+of minimizing the empirical classiﬁcation error with purely
+binary variables.
+
+The major technical contributions of this work are sum-
+
+marized as below:
+
+1. We deﬁne a novel problem by binarizing both classi-
+ﬁers and image features and simultaneously learning
+them in a uniﬁed formulation. The prominent goal is
+to accelerate large-scale image recognition. Our work
+represents an unexplored research direction, namely
+extending hashing techniques from fast image search
+to the new topic of hashing-accelerated image classiﬁ-
+cation.
+
+2. An efﬁcient solver is proposed for the binary opti-
+mization problem. We decouple two groups of binary
+variables (image codes and binary classiﬁer weights)
+and adopt an alternating-minimizing style procedure.
+Particularly, we show that the sub-problems are in
+the form of either binary quadratic program (BQP)
+or linear program. An efﬁcient bit-ﬂipping scheme is
+designed for the BQP sub-problem. Proﬁting from the
+special traits of binary variables, we are able to specify
+the local optimality condition of the BQP.
+
+3. Our formulation supports a large family of empirical
+loss functions and is here instantiated by exponential
+/ hinge losses.
+In our quantitative evaluations, both
+
+(a) Classiﬁcation accuracy.
+
+(b) Model training complexity.
+
+Figure 1: Comparison of our method with the LibLinear imple-
+mentation of Linear SVM for classiﬁcation on the SUN dataset
+with 108K images from 397 scene categories. By coding both the
+image feature and learned classiﬁers with a small number of hash
+bits, our method achieves better results than Linear SVM, even
+with much smaller model training complexity.
+
+variants are compared with key competing algorithms,
+particulary a highly-optimized implementation of the
+SVM algorithm known as LibLinear [6]. Our proposed
+method demonstrates signiﬁcant superiority in terms
+of train/test CPU time and the classiﬁcation accuracy,
+as brieﬂy depicted by Figure 1.
+
+2. Related work
+
+Let us ﬁrst review the related works which strongly
+motivate ours. They can be roughly cast into two categories:
+Hashing for fast image search and beyond:
+learning
+compact hash codes [7, 8] recently becomes a hot research
+topic in the computer vision community. The proliferation
+of digital photography has made billion-scale image collec-
+tions a reality, and efﬁciently searching a similar image to
+the query is a critical operation in such image collections.
+
+The seminal work of LSH [2] sheds a light on fast image
+search with theoretic guarantee.
+In a typical pipeline of
+hash code based image search [9, 10], a set of hashing
+functions are generated either in an unsupervised manner
+or learned by perfectly separating similar / dissimilar data
+pairs on the training set. The latter is also called supervised
+hashing since it often judges the similarity of two samples
+according to their semantic labels. For an unseen image, it
+ﬁnds the most similar images in the database by efﬁciently
+comparing the corresponding hash codes. It can be accom-
+plished in sub-linear time using hash buckets [2]. Represen-
+tative methods in this line include Binary Reconstructive
+Embedding (BRE [11]), Minimal Loss Hashing (MLH
+[12]), Kernel-Based Supervised Hashing (KSH [13]), CCA
+based Iterative Quantization (CCA-ITQ [14]), FastHash
+[15], Graph Cuts Coding (GCC [16]), etc.
+
+The success of hashing technique is indeed beyond fast
+image search. For example, Dean et al. [17] used hash
+tables to accelerate the dot-product convolutional kernel
+operator in large-scale object detection, achieving a speed-
+
+Code length3264128256512Accuracy0.60.650.70.750.8Linear SVMOur methodCode length3264128256512Training time (s)0100200300400Linear SVMOur methodup of approximately 20,000 times when evaluating 100,000
+deformable-part models.
+
+Hashing for large-scale optimization: Noting the Ham-
+ming distance is capable of faithfully preserve data similar-
+ity, it becomes a natural thought to extend it for approximat-
+ing non-linear kernels. Optimizing with non-linear kernels
+generally require more space to store the entire kernel
+matrix, which prohibits its scalability to large data. Real
+vectors based explicit feature mapping [18] partially reme-
+dies above issue, approximating kernel functions by the
+inner product between real vectors. However, they typically
+require high dimension towards an accurate approximation,
+and is thus beyond the scope of most practitioners. A more
+recent strand of research instead approximates non-linear
+kernel with binary bits, of which the prime examples can
+be found in [3–5].
+In particular, Mu et al. developed a
+random subspace projection which transforms original data
+into compact hash bits. The inner product of hash code
+essentially plays the role of kernel functions. Consequently,
+the non-linear kernel SVM as their problem of interest can
+be converted into a linear SVM and resorts to efﬁcient linear
+solvers like LibLinear [6].
+
+The philosophy underlying all aforementioned works
+can be summarized as binarizing the features and harness-
+ing the compactness of binary code. We here argue that
+the potential of hashing technique in the context of large-
+scale classiﬁcation has not been fully explored yet. Related
+research is still in its embryonic stage. For example, a
+recent work by Shen et al. [19] proposed a Supervised
+Discrete Hashing (SDH) method under the assumption that
+good hash codes were optimal for linear classiﬁcation.
+However, similar to other methods, SDH still classiﬁed the
+learned binary codes by real-valued weights. Thus the test
+efﬁciency for binary codes is still not improved compared
+to real-valued features.
+
+After surveying related literature, we are motivated to
+advocate in this paper an extreme binary learning model,
+wherein both image features and classiﬁers shall be repre-
+sented by binary bits. This way the learned models get rid of
+real-valued weight vectors and can fully beneﬁt from high-
+optimized hash bit operators such as XOR.
+
+3. The proposed model
+
+Suppose that we have generated a set of binary codes
+i=1 ∈ {−1, 1}r×n, where bi is the r-bit binary
+i=1.
+
+B = {bi}n
+code for original data xi from the training set X = {xi}n
+For simplicity, we assume a linear hash function
+
+h(x) = sgn(P(cid:62)x),
+
+(1)
+
+where P ∈ Rd×r.
+
+In the context of linear classiﬁcation, the binary codes b
+
+is classiﬁed according to the maximum of the score vector
+
+1 b,··· , wT
+
+C b]T,
+
+WTb = [wT
+
+(2)
+where wc ∈ {−1, 1}r is the binary parameter vector for
+class c ∈ [1,··· , C]. Taking advantage of the binary
+nature of both wc and b, the inner product w(cid:62)
+c b can be
+efﬁciently computed by r − 2DH(wc, b), where DH(·,·) is
+the Hamming distance. Thereby the standard classiﬁcation
+problem is transformed to searching the minimum from
+C Hamming distances (or equivalently the maximum of
+binary code inner products).
+
+Following above intuition, this paper proposes a multi-
+class classiﬁcation framework, simultaneously learning the
+binary feature codes and classiﬁer. Suppose bi is the binary
+code of sample xi and it shall be categorized as class
+ci. Ideally, it expects the smallest Hamming distance (or
+largest inner product) to wci, in comparison with other
+classiﬁer wc, c (cid:54)= ci. An intuitive way of achieving this is
+through optimizing the inter-class “margin”. Formally, we
+(cid:96)(·) is a generic loss function. We re-formulate multi-class
+classiﬁcation problem as below:
+
+can minimize the loss (cid:96)(cid:0) − (w(cid:62)
+(cid:96)(cid:0) − (w(cid:62)
+
+c bi)(cid:1), ∀c, where
+c bi)(cid:1)
+
+bi − w(cid:62)
+
+bi − w(cid:62)
+
+n(cid:88)
+
+C(cid:88)
+
+(3)
+
+ci
+
+ci
+
+i=1
+
+c=1
+
+bi ∈ {−1, 1}r, ∀i, wc ∈ {−1, 1}r, ∀c.
+
+We instantiate (cid:96)(·) with the exponential
+
+loss (Sec-
+tion 3.1) and hinge loss (Section 3.2).
+In fact, the loss
+function in Problem (3) can be broadly deﬁned. Any
+proper loss function (cid:96)(·) can be applied as long as it is
+monotonically increasing.
+3.1. Learning with exponential loss
+
+Using the exponential loss function, we have the formu-
+
+min
+W,B
+
+s.t.
+
+lation below:
+
+n(cid:88)
+
+C(cid:88)
+
+exp(cid:2)−(w(cid:62)
+
+c bi)(cid:3)
+
+bi − w(cid:62)
+
+min
+W,B
+s.t. bi ∈ {−1, 1}r, ∀i, wc ∈ {−1, 1}r, ∀c.
+
+c=1
+
+i=1
+
+ci
+
+(4)
+
+We tackle problem (4) by alternatively solving the two
+
+sub-problems with W and B, respectively.
+
+3.1.1 Classifying binary codes with binary Weights
+
+Assume B is known. We iteratively update W row by row,
+i.e., one bit each time for wc, c = 1,··· , C, while keep all
+other r − 1 bits ﬁxed. Let w(k) denote the kth entry of w
+and w(\k) the vector which zeros its k-th element. We then
+have
+
+exp(w(cid:62)b) = exp(cid:2)w(\k)(cid:62)b + w(k)b(k)(cid:3)
+
+= exp(cid:2)w(\k)(cid:62)b(cid:3) · exp [w(k)b(k)] .
+
+(5)
+
+Algorithm 1 Sequential bit ﬂipping
+1: while local optimality condition does not hold do
+2:
+
+Calculate the bit-ﬂipping gain ∆w(c)→−w(c) for c =
+1, . . . , C;
+Select ˆc = arg minc ∆w(c)→−w(c) and ∆min =
+minc ∆w(k)→−w(c);
+if ∆min < 0 then
+
+Set w(c) ← −w(c);
+
+(6)
+
+3:
+
+else
+
+4:
+5:
+6:
+Exit;
+7:
+end if
+8:
+9: end while
+
+It can be veriﬁed that
+
+(cid:40) e−1+e1
+
+exp [w(k)b(k)]
+
+2 + e−1−e1
+2 − e−1−e1
+
+2
+
+2
+
+e−1+e1
+
+=
+
+· w(k), b(k) = −1
+· w(k), b(k) = 1.
+
+Denote u = e−1+e1
+
+and v = e−1−e1
+
+2
+
+2
+
+be simpliﬁed by the sign of b(k) as
+
+. Equation (6) can
+
+exp [w(k)b(k)] = u − v · b(k)w(k).
+
+(7)
+
+Equation (7) clearly shows the exponential function of the
+product of two binary bits equals to a linear function of the
+product. By applying (5) and (7), we write the loss term in
+(4) as follows.
+
+exp(cid:2)−(w(cid:62)
+
+ci
+
+c bi)(cid:3)
+
+bi − w(cid:62)
+
+ci
+
+bi)
+
+c bi) · exp(−w(cid:62)
+
+= exp(w(cid:62)
+(cid:105)
+=γick · [u − v · bi(k)wc(k))] · [u + v · bi(k)wci(k))] ,
+
+(cid:104)(cid:0)wc(\k) − wci(\k)(cid:1)(cid:62)
+
+.
+where the constant γick = exp
+Clearly, the non-linear exponential loss becomes a quadratic
+polynomial with regard to wc(k).
+After merging terms with the same orders, optimizing
+problem (4) with regard to wk = [w1(k);··· ; wC(k)]
+becomes
+
+bi
+
+(8)
+
+wk ← arg min
+
+wk
+
+1
+2
+
+wk(cid:62)
+
+Hkwk + wk(cid:62)gk,
+
+(9)
+
+where
+
+By ﬂipping w(c), the gain of the objective function of
+
+problem (9) is
+
+∆wk(c)→−wk(c) = f (−wk(c)) − f (wk(c)).
+Regarding the local optimality condition of problem (9),
+
+(11)
+
+we have the observation below:
+Proposition 1. (Local optimality condition): Let w∗ be a
+solution of problem (9). w∗ is a local optimum when the
+condition ∆w(c)→−w(c) ≥ 0 holds for c = 1, . . . , C.
+Proof. The conclusion holds by a simple application of
+proof of contradiction. Recall that w is a binary vector.
+Flipping any bit of w will incur speciﬁc change of the
+objective function as described by ∆w(i)→−w(i). When the
+changes incurred by all these ﬂipping operations are all non-
+negative, w∗ is supposed to be locally optimal. Otherwise,
+we can ﬂip the bit with negative ∆w(i)→−w(i) to further
+optimize the objective function.
+
+Hk = −2v2YΓk,
+gk = uvY(bk (cid:12) Γ1) − uvΓ(cid:62)bk.
+
+(10)
+
+With the above analysis, we summarize our algorithm
+
+for updating the C-bit wk as in Algorithm 1.
+
+Here Γk ∈ Rn×C includes its entries γick, bk is the n-
+dimension vector including the kth binary bits of training
+data. Y ∈ RC×n is the label matrix whose entry yci at
+coordinate (c, i) equals to 1 if sample xi belongs to class c
+and 0 otherwise. (cid:12) denotes the element-wise product. 1 is
+the vector with all ones.
+
+Problem (9) is a binary quadratic program (BQP) and can
+be efﬁciently solved by sequential bit ﬂipping operation. A
+local optimum can be guaranteed. We solve problem (9)
+by investigating the local optimality condition. Intuitively,
+for any local optimum, ﬂipping any of its hash bits will not
+decrease the objective value of problem (9). Let H∗,c, Hc,∗
+denote the column or row vector indexed by c respectively.
+g(c) and w(c) represents the cth element of g and w,
+respectively. In problem (9), collecting all terms pertaining
+to w(c) obtains
+
+(cid:0)Hk(cid:62)
+
+∗,c + Hk
+
+c,∗(cid:1) wk · wk(c) + gk(c) · wk(c).
+
+f (wk(c)) =
+
+1
+2
+
+3.1.2 Binary code learning
+
+Similar as the optimization procedure for W, we solve for
+B by a coordinate descent scheme. In particular, at each
+iteration, all the rest r − 1 hash bits are ﬁxed except for the
+k-th hash bit bk = [b1(k);··· ; bn(k)]. Let bi(\k) denote
+the vector which zeros its k-th element bi(k). We rewrite
+equation (8) w.r.t bi(k) as
+
+=zick · exp [(wc(k) − wci(k))bi(k)]
+
+ci
+
+bi − w(cid:62)
+
+exp(cid:2)−(w(cid:62)
+
+c bi)(cid:3)
+where zick = exp(cid:2)(wc − wci)(cid:62)bi(\k)(cid:3).
+
+
+exp [(wc(k) − wci(k))bi(k)]
+0,
+
+Similar as (6), we have
+
+2 + e−2−e2
+2 − e−2−e2
+
+e−2+e2
+e−2+e2
+
+=
+
+2
+
+2
+
+wci(k) = wc(k)
+
+· bi(k), wci (k) = 1, wc(k) = −1
+· bi(k), wci(k) = −1, wc(k) = 1.
+
+(12)
+
+3.2. Learning with the hinge loss
+
+With the widely used hinge loss, we obtain
+
+n(cid:88)
+
+C(cid:88)
+
+min
+B,W,ξ
+
+s.t.
+
+ξi
+
+λ||W||2 +
+∀i, c wT
+c bi ≥ 1 − ξi,
+bi = h(xi), ∀i, wc ∈ {−1, 1}r, ∀c.
+
+bi + yci − wT
+
+c=1
+
+i=1
+
+ci
+
+(16)
+
+Here ξi ≥ 0 is the slack variable; Ir is the r × r identity
+matrix. We denote yci = 1 if xi belongs to class c and
+−1 otherwise. The non-negative constraint ξi ≥ 0 always
+holds: If ξi < 0 for a particular bi, the ﬁrst constraint in
+(16) will be violated when yci = 1.
+In other words, the
+constraint corresponding to the case the label of bi equals
+to c ensures the non-negativeness of ξi. This formulation
+is similar to the multi-class SVM [20] except that it is
+exposed to the binary constraints of both input features and
+classiﬁcation matrix.
+
+Similar as with the exponential loss, we tackle prob-
+lem (16) by alternatively solving the two sub-problems
+regarding to W and B, respectively. Observing ||W||2 is
+constant, we can write problem (16) as w.r.t. W,
+
+n(cid:88)
+
+C(cid:88)
+
+c bi − wT
+
+ci
+
+(wT
+
+min
+W
+s.t. wc ∈ {−1, 1}r,∀c.
+
+c=1
+
+i=1
+
+bi)
+
+(17)
+
+Collecting all terms with wc, ∀c, problem (17) writes
+
+C(cid:88)
+
+(cid:0) n(cid:88)
+
+wT
+c
+
+min
+W
+
+bi − C
+s.t. wc ∈ {−1, 1}r,∀c,
+
+c=1
+
+i=1
+
+n(cid:88)
+
+(cid:1)
+
+bi
+
+i=1,ci=c
+
+which has optimal solution
+
+wc = sgn(cid:0)C
+
+n(cid:88)
+
+bi − n(cid:88)
+
+(cid:1),∀c.
+
+bi
+
+(18)
+
+(19)
+
+(a) Updating W.
+
+(b) Updating B.
+
+Figure 2: Object value as a function of bit updating itera-
+tion k in optimizing W and B on the dataset of SUN397.
+
+We can see that, the non-linear exponential loss term be-
+comes either a constant or linear function with regard to
+bi(k).
+
+2
+
+2
+
+C(cid:88)
+C(cid:88)
+
+c=1
+
+, v(cid:48) = e−2−e2
+
+c bi)(cid:3)
+
+Denote u(cid:48) = e−2+e2
+
+exp(cid:2)−(w(cid:62)
+
+. Let matrix Zk ∈
+Rn×C include its entry at the coordinate (i, c) as zick if
+wci(k) = 1, wc(k) = −1 and 0 otherwise; similarly let
+matrix ¯Zk ∈ Rn×C include its entry at the coordinate (i, c)
+as zick if wci(k) = −1, wc(k) = 1 and 0 otherwise. Then
+the loss in (4) can be written as w.r.t bk
+n(cid:88)
+n(cid:88)
+n(cid:88)
+where zk(i) =(cid:80)C
+
+c=1 Zk(i, c) and ¯zk(i) =(cid:80)C
+
+zk(i) · (u(cid:48) + v(cid:48)bi(k)) + ¯zk(i) · (u(cid:48) − v(cid:48)bi(k)),
+
+bi − w(cid:62)
+
+¯Zk(i, c).
+
+Zk(i, c) · (u(cid:48) + v(cid:48)bi(k)) + ¯Zk(i, c) · (u(cid:48) − v(cid:48)bi(k))
+
+(13)
+
+(14)
+
+c=1
+
+c=1
+
+i=1
+
+i=1
+
+i=1
+
+=
+
+=
+
+ci
+
+Then we have the following optimization problem
+
+v(cid:48)(zk − ¯zk)(cid:62)bk
+min
+bk
+s.t. bk ∈ {−1, 1}r,
+
+i=1,ci=c
+
+i=1
+
+(15)
+
+Wo of size r × n include its ith column as wo
+
+(cid:80)C
+For the sub-problem regarding to B, we ﬁrst let matrix
+i =
+c=1 wc − Cwci. Problem (17) writes w.r.t. B as
+
+which has a optimal solution bk = −sgn(v(cid:48)(zk − ¯zk)).
+
+Figure 2 shows the objective value as a function of the
+bit updating iteration number. As can be seen, with the pro-
+posed coordinate descent optimizing procedure for both W
+and B, the object value consistently decreases as updating
+the hash bits in each sub-problem. The optimization for
+the original problem (4) typically converges in less than 3
+iterations of alternatively optimizing W and B.
+
+B
+
+trace(WoTB)
+
+min
+s.t. B ∈ {−1, 1}r×n.
+
+(20)
+
+B can be efﬁciently computed by −sgn(Wo). It is clear
+that, both of the two sub-problems associated with B and
+W have closed-form solutions, which signiﬁcantly reduce
+the computation overhead of classiﬁer training and binary
+code learning.
+
+Bit updating iteration20406080100120Object value×1074.054.14.154.24.254.3Bit updating iteration20406080100120Object value×107123453.3. Binary code prediction
+
+With the binary codes B for training data X obtained,
+the hash function h(x) = sgn(PTx) is obtained by solving
+a simple linear regression system
+
+P = (XTX)−1XTB.
+
+Then for a new sample x, the classiﬁcation is conducted by
+searching the minimum of C Hamming distances:
+
+{DH(cid:0)wc, h(x)(cid:1)}, c = 1,··· , C.
+
+c∗ = arg min
+
+c
+
+(21)
+
+The binary coding step occupies the main computation
+
+in the testing stage, which is O(dr) in time complexity.
+
+4. Experiments
+
+In this section, we evaluate the proposed two methods
+on three large-scale datasets: CIFAR-101, SUN397 [21]
+and ImageNet [1]. As a subset of the well-known 80M
+tiny image collection [22], the CIFAR-10 dataset consists
+of 60,000 images which are manually labelled as 10 classes
+with 6, 000 samples for each class. We represent each image
+in this dataset by a GIST feature vector [23] of dimension
+512. The whole dataset is split into a test set with 1, 000
+samples and a training set with all remaining samples.
+SUN397 [21] contains about 108K images from 397 scene
+categories, where each image is represented by a 1,600-
+dimensional feature vector extracted by PCA from 12,288-
+dimensional Deep Convolutional Activation Features [24].
+We use a subset of this dataset including 42 categories with
+each containing more than 500 images; 100 images are
+sampled uniformly randomly from each category to form
+a test set of 4,200 images. As a subset of ImageNet [1],
+the large dataset ILSVRC 2012 contains over 1.2 million
+images of totally 1,000 categories. We form the evaluation
+database by the 100 largest classes with total 128K images
+from training set, and 50,000 images from validation set as
+test set. We use the 4096-dimensional features extracted by
+the convolution neural networks (CNN) model [25].
+
+The proposed methods (denoted by Ours-Exponential
+and Ours-Hinge for the exponential and hinge loss, re-
+spectively) are extensively compared with two popular
+linear classiﬁers: one-vs-all linear SVM (OVA-SVM) and
+multi-class SVM (Multi-SVM [20]), both of which are
+implemented using the LibLinear software package [6].
+For these two methods, we tune the parameter c from the
+range [1e-3, 1e3] and the best results are reported. We
+also compare our methods against several state-of-the-art
+binary code learning methods including Locality Sensitive
+Hashing (LSH) implemented by signed random projections,
+CCA-ITQ [14], and SDH [19]. The classiﬁcation results
+
+1http://www.cs.toronto.edu/˜kriz/cifar.html.
+
+of these hashing methods are obtained by performing the
+multi-class linear SVM over the predicted binary codes by
+the corresponding hash functions. We use the public codes
+and suggested parameters of these methods from the au-
+thors. We extensively evaluate these compared methods in
+terms of storage memory overhead, classiﬁcation accuracy
+and computation time.
+
+4.1. Accuracy and computational efﬁciency
+
+In this part, we extensively evaluate the proposed two
+methods with the compared algorithms in both classiﬁca-
+tion accuracy and computation time. We use 128-bit for our
+method and the three hashing algorithms LSH, CCA-ITQ
+and SDH.
+
+We report the results on SUN397, ImageNet and CIFAR-
+10 in Table 1. Between the algorithms with different
+loss functions of our proposed model, we can see that the
+method with the exponential loss performs slightly better
+than that with the hinge loss, while the latter one beneﬁts
+from a much more efﬁcient training. This is not surprising
+because Ours-Hinge solves two alternating sub-problems
+both with closed-form solutions.
+
+Compared to other methods, the results clearly show
+that, our methods achieve competitive (or even better) clas-
+siﬁcation accuracies on all three large-scale datasets with
+the state-of-the-art linear SVMs.
+In the meanwhile, even
+being constrained to learn binary classiﬁcation weights, our
+methods obtain much better results than the compared hash-
+ing algorithms. Speciﬁcally, Ours-Exponential outperforms
+the best results obtained the hashing algorithms by 2.88%,
+2.4% and 2.8% on SUN397, ImageNet and CIFAR-10,
+respectively.
+
+In terms of training time, we can see that our method
+with the hinge loss runs way faster than all other methods on
+all the evaluated three datasets. In particular, on SUN397,
+Ours-Hinge is 50× and 23× faster than the LibLinear
+implementations of one-vs-all SVM and mult-class SVM.
+Compared with the hashing algorithm, our method runs
+over 28× faster than the fastest LSH followed by Liblinear.
+For testing time, the beneﬁt of binary dimension reduction
+for our methods together with other three hashing algo-
+rithms is clearly shown on the SUN397 dataset with a large
+number of categories. Our methods requires less testing
+time than the hashing based classiﬁcation methods, which
+is due to the extremely fast classiﬁcation implemented by
+searching in the Hamming space.
+
+We also evaluate the compared methods with different
+code lengths, where the detailed results on SUN397 and
+ImageNet are shown in Figure 3. From Figure 3, it is
+clear that with a relatively small number of bits (e.g., 256
+bits), our method can achieve close classiﬁcation perfor-
+mance to or even better than the real-valued linear SVM
+with real-valued features. We can also observe that our
+
+Table 1: Comparative results in terms of test accuracy (%), training and testing time (seconds). Experiments are conducted
+on a standard PC with a quad-core Intel CPU and 32GB RAM. For LSH, CCA-ITQ, SDH and our methods, 128 bits are
+used. OVA-SVM and Multi-SVM is performed with the implementation of LibLinear, where the best accuracies are reported
+with parameter c chosen from {1e-3, 1e-2, 1e-1, 1, 1e1, 1e2, 1e3}.
+
+Method
+
+OVA-SVM
+Multi-SVM
+
+LSH
+
+CCA-ITQ
+
+SDH
+
+Ours-Exponential
+
+Ours-Hinge
+
+SUN397
+train time
+818.87
+380.94
+417.42
+452.34
+2522.33
+772.11
+16.45
+
+acc (%)
+77.39
+75.28
+54.11
+69.33
+72.56
+75.44
+76.56
+
+test time
+1.55e-5
+1.01e-5
+7.75e-6
+8.78e-6
+7.43e-6
+3.67e-6
+3.86e-6
+
+acc (%)
+79.84
+79.48
+58.16
+76.30
+76.64
+79.04
+77.88
+
+ImageNet
+train time
+151.02
+93.12
+107.41
+142.95
+1102.21
+245.14
+35.16
+
+test time
+1.15e-5
+1.21e-5
+1.32e-5
+1.25e-5
+1.43e-5
+6.54e-6
+6.86e-6
+
+CIFAR-10
+train time
+
+acc (%)
+
+57.1
+57.7
+39.0
+56.4
+55.3
+59.2
+54.2
+
+55.17
+35.55
+39.64
+47.23
+115.63
+16.01
+2.31
+
+test time
+4.02e-7
+4.27e-7
+2.26e-6
+2.35e-6
+2.32e-6
+2.01e-6
+2.13e-6
+
+(a) SUN397
+
+(a) SUN397
+
+(b) ImageNet
+
+(b) ImageNet
+
+Figure 3: Comparative results of various algorithms in
+classiﬁcation accuracy on SUN397 and ImageNet.
+
+Figure 4: Comparative results of various algorithms in
+training time on SUN397 and ImageNet.
+
+method consistently outperforms other hashing algorithms
+by noticeable gaps at all code lengths on SUN397. On the
+ImageNet dataset, our method achieves marginally better
+results than SDH and CCA-ITQ, while much better than the
+random LSH algorithm.
+
+Figure 4 demonstrates the consumed training time by our
+method and Linear SVM by the Liblinear solver on two
+
+large-scale datasets. The computation efﬁciency advantage
+of our method is clearly shown. Our method has a nearly
+linear training time complexity with the code length, which
+can facilitate its potentially applications in high dimensional
+binary vector learning.
+
+Code length3264128256512Accuracy0.20.30.40.50.60.70.8Our methodLinear SVMLSHCCA-ITQSDHCode length3264128256512Accuracy0.30.40.50.60.70.8Our methodLinear SVMLSHCCA-ITQSDHCode length3264128256512Training time (s)0100200300400Our methodLinear SVMCode length3264128256512Training time (s)30405060708090100Linear SVMOur methodTable 2: Memory overhead (MB) to store the training
+features and classiﬁcation model using Linear SVM and our
+method (128-bit). Note that, for our method, the trained
+model includes the real-valued hashing matrix (P) and the
+binary classiﬁcation weight matrix W.
+
+Dataset
+
+ImageNet
+SUN397
+
+Training features
+
+Linear SVM Ours
+24.37
+2.01
+
+3943.91
+1283.83
+
+Classiﬁcation model
+Linear SVM Ours
+9.92
+1.54
+
+30.86
+4.79
+
+4.2. Running memory overhead
+
+In this subsection, we compare our method with linear
+SVM in term of running memory overhead for loading
+training features in the training stage and storing classiﬁ-
+cation models in the testing stage. For our method, the
+trained model includes the real-valued hash function matrix
+(P) and the binary classiﬁcation weight matrix. The results
+are reported in Table 2. It is clearly shown that our approach
+requires much less memory than Linear SVM for loading
+both the training features and classiﬁcation models. Taking
+the ImageNet database for example, Linear SVM needs
+over 150 times more RAM than our method for the training
+data, and over 3 times more RAM for the trained models.
+
+5. Conclusions
+
+This work proposed a novel classiﬁcation framework,
+by which classiﬁcation was equivalently transformed to
+searching the nearest binary weight code in the Hamming
+space. Different from previous methods, both the feature
+and classiﬁer weight vectors were simultaneously learned
+with binary hash codes. Our framework could employ a
+large family of empirical loss functions, and we here espe-
+cially studied the representative exponential and hinge loss.
+For the two sub-problems regarding to the binary classiﬁer
+and image hash codes, a binary quadratic program (BQP)
+and linear program was formulated, respectively. In partic-
+ular, for the BQP problem, a novel bit-ﬂipping procedure
+which enjoys high efﬁcacy and local optimality guarantee
+was presented. The two methods with exponential loss and
+hinge loss were extensively evaluated on several large-scale
+image datasets. Signiﬁcant computation overhead reduction
+of model training and deployment were obtained, while
+without sacriﬁce of classiﬁcation accuracies.
+
+References
+[1] J. Deng, W. Dong, R. Socher, L.-J. Li, K. Li, and
+L. Fei-Fei, “Imagenet: A large-scale hierarchical im-
+
+[5] Y. Mu, G. Hua, W. Fan, and S.-F. Chang, “Hash-
+svm: Scalable kernel machines for large-scale visual
+classiﬁcation,” in Proc. IEEE Conf. Comp. Vis. Patt.
+Recogn., 2014, pp. 979–986.
+
+[6] R. Fan, K. Chang, C. Hsieh, X. Wang, and C. Lin,
+“Liblinear: A library for large linear classiﬁcation,” J.
+Mach. Learn. Res., vol. 9, pp. 1871–1874, 2008.
+
+[7] X. Li, G. Lin, C. Shen, A. van den Hengel, and
+A. Dick, “Learning hash functions using column gen-
+eration,” in Proc. Int. Conf. Mach. Learn., 2013.
+
+[8] Y. Weiss, A. Torralba, and R. Fergus, “Spectral hash-
+
+ing,” in Proc. Adv. Neural Inf. Process. Syst., 2008.
+
+age database,” in Proc. IEEE Conf. Comp. Vis. Patt.
+Recogn., 2009.
+
+[2] A. Gionis, P. Indyk, and R. Motwani, “Similarity
+search in high dimensions via hashing,” in Proc. Int.
+Conf. Very Large Databases, 1999.
+
+[3] P. Li, A. Shrivastava, J. L. Moore, and A. C. K¨onig,
+“Hashing algorithms for large-scale learning,” in Proc.
+Adv. Neural Inf. Process. Syst., 2011, pp. 2672–2680.
+[4] P. Li, G. Samorodnitsk, and J. Hopcroft, “Sign cauchy
+projections and chi-square kernel,” in Proc. Adv. Neu-
+ral Inf. Process. Syst., 2013, pp. 2571–2579.
+
+[9] J. Wang, S. Kumar, and S.-F. Chang, “Semi-
+supervised hashing for large scale search,” IEEE
+Trans. Pattern Anal. Mach. Intell., vol. 34, no. 12, pp.
+2393–2406, 2012.
+
+[10] Y. Xia, K. He, P. Kohli, and J. Sun, “Sparse projections
+for high-dimensional binary codes,” in Proc. IEEE
+Conf. Comp. Vis. Patt. Recogn., 2015, pp. 3332–3339.
+[11] B. Kulis and T. Darrell, “Learning to hash with binary
+reconstructive embeddings,” in Proc. Adv. Neural Inf.
+Process. Syst., 2009.
+
+[12] M. Norouzi and D. M. Blei, “Minimal loss hashing
+for compact binary codes,” in Proc. Int. Conf. Mach.
+Learn., 2011.
+
+[13] W. Liu, J. Wang, R. Ji, Y.-G. Jiang, and S.-F. Chang,
+“Supervised hashing with kernels,” in Proc. IEEE
+Conf. Comp. Vis. Patt. Recogn., 2012.
+
+[14] Y. Gong, S. Lazebnik, A. Gordo, and F. Perronnin,
+“Iterative quantization: A procrustean approach to
+learning binary codes for large-scale image retrieval,”
+IEEE Trans. Pattern Anal. Mach. Intell., vol. 35,
+no. 12, pp. 2916–2929, 2013.
+
+[15] G. Lin, C. Shen, Q. Shi, A. van den Hengel, and
+D. Suter, “Fast supervised hashing with decision
+trees for high-dimensional data,” in Proc. IEEE Conf.
+Comp. Vis. Patt. Recogn., 2014, pp. 1971–1978.
+
+[16] T. Ge, K. He, and J. Sun, “Graph cuts for supervised
+binary coding,” in Proc. Eur. Conf. Comp. Vis., 2014.
+[17] T. Dean, M. A. Ruzon, M. Segal, J. Shlens, S. Vijaya-
+narasimhan, and J. Yagnik, “Fast, accurate detection
+of 100,000 object classes on a single machine,” in
+
+Proc. IEEE Conf. Comp. Vis. Patt. Recogn., 2013.
+
+[18] A. Vedaldi and A. Zisserman, “Efﬁcient additive ker-
+nels via explicit feature maps,” IEEE Trans. Pattern
+Anal. Mach. Intell., vol. 34, no. 3, pp. 480–492, 2012.
+[19] F. Shen, C. Shen, W. Liu, and H. T. Shen, “Supervised
+discrete hashing,” in Proc. IEEE Conf. Comp. Vis.
+Patt. Recogn., 2015, pp. 37–45.
+
+[20] K. Crammer and Y. Singer, “On the algorithmic im-
+plementation of multiclass kernel-based vector ma-
+chines,” J. Mach. Learn. Res., vol. 2, pp. 265–292,
+2002.
+
+[21] J. Xiao, J. Hays, K. A. Ehinger, A. Oliva, and A. Tor-
+ralba, “Sun database: Large-scale scene recognition
+from abbey to zoo,” in Proc. IEEE Conf. Comp. Vis.
+Patt. Recogn., 2010, pp. 3485–3492.
+
+[22] A. Torralba, R. Fergus, and W. Freeman, “80 million
+tiny images: A large data set for nonparametric object
+and scene recognition,” IEEE Trans. Pattern Anal.
+Mach. Intell., vol. 30, no. 11, pp. 1958–1970, 2008.
+
+[23] A. Oliva and A. Torralba, “Modeling the shape of
+the scene: A holistic representation of the spatial
+envelope,” Int. J. Comp. Vis., vol. 42, no. 3, pp. 145–
+175, 2001.
+
+[24] Y. Gong, L. Wang, R. Guo, and S. Lazebnik, “Multi-
+scale orderless pooling of deep convolutional ac-
+tivation features,” in Proc. Eur. Conf. Comp. Vis.
+Springer, 2014, pp. 392–407.
+
+[25] A. Krizhevsky, I. Sutskever, and G. E. Hinton, “Im-
+agenet classiﬁcation with deep convolutional neural
+networks,” in Proc. Adv. Neural Inf. Process. Syst.,
+2012, pp. 1097–1105.
+
+

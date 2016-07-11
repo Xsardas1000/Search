@@ -1,0 +1,1782 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+6
+
+ 
+
+ 
+ 
+]
+L
+M
+
+.
+t
+a
+t
+s
+[
+ 
+ 
+
+1
+v
+2
+8
+8
+1
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Composing inference algorithms as program transformations
+
+Robert Zinkov
+Indiana University
+
+Bloomington, IN 47408 USA
+
+zinkov@iu.edu
+
+Chung-chieh Shan
+Indiana University
+
+Bloomington, IN 47408 USA
+ccshan@indiana.edu
+
+Abstract
+
+Probabilistic inference procedures are usually
+coded painstakingly from scratch, for each tar-
+get model and each inference algorithm. We re-
+duce this coding effort by generating inference
+procedures from models automatically. We make
+this code generation modular by decomposing in-
+ference algorithms into reusable program trans-
+formations. These source-to-source transforma-
+tions perform exact inference as well as gener-
+ate probabilistic programs that compute expecta-
+tions, densities, and MCMC samples. The result-
+ing inference procedures run in time comparable
+to that of handwritten procedures.
+
+1 Introduction
+
+Writing inference algorithms for probabilistic models is te-
+dious and error-prone. Conceptually, these algorithms are
+combinations of simpler operations, such as computing the
+density of a distribution at a given point. So it is unfor-
+tunate that these algorithms are traditionally implemented
+from scratch. In this paper, we show how to describe these
+building blocks in code, so that they no longer need to be
+rewritten for every new inference algorithm or model.
+
+We contribute the ﬁrst method for composing multiple in-
+ference algorithms over the same model, even exact and
+approximate ones over the same factor. Our approach is
+to express inference in terms of operations that transform
+one probabilistic program into another. We use proba-
+bilistic programs to represent distributions, though our ap-
+proach is compatible with other representations such as
+factor graphs. The goal of our transformations is to turn
+a probabilistic program that denotes a model into another
+probabilistic program that, when interpreted to produce a
+random sample with an importance weight, is equivalent to
+the desired inference algorithm.
+
+Because the output of an inference transformation is still a
+
+probabilistic program, we can apply further inference trans-
+formations to the program. In this way, we can subject a
+single model to multiple inference methods without coding
+them from scratch. We thus reduce the informal problem
+of combining inference methods to the formal and more au-
+tomatable problem of composing program transformations.
+In particular, having our inference methods produce proba-
+bilistic programs lets us make the programs more efﬁcient
+using conjugacy and independence assumptions.
+
+2 Motivation and related work
+
+Developing inference algorithms that work on a variety of
+models is a longstanding goal of probabilistic inference, in-
+cluding graphical models and probabilistic programming.
+The composability of inference algorithms has unfortu-
+nately lagged behind the composability of models.
+
+Many probabilistic programming systems allow subject-
+ing the same model to a variety of inference methods,
+both exact and approximate. For example, the probabilis-
+tic language Church (Goodman et al. 2008) has many in-
+terpreters, each of which implements a different inference
+method. Systems such as Figaro, Factorie, Anglican and
+Wolfe (Pfeffer 2009; McCallum et al. 2008; Wood et al.
+2014; Riedel et al. 2014) also allow adding inference meth-
+ods, as new code in the host language where the systems are
+embedded. However, the end result of applying these infer-
+ence methods is behavior or code in a different language,
+no longer a probabilistic program. Thus, it is difﬁcult in
+these systems to apply one method to the result of applying
+another method.
+More similar to our approach is ´Scibior et al.’s (2015).
+Like us, they express and compose inference methods as
+transformations that produce probabilistic programs in the
+same language. Thus for example they reuse Sequential
+Monte Carlo to implement Particle Independent MH. But
+because their probabilistic language reuses many primi-
+tives from the host language Haskell, their transforma-
+tions cannot inspect most of the input source code, no-
+tably deterministic computations and the right-hand side
+
+of monadic Bind. In contrast, our simpliﬁcation transfor-
+mation (Section 5) can perform exact inference, our disin-
+tegration transformation (Section 4.4) can compute densi-
+ties and conditional distributions in the face of determinis-
+tic dependencies, and we can generate MH samplers (Sec-
+tion 4.7) using a variety of proposal distributions.
+
+So in general, our source-transformation approach is nec-
+essary to support the many different ways that inference
+methods are composed in the literature. Below we high-
+light some of the ways. In each case, we want to compose
+these inference methods by reusing existing implementa-
+tions. And in each case, existing systems such as those
+mentioned above do not support such reuse.
+
+Sometimes, we use an approximate inference algorithm on
+a model, then use an exact inference algorithm for post-
+processing. For example, a popular way to perform infer-
+ence for latent Dirichlet allocation (LDA) is to use Gibbs
+sampling (Grifﬁths and Steyvers 2004) to infer topic mark-
+ers for each word in a corpus, then use these topic markers
+to perform exact inference and obtain the distribution on
+words given each topic. Table 2 in Section 6 shows our in-
+ference composition at work in a tiny instance of this case.
+
+Other times, we apply exact inference to parts of our model,
+and use an approximate inference method for everything
+else. As an example, Hughes et al. (2015) develop an infer-
+ence algorithm for hierarchical Dirichlet processes where
+the truncation dictating the number of topics is sampled,
+and then variational inference is performed for the other
+model parameters. This inference combination requires
+that sampling a truncation still leave in place a represen-
+tation on which we can perform variational inference.
+
+Another composition pattern emerges from recent work
+on parallelizing an inference algorithm to run on mul-
+tiple machines (Neiswanger et al. 2014; Xu et al. 2014;
+Gelman et al. 2014). The pattern is to transform a poste-
+rior distribution for a parameter given the data into a model
+where we have noisy versions of a parameter conditioned
+on subsets of the data. We then combine these noisy param-
+eters to estimate the underlying parameter. This combina-
+tion step is to infer the underlying parameter given noisy
+estimates of the parameter, in turn inferred using subsets of
+the data.
+
+Finally, given a linear sequential model, we often want to
+predict future states of the system and the dynamics that
+govern them. Given the dynamics, for systems like Kalman
+ﬁlters, we may use exact inference for deriving the state
+transition functions in some closed form. Learning the dy-
+namics, on the other hand, is usually treated as an approx-
+imate inference problem where we sample different possi-
+ble dynamics given some observed states. This joint learn-
+ing and exact inference again composes two inference al-
+gorithms. Table 1 in Section 6 shows our inference compo-
+sition at work in a tiny instance of this case. We illustrate
+
+our approach using this example in Section 3.
+
+3 Example of inference composition in
+
+action
+
+We motivate program transformations by using a simple
+linear dynamical system as our running example for com-
+posing inference algorithms. In this model, we are inter-
+ested in the posterior distribution over noiseT and noiseE
+given observations m1 and m2.
+
+noiseT
+noiseE
+
+∼ Uniform(3, 8)
+∼ Uniform(1, 4)
+
+x1 | noiseT
+m1 | x1, noiseE ∼ Normal(x1, noiseE)
+
+∼ Normal(0, noiseT )
+
+x2 | x1, noiseT ∼ Normal(x1, noiseT )
+m2 | x2, noiseE ∼ Normal(x2, noiseE)
+
+We would like to draw samples from this posterior distri-
+bution using a Metropolis-Hastings (MH) sampler.
+
+We start by representing the model in our language:
+
+kalman =
+
+Bind(Uniform(3, 8), noiseT,
+
+Bind(Uniform(1, 4), noiseE,
+
+Bind(Normal( 0, noiseT), x1,
+
+Bind(Normal(x1, noiseE), m1,
+
+Bind(Normal(x1, noiseT), x2,
+
+Bind(Normal(x2, noiseE), m2,
+
+Dirac(((m1, m2),
+
+(noiseT, noiseE)))))))))
+
+The use of Dirac at the bottom shows that this distribution
+ranges over pairs of pairs of reals.
+
+We ﬁrst apply the disintegration transformation to get an-
+other program. As detailed in Section 4.4, disintegration
+takes as input a joint probability distribution and returns as
+output a program representing a family of posterior distri-
+butions. The new program is a function from the obser-
+vations to the posterior distribution. For example, the dis-
+integration of kalman is a program which takes as input
+m1 and m2 and returns the distribution over (noiseT,
+noiseE) in kalman given those values for m1 and m2.
+The resulting program, which we call kalman2, is below:
+
+kalman2 =
+Lam((m1,m2),
+
+Bind(Uniform(3, 8), noiseT,
+
+Bind(Uniform(1, 4), noiseE,
+
+Bind(Normal(0, noiseT), x1,
+
+Bind(Normal(x1, noiseT), x2,
+
+Weight(
+(exp(-(m2-x2)ˆ2/(2*noiseEˆ2))
+/noiseE/sqrt(2*Pi)) *
+
+(exp(-(m1-x1)ˆ2/(2*noiseEˆ2))
+/noiseE/sqrt(2*Pi)),
+(noiseT, noiseE)))))))
+
+Dirac((noiseT, noiseE’))))),
+
+proposal,
+Dirac((proposal, ...))))
+
+The use of Lam at the top and Weight at the bottom shows
+that this is a function from pairs of reals (m1, m2) to
+measures over pairs of reals (noiseT, noiseE).
+
+We then apply the simpliﬁcation transformation to
+kalman2 to get kalman3.
+
+kalman3((m1,m2)) =
+
+Bind(Uniform(3, 8), noiseT,
+
+Bind(Uniform(1, 4), noiseE,
+
+Weight(..., (noiseT, noiseE))))
+
+This program is equivalent to kalman2, except we have
+symbolically integrated out the Normal-distributed ran-
+dom variables x1 and x2.
+
+We next apply to kalman3 another program transforma-
+tion we call mh, which implements MH sampling. The mh
+transformation takes as input two programs. The ﬁrst pro-
+gram represents a proposal distribution, or more precisely a
+function from the current sample to a distribution over pro-
+posed samples. In this example, we use a proposal distribu-
+tion that with equal probability resamples either noiseT
+or noiseE while keeping the other value ﬁxed:
+
+proposal =
+
+Lam((noiseT, noiseE),
+
+Superpose(
+
+(1/2,
+
+Bind(Uniform(3, 8), noiseT’,
+Dirac((noiseT’, noiseE)))),
+
+(1/2,
+
+Bind(Uniform(1, 4), noiseE’,
+
+Dirac((noiseT, noiseE’))))))
+
+In this example,
+
+The second input to the mh transformation represents the
+target distribution.
+it is the part of
+kalman3 above after the top line Lam((m1, m2),.
+From these inputs, the mh transformation computes a sym-
+bolic formula for the MH acceptance ratio and embeds it in
+a program representing a transition kernel. The new pro-
+gram is a function from the current sample to a distribution
+over pairs of proposed samples and acceptance ratios. In
+this example, the resulting program has the following broad
+structure:
+
+kalman4 =
+
+Lam((noiseT, noiseE),
+
+Bind(Superpose(
+
+(1/2,
+
+Bind(Uniform(3, 8), noiseT’,
+Dirac((noiseT’, noiseE)))),
+
+(1/2,
+
+Bind(Uniform(1, 4), noiseE’,
+
+The elided part “...”, which we relegate to the appendix,
+is a symbolic formula that computes the acceptance ratio
+using the current sample (noiseT, noiseE) and the
+proposed sample chosen by the Superpose. This accep-
+tance ratio can then be used to decide whether to transition
+to the proposed sample or stay at the current sample.
+
+We then perform further optimizations on kalman4, in-
+cluding algebraic simpliﬁcations and rewriting the program
+to use fewer Binds. We describe in more detail the kinds
+of optimizations we perform in Section 5. The resulting
+program, kalman5, has the following broad structure:
+
+kalman5 =
+
+Lam((noiseT, noiseE),
+
+Superpose(
+
+(1/2,
+
+Bind(Uniform(3, 8), noiseT’,
+
+Dirac(((noiseT’, noiseE), ...)))),
+
+(1/2,
+
+Bind(Uniform(1, 4), noiseE’,
+
+Dirac(((noiseT, noiseE’), ...))))))
+
+The elided parts “...”, which we again relegate to the ap-
+pendix, are algebraically simpliﬁed formulas for the accep-
+tance ratio in each of the two cases.
+
+Finally we feed this last program kalman5 to a sampler,
+which we describe in Section 4.2. Given an observation and
+a current sample, this sampler produces a proposed sample
+and the MH acceptance ratio of that sample.
+
+sample(App(App(kalman5, (0, 1)),
+
+(5, 2)), [])
+
+>>> (((5, 1.6811397568857682),
+
+0.792463935068863),
+
+1.0)
+
+In the ﬁrst line above, (0, 1) is the observation. In the
+second line above, (5, 2) is the current sample. The
+third line is the proposed sample, and the fourth line is its
+acceptance ratio.
+
+4 Inference methods as program
+
+transformations
+
+In order to compose inference methods, we pose them as
+transformations of one probabilistic program into another.
+We then achieve the desired inference method for the for-
+mer program by applying a simpler inference method, such
+as exact inference or weighted sampling, to the latter pro-
+gram. For example, in Section 3 we feed a program to dis-
+integration (Section 4.4), then mh (Section 4.7), then sim-
+
+pliﬁcation (Section 5), and ﬁnally sampling. Only in the
+ﬁnal sampling step is any random choice made!
+
+In this section, we ﬁrst describe our language of probabilis-
+tic programs, then describe various transformations on this
+language that work in concert.
+
+4.1 Language description
+
+Our core language of probabilistic programs is deﬁned by
+the following grammar:
+
+e
+
+::= x | 0 | 1 | e - e | e < e | exp(e) | . . .
+| Sum(e,e,x,e) | Int(e,e,x,e)
+| Lam(x,e) | App(e,e)
+| (e,e) | e[0] | e[1]
+| If(e,e,e)
+| Uniform(e,e)
+| Normal(e,e)
+| Gamma(e,e)
+| Weight(e,e)
+| Categorical((e,e), ...)
+| Superpose((e,e), ...)
+| Bind(e,x,e)
+
+The ﬁrst line of this grammar says that our language in-
+cludes the support found in an ordinary programming lan-
+guage for variables and math on real numbers. The sec-
+ond line adds primitives to represent summation (Sum)
+and integration (Int). These primitives are used in Sec-
+tion 4.3 to generate programs that compute the expecta-
+tion of a distribution. The next three lines of the gram-
+mar indicate that our language includes functions, tuples,
+and If. We write Let(x,e1,e2) as syntactic sugar for
+App(Lam(x,e1),e2).
+
+The remainder of the grammar is what makes our language
+probabilistic: we add primitives that represent and com-
+pose measures. To start with, Uniform(1,2) represents
+the uniform probability distribution over real numbers be-
+tween 1 and 2, and Normal(3,4) represents the normal
+distribution with mean 3 and standard deviation 4.
+
+Weight(1,8) represents the probability distribution that
+assigns its entire probability mass 1 to the single outcome 8.
+We write Dirac(8) as syntactic sugar for it.
+In con-
+trast, Weight(0.7,8) represents the measure, or unnor-
+malized distribution, that assigns the probability 0.7 to the
+single outcome 8. This primitive lets our language rep-
+resent (unnormalized) measures in general, not just (nor-
+malized) probability distributions. This expressivity lets us
+separately reuse a transformation that produces an unnor-
+malized measure (Section 4.4) and a transformation that
+subsequently normalizes a measure (Section 4.5). Also,
+Weight lets us represent a distribution by combining the
+representation of a base measure and the representation of
+a density function.
+
+Categorical represents the categorical distribution
+with a sequence of zero or more pairs. The ﬁrst element
+of each pair is the probability of selecting the outcome that
+is the second element of the pair. If the ﬁrst elements of the
+pairs do not sum to 1, they are normalized to.
+
+Superpose is like Categorical, except it does not
+normalize the probabilities, so it can represent measures
+which are not probability distributions. We can deﬁne
+Superpose in terms of Categorical and Weight,
+but it is actually more convenient to make Superpose the
+primitive form and deﬁne Weight and Categorical in
+terms of it.
+
+Finally, we include a primitive called Bind. This prim-
+itive forms a distribution by composing two distributions
+e1 and e2. The second distribution e2 may depend on the
+outcome x of the ﬁrst distribution e1. The outcome of the
+composed distribution Bind(e1,x,e2) is the outcome
+of e2. This primitive lets our language represent sequen-
+tial and hierarchical models. For a simple example, con-
+sider the model below:
+
+x ∼ Uniform(0, 2)
+y|x ∼ Uniform(x, 3)
+
+On one hand, the marginal distribution over y can be writ-
+ten in our language as
+
+Bind(Uniform(0, 2), x, Uniform(x, 3))
+
+On the other hand, the joint distribution over (x, y) can be
+written in our language as
+
+Bind(Uniform(0, 2), x,
+
+Bind(Uniform(x, 3), y,
+
+Dirac((x,y))))
+
+Dirac and Bind are thus the basic operations of the mea-
+sure monad (Giry 1982; Ramsey and Pfeffer 2002).
+
+4.2 Weighted sampler
+
+The rest of this section describes various inference trans-
+formations that we apply to our probabilistic programs. Be-
+cause we implement some of these transformations in terms
+of others, we describe the transformations not in the order
+we apply them but in the order we implement them.
+
+First, to make the semantics of our language more concrete,
+we describe a sampler that takes a probabilistic program as
+input and returns a draw from the distribution it represents.
+We show this sampler as Algorithm 1. It is our only opera-
+tion that calls a random number generator, and we usually
+apply it last in a sequence of transformations to perform
+approximate inference.
+
+Like a typical interpreter, Algorithm 1 takes as input not
+only a program but also an environment, which is an ini-
+tially empty table mapping variable names to values. Also,
+
+Algorithm 1: Weighted sampler: sample(m, env = [])
+
+Algorithm 2: Expectation transformation: expect(m, f)
+
+Input: program representing a measure: m
+Input: environment: env
+Output: pair of values (outcome, weight)
+Examine m
+if m has the form Weight(w1,e1) then
+
+Evaluate e1 in the environment env, obtaining v1
+Return (v1, w1)
+
+else if m has the form Normal(e1,e2) then
+
+Evaluate e1 in the environment env, obtaining v1
+Evaluate e2 in the environment env, obtaining v2
+Sample from the normal distribution with
+mean v1 and standard deviation v2, obtaining v3
+Return (v3, 1)
+
+else if m has the form Bind(m1,x,m2) then
+
+Call Algorithm 1 on m1 with the
+environment env, obtaining (v1, w1)
+Let env′ be the environment env extended with x
+having the value v1
+Call Algorithm 1 on m2 with the
+environment env′, obtaining (v2, w2)
+Return (v2, w1 · w2)
+
+else
+
+end
+
+The other cases are similar to what’s been
+covered
+
+because our language includes unnormalized measures,
+this sampler actually returns not only a draw but also an
+importance weight.
+
+4.3 Expectation transformation
+
+Our expectation transformation turns any program that rep-
+resents a distribution into another program that represents
+its expected value. This transformation is exact, simple,
+mechanical, and deterministic even though the expected
+values of many distributions have no closed form, because
+our language represent integrals symbolically by Int. For
+example, the expectation transformation turns the program
+
+Bind(Uniform(0, 2), x, Uniform(x, 3))
+
+into the program
+
+Int(0,2,x, Int(x,3,y, y)/(3-x))/(2-0)
+
+The latter program just represents the integral
+
+1
+
+2 − 0 Z 2
+
+0
+
+1
+
+3 − x Z 3
+
+x
+
+y dy dx.
+
+To compute this integral in closed form is to perform exact
+inference on the given distribution. The expectation trans-
+formation itself does not do so; nor does it approximate the
+integral by sampling.
+
+Input: program representing a measure: m
+Input: program representing a function: f
+Output: program representing a number
+Examine m
+if m has the form Weight(w1,e1) then
+
+Return w1 · App(f ,e1)
+
+else if m has the form Normal(e1,e2) then
+
+Return Int(−∞, ∞, x, m · App(f ,x))
+where the program m computes the density of
+the Normal(e1, e2) distribution at x
+
+else if m has the form Bind(m1,x,m2) then
+Call Algorithm 2 with m2 and f obtaining e3
+Call Algorithm 2 with m1 and Lam(x,e3) and
+return the result
+
+The other cases are similar to what’s been
+covered
+
+else
+
+end
+
+Speciﬁed more generally, the expectation transformation
+turns any program that represents a measure, along with
+a function from the sample space to numbers (such as the
+identity function), into another program that represents the
+(Lebesgue) integral of the given function with respect to
+the given measure. We show this transformation as Algo-
+rithm 2. It handles primitive distributions such as Normal
+in terms of their density.
+
+4.4 Density and disintegration transformations
+
+Turning a distribution into its density function is naturally
+expressed as a program transformation (Bhat et al. 2012,
+2013). More precisely, the density transformation takes as
+input a probabilistic program representing a distribution,
+and returns another program representing a function that
+maps each point in the sample space to the density at that
+point. Note that this transformation does not compute nu-
+merically the density of a model at any particular point. It
+only returns a program that computes densities when inter-
+preted by our weighted sampler (Algorithm 1).
+
+For example, the density transformation turns the proba-
+bilistic program
+
+Bind(Uniform(0, 2), x,
+
+Bind(Uniform(x, 3), y,
+
+Dirac((x, y))))
+
+into the density function
+
+Lam((x,y),
+
+If(0<x<2,
+
+If(x<y<3, 1/(3-x), 0)/(2-0),
+0))
+
+We implement density in terms of another program trans-
+
+Algorithm 3: Density transformation: density(m, t)
+
+Input: program representing a measure: m
+Input: program representing value drawn from m: t
+Output: program representing a nonnegative
+
+number: e2
+
+1. Disintegrate Bind(m, x,
+
+Dirac((x,Unit))), obtaining e1
+
+2. Call Algorithm 2 on App(e1,t) and Lam(y,1),
+
+obtaining e2
+
+3. Return e2
+
+formation, disintegration (Shan and Ramsey 2015). Disin-
+tegration is similar to conditioning in that it takes a proba-
+bilistic program representing a joint distribution Pr(X, Y )
+as input, but instead of returning a conditional distribution
+Pr(Y | X = x), disintegration returns an unnormalized
+slice Pr(Y, X = x) of the original distribution. More pre-
+cisely, disintegration returns a program representing a func-
+tion from values of x to measures Pr(Y, X = x). Such a
+(measurable) function is also known as a kernel.
+
+Taking advantage of the fact that disintegration does not
+normalize the measures it returns, we implement the den-
+sity transformation in terms of disintegration and expec-
+tation. This implementation is shown in Algorithm 3. It
+invokes disintegration (letting Y be the space that consists
+of a single point Unit) then expectation (letting the inte-
+grand f be the function that maps Unit to 1).
+
+Disintegration is useful not just as part of the density trans-
+formation but also by itself. For example, it is used in Sec-
+tion 3 to turn the prior distribution kalman into the poste-
+rior kalman2.
+
+We sketch how disintegration works in terms of a simpler
+program transformation, which we call observation (Algo-
+rithm 4). This transformation takes as input a measure m
+and a value t that could have been drawn from m, and re-
+turns a measure which only returns t, weighted by how
+likely that value was to be drawn from m. For example,
+the observation transformation turns the program
+
+Algorithm
+4:
+tion: observe(m, t)
+
+Observation
+
+transforma-
+
+Input: program representing a measure: m
+Input: program representing value drawn from m: t
+Output: program representing a measure
+Examine m
+if m has the form Uniform(e1,e2) or
+Normal(e1,e2) or Gamma(e1,e2) then
+
+Let d be a program that computes the density of
+the distribution m
+Return Weight(App(d,t), t)
+
+else if m has the form Bind(m1,x,m2) then
+Call Algorithm 4 recursively with m2 and t
+obtaining m3
+Return Bind(m1,x,m3)
+
+else
+
+Raise an error about not being able to handle the
+input
+
+end
+
+Algorithm
+normalize(m)
+
+5:
+
+Normalization
+
+transformation:
+
+Input: program representing a measure: m
+Output: program representing a probability
+
+distribution
+
+1. Call Algorithm 2 on m and Lam(x,1)
+
+obtaining the program e1
+
+2. Return Bind(m, x, Weight(1/e1, x))
+
+any Jacobian factors required. This inversion is what the
+disintegration provides over observation.
+
+To relate observation and disintegration more precisely,
+suppose the program m represents a measure over X, the
+program e represents a value in Y , and observation turns m
+and x into m1. Then disintegrating the program
+
+Bind(..., ...,
+
+Bind(m, x, Dirac((x,e))))
+
+Bind(Uniform(0, 2), x, Uniform(x, 3))
+
+(which uses Dirac) yields a program equivalent to
+
+and the variable y into the program
+
+Bind(Uniform(0, 2), x,
+
+Weight(If(x<y<3, 1/(3-x), 0), y))
+
+As indicated at the bottom in Algorithm 4, the observation
+transformation only handles a subset of our language. In
+particular, it does not handle Dirac, so it does not han-
+dle the typical program kalman in Section 3. In general,
+if the input program performs arithmetic or any other de-
+terministic computation to produce the observation t, then
+we need to invert this deterministic computation and insert
+
+Lam(x, Bind(..., ...,
+
+Bind(m1, _, Dirac(e))))
+
+4.5 Normalization transformation
+
+The presence of Weight in our language enables the ob-
+servation and disintegration transformations to return mea-
+sures that are typically unnormalized. To recover a proba-
+bility distribution, we must reweight the measure. We de-
+ﬁne this normalization operation as a program transforma-
+tion as well, shown as Algorithm 5.
+
+Algorithm 6: Metropolis-Hastings sampling trans-
+formation: mh(proposal, target)
+
+Algorithm 7: Gibbs
+gibbs(target)
+
+sampling transformation:
+
+Input: program representing the proposal
+
+Input: program representing the n-dimensional
+
+kernel: proposal
+
+Input: program representing the target
+
+distribution: target
+
+Output: program representing MCMC transition
+
+kernel with acceptance ratio: e2
+
+1. Call Algorithm 3 on target and old, obtaining pold
+2. Call Algorithm 3 on target and new, obtaining pnew
+3. Call Algorithm 3 on App(proposal ,new) and old,
+
+obtaining qold;new
+
+4. Call Algorithm 3 on App(proposal ,old) and new,
+
+obtaining qnew;old
+
+5. Let e1 be (pnew · qold;new)/(pold · qnew;old)
+6. Let e2 be
+
+Lam(old,
+
+Bind(App(proposal , old), new,
+
+Dirac((new, e1))))
+
+7. Return e2
+
+target distribution: target
+
+Output: program representing MCMC transition
+
+kernel
+
+Let x be the set of the n variables in the target
+Initialize choices to the empty sequence []
+foreach xi ∈ x do
+
+1. Let x−i be the rest of the variables
+2. Let e1 be
+
+Bind(target, x, Dirac((x−i,xi)))
+
+3. Disintegrate e1, obtaining e2
+4. Let e3 be App(e2, x−i)
+5. Call Algorithm 5 on e3, obtaining e4
+6. Let y be x except replacing xi by new
+7. Let e5 be Bind(e4, new, Dirac(y))
+8. Add the pair (1/n, e5) to choices
+
+end
+Return Lam(x, Superpose(choices))
+
+4.6 Conditioning by disintegrating then normalizing
+
+Interestingly, conditioning does not need to be deﬁned as a
+primitive in this system. It is actually a special case of dis-
+integration, where we subsequently normalize the measure.
+
+4.7 Metropolis-Hastings sampling transformation
+
+A major contribution of this paper is to implement Markov
+chain Monte Carlo (MCMC) methods, such as MH sam-
+pling and Gibbs sampling, in a way that applies to a variety
+of target distributions and composes with other inference
+techniques. We express an MCMC method as a transforma-
+tion from a program representing the target distribution to
+a program representing the transition kernel. Whereas the
+transformation itself makes no random choices, the latter
+program can be interpreted by our weighted sampler (Al-
+gorithm 1) to generate a random chain, or subject to sim-
+pliﬁcation (Section 5).
+
+Following this approach, our implementation of MH sam-
+pling closely resembles its textbook presentation. As
+shown in Algorithm 6, where the textbook presentation of
+the acceptance ratio refers to the target and proposal densi-
+ties, our implementation invokes the density transformation
+(Algorithm 3) on two probabilistic programs, representing
+the target and proposal distributions. Taking advantage of
+the fact that the density transformation symbolically han-
+dles free variables such as old and new, we perform the
+transformation just once (rather than once per sampler it-
+eration) to generate a single program that takes the current
+state as input.
+
+4.8 Gibbs sampling transformation
+
+Gibbs sampling is a special case of MH sampling, where
+the proposal kernel combines the results of conditioning
+the target distribution along each dimension. In this special
+case, the acceptance ratio is always 1, so it need not be
+computed.
+
+To produce such a proposal kernel automatically and to
+skip computing the acceptance ratio, we implement Gibbs
+sampling as a program transformation, Algorithm 7, sepa-
+rate from mh. Our implementation of this MCMC method
+again resembles its textbook presentation. The input to this
+transformation is a probabilistic program representing a n-
+dimensional joint distribution Pr(x1, . . . , xn). For each
+random variable xi, we condition (Section 4.6) the target
+distribution on all the other variables x−i, to obtain a prob-
+abilistic program that resamples xi. We then combine these
+n programs to form the proposal kernel.
+
+4.9 Slice sampling transformation
+
+Slice sampling is often described in a conceptually simple
+fashion, but carrying it out in practice usually involves spe-
+cialized programming for each model. In contrast, we im-
+plement slice sampling as a program transformation whose
+deﬁnition resembles its textbook presentation. Indeed, slice
+sampling can be viewed as Gibbs sampling on an aug-
+mented distribution, which we call e1 in Algorithm 8.
+
+As is usual with Gibbs sampling, the transition kernel
+produced by Algorithm 8 is only useful to the extent we
+can sample from it. The simpliﬁcation transformation de-
+scribed in Section 5 is crucial in this regard. To take a
+
+Algorithm 8: Slice
+slice(target)
+
+sampling
+
+transformation:
+
+Input: program representing the target
+
+distribution: target
+
+Output: program representing transition kernel
+
+1. Call Algorithm 3 on target and x, obtaining p
+2. Let e1 be
+
+Bind(target, x,
+
+Bind(Uniform(0, p), u,
+
+Dirac((u, x))
+
+3. Disintegrate e1, obtaining e2
+4. Let e3 be App(e2, u)
+5. Call Algorithm 5 on e3, obtaining e4
+6. Return
+
+Lam(x, Bind(Uniform(0, p), u, e4))
+
+simple example, suppose the input to Algorithm 8 is the
+unimodal distribution Normal(0,1). In this case, disin-
+tegrating e1 in step 3 of Algorithm 8 gives
+
+Lam(u,
+
+Bind(Normal(0,1), x,
+If(0<u<exp(-xˆ2/2)/sqrt(2*pi),
+
+Weight(1/(exp(-xˆ2/2)/sqrt(2*pi)),
+
+x),
+
+Superpose())))
+
+in which the Weight exactly cancels out the density of
+the Normal, and Superpose() denotes the zero mea-
+sure. Thus, this measure is uniform over the interval of x
+where the target density exceeds u. Hence the simpliﬁca-
+tion transformation described in Section 5, once informed
+that u lies between 0 and 1/sqrt(2*pi), automatically
+produces the desired method to sample x given u:
+
+Lam(u, Uniform(-sqrt(-log(2*pi*uˆ2)),
+sqrt(-log(2*pi*uˆ2))))
+
+5 Simpliﬁcation transformation
+
+Because we express each inference technique as a transfor-
+mation that produces a probabilistic program in the same
+language, rather than as an interpreter that makes immedi-
+ate probabilistic choices, we can optimize and simplify the
+produced programs. To this end, we apply the optimiza-
+tions discussed by Carette and Shan (2016). This simpli-
+ﬁcation transformation does not change the measure rep-
+resented by a program but tries to place the program in a
+form that, when interpreted by our weighted sampler (Al-
+gorithm 1), may run faster and draw samples with more
+uniform weights.
+
+tent variables, and performs algebraic simpliﬁcations. The
+rest of this section brieﬂy describes these optimizations.
+
+5.1 Recognizing conjugacy relationships
+
+The simpliﬁcation transformation recognizes when a den-
+sity represented by Weight matches the density of a prim-
+itive distribution. A simple example arises from the joint
+distribution Pr(Y, X) represented by the program below.
+
+Bind(Normal(0, 1), x,
+
+Bind(Normal(x, 1), y,
+
+Dirac((y, x))))
+
+Disintegrating this program (as described in Section 4.4)
+produces the program
+
+Bind(Normal(0, 1), x,
+Weight(exp(-(y-x)ˆ2/2)/sqrt(2*pi), x))
+
+This latter program combines the measure Normal(0,1)
+with the density exp(-(y-x)ˆ2/2)/sqrt(2*pi) to
+represent the conditional distribution Pr(X | Y ) up to a
+constant factor. Normalizing and simplifying it yields
+
+Normal(y/2, 1/sqrt(2))
+
+using the conjugacy relationship between Normal and
+Normal. This simpliﬁed program runs faster; it draws
+samples without weighting them.
+
+This optimization is symbolic, in the sense that it works
+even when the initial program contains free variables
+whose values are unknown. Generalizing the example
+above, suppose we start with the joint distribution
+
+Bind(Normal(a, s), x,
+
+Bind(Normal(x, t), y,
+
+Dirac((y, x))))
+
+Of the free variables a, s, and t, we assume that s and t
+are positive. Simplifying the posterior then yields
+
+Normal((y*sˆ2+a*tˆ2)/(sˆ2+tˆ2),
+
+s*t/sqrt(sˆ2+tˆ2))
+
+This optimization is robust and useful because what it rec-
+ognizes is not words like Normal but the densities they
+denote. Thus it works whether or not we expand the
+polynomial -(y-x)ˆ2/2 above, and even if we express
+Normal(0,1) by spelling out its density. Moreover, all
+the conjugacies among Normal, Gamma, and Beta dis-
+tributions fall out from their densities.
+
+5.2 Integrating out a continuous variable
+
+Based on computer algebra, the simpliﬁcation transforma-
+tion recognizes conjugacy relationships, integrates out la-
+
+When a distribution is described using a latent random vari-
+able, it is usually advantageous to eliminate the variable, in
+
+other words, to integrate it out. Examples of such latent
+variables include x1 and x2 in Section 3, as well as x in
+
+Inference method
+
+Run time (msecs)
+SD
+
+Mean
+
+Bind(Normal(0, 1), x, Normal(x, 1))
+
+The simpliﬁcation transformation eliminates these vari-
+ables. In particular, it uses symbolic integration to elim-
+inate continuous latent variables. The density-recognition
+machinery described in Section 5.1 then produces simpler
+and equivalent programs such as
+
+Normal(0, sqrt(2))
+
+which runs faster because the variable x is gone.
+
+This integration is symbolic, again in the sense that it
+works even when the initial program contains free variables
+whose values are unknown. For example, the program
+
+Bind(Normal(a, s), x, Normal(x, t))
+
+simpliﬁes to Normal(a, sqrt(sˆ2+tˆ2)).
+
+5.3 Algebraic simpliﬁcations
+
+When we produce a program that calculates acceptance ra-
+tios, the numerator and denominator share many factors.
+In handwritten inference procedures, these factors are can-
+celled out by hand. The simpliﬁcation transformation au-
+tomates this optimization using computer algebra. So it
+rewrites an expression like Dirac((a*b)/(a*c)) into
+Dirac(b/c), no matter what a, b, and c happen to denote.
+
+6 Experimental results
+
+We demonstrate the efﬁcacy of our technique with two
+end-to-end examples. In each example, a composition of
+reusable inference transformations turns a small model into
+a sampler. Moreover, the simpliﬁcation transformation de-
+tailed in Section 5 brings the run times of the automatically
+generated samplers in line with handwritten code.
+
+The ﬁrst example is to learn the parameters of a linear dy-
+namical system, as described in Section 3.
+In Table 1,
+we compare the run times of four MH samplers, the sec-
+ond and third of which were produced automatically using
+our program transformations. For the ﬁrst row, we sample
+the conditional distribution described by kalman2 using
+WebPPL, a state of the art probabilistic programming sys-
+tem. For the second row we use kalman4, a MH sam-
+pler created by Algorithm 6. For the third row we use
+kalman5, which is kalman4 followed by simpliﬁcation.
+For the last row, we use a handwritten MH sampler.
+
+The second example is to infer topics from a small latent
+Dirichlet allocation model. The model only has 2 docu-
+ments, 3 words, and 2 latent topics. In Table 2, we com-
+pare the run times of three Gibbs samplers, the ﬁrst two
+
+WebPPL MH
+Code-generated MH
+Code-generated MH with simpliﬁcations
+Handwritten MH
+
+1078
+1321
+269
+207
+
+16
+93
+10
+4
+
+Table 1: Run times of different inference procedures for
+our linear dynamics model
+
+Inference method
+
+Run time (msecs)
+SD
+
+Mean
+
+Code-generated Gibbs
+Code-generated Gibbs with simpliﬁcations
+Handwritten Gibbs
+
+>5000 —
+4
+5
+
+118
+171
+
+Table 2: Run times of different inference procedures for
+our LDA model
+
+of which were produced automatically using our program
+transformations. For the ﬁrst row, we attempt to run the
+output of Algorithm 7 directly. Because that output con-
+tains Int, we must perform numerical integration, which
+takes a long time. For the second row, we feed that out-
+put of Algorithm 7 through simpliﬁcation, thereby avoid-
+ing numerical integration. For the last row, we use a Gibbs
+sampler handwritten to take advantage of conjugacies.
+
+All samplers are run to produce 20,000 samples. All mea-
+surements were produced on a quad-core Intel i5-2540M
+processor running 64-bit Ubuntu 14.04. Our samplers use
+GHC 7.10.2 -O2, and WebPPL’s sampler is compiled to
+JavaScript and run on Node.js version 0.10.28. We repeat
+the experiment 10 times to produce the mean and standard
+deviations shown in Tables 1 and 2.
+
+7 Conclusions
+
+We use program transformations to express inference meth-
+ods in terms of simpler operations such as disintegration
+and expectation. This technique for composing inference
+methods produces procedures that perform comparably to
+handwritten code. By making it easier to create and test in-
+ference procedures on models, we allow faster exploration
+of novel inference algorithms than was previously possible.
+
+Future work includes implementing single-site MH as a
+program transformation that takes a target distribution as
+input and uses its dependency structure to generate a pro-
+posal kernel automatically. We also want to incorporate
+Hamiltonian Monte Carlo and variational inference, which
+call for automatic differentiation as a program transforma-
+tion.
+
+and learning. In NIPS Workshop on Probabilistic Pro-
+gramming, 2008.
+
+Willie Neiswanger, Chong Wang, and Eric Xing. Asymp-
+totically exact, embarrassingly parallel MCMC.
+In
+The Conference on Uncertainty in Artiﬁcial Intelligence
+(UAI), 2014.
+
+Avi Pfeffer. Figaro: An object-oriented probabilistic pro-
+gramming language. Charles River Analytics Technical
+Report, 137, 2009.
+
+Norman Ramsey and Avi Pfeffer. Stochastic lambda cal-
+culus and monads of probability distributions. In POPL
+’02: Conference Record of the Annual ACM Symposium
+on Principles of Programming Languages, pages 154–
+165. ACM Press, 2002.
+
+Sebastian Riedel, Sameer Singh, Vivek Srikumar, Tim
+Rockt¨aschel, Larysa Visengeriyeva, and Jan Noessner.
+WOLFE: Strength Reduction and Approximate Pro-
+gramming for Probabilistic Programming.
+In Interna-
+tional Workshop on Statistical Relational AI (StarAI),
+2014.
+
+Adam ´Scibior, Zoubin Ghahramani, and Andrew D. Gor-
+don. Practical probabilistic programming with monads.
+In Proceedings of the 8th ACM SIGPLAN Symposium on
+Haskell, Haskell 2015, Vancouver, BC, Canada, Septem-
+ber 3-4, 2015, pages 165–176, 2015.
+
+Chung-chieh Shan and Norman Ramsey.
+partial
+
+lazy
+
+Symbolic
+evaluation.
+
+inference
+
+Bayesian
+http://www.cs.tufts.edu/˜nr/pubs/disintegrator-
+2015.
+
+by
+
+Frank Wood, Jan Willem van de Meent, and Vikash Mans-
+inghka. A new approach to probabilistic programming
+inference. In Proceedings of the 17th International con-
+ference on Artiﬁcial Intelligence and Statistics, pages
+1024–1032, 2014.
+
+Minjie Xu, Balaji Lakshminarayanan, Yee Whye Teh,
+Jun Zhu, and Bo Zhang. Distributed bayesian poste-
+rior sampling via moment sharing. In Z. Ghahramani,
+M. Welling, C. Cortes, N.D. Lawrence, and K.Q. Wein-
+berger, editors, Advances in Neural Information Process-
+ing Systems 27, pages 3356–3364. Curran Associates,
+Inc., 2014.
+
+Acknowledgements
+
+We thank David Belanger and Jacques Carette for helpful
+discussions, feedback, and suggestions. This research was
+supported by DARPA grant FA8750-14-2-0007, NSF grant
+CNS-0723054, Lilly Endowment, Inc. (through its support
+for the Indiana University Pervasive Technology Institute),
+and the Indiana METACyt Initiative. The Indiana META-
+Cyt Initiative at IU is also supported in part by Lilly En-
+dowment, Inc.
+
+References
+
+Sooraj Bhat, Ashish Agarwal, Richard Vuduc, and Alexan-
+der Gray. A type theory for probability density functions.
+In POPL ’12: Conference Record of the Annual ACM
+Symposium on Principles of Programming Languages,
+pages 545–556. ACM Press, January 2012.
+
+Sooraj Bhat, Johannes Borgstr¨om, Andrew D. Gordon, and
+Claudio Russo. Deriving probability density functions
+from probabilistic functional programs. In 19th Interna-
+tional Conference on Tools and Algorithms for the Con-
+struction and Analysis of Systems (TACAS), 2013.
+
+Jacques Carette and Chung-chieh Shan. Simplifying prob-
+abilistic programs using computer algebra. In Practical
+Aspects of Declarative Languages - 18th International
+Symposium, PADL 2016, St. Petersburg, FL, USA, Jan-
+uary 18-19, 2016. Proceedings, pages 135–152, 2016.
+
+A. Gelman, A. Vehtari, P. Jyl¨anki, C. Robert, N. Chopin,
+and J. P. Cunningham. Expectation Propagation as a Way
+of Life. ArXiv e-prints, December 2014.
+
+Mich`ele Giry. A categorical approach to probability theory.
+In Bernhard Banaschewski, editor, Categorical Aspects
+of Topology and Analysis: Proceedings of an Interna-
+tional Conference, pages 68–85. Springer, 1982.
+
+Noah D. Goodman, Vikash K. Mansinghka, Daniel M. Roy,
+Keith Bonawitz, and Joshua B. Tenenbaum. Church: a
+language for generative models. In Proc. of Uncertainty
+in Artiﬁcial Intelligence, 2008.
+
+Thomas L Grifﬁths and Mark Steyvers. Finding scientiﬁc
+topics. Proceedings of the National Academy of Sci-
+ences, 101(suppl 1):5228–5235, 2004.
+
+Michael Hughes, Dae Il Kim, and Erik Sudderth. Reli-
+able and scalable variational inference for the hierarchi-
+cal Dirichlet process. In Proceedings of the Eighteenth
+International Conference on Artiﬁcial Intelligence and
+Statistics, pages 370–378, 2015.
+
+Andrew McCallum, Khashayar Rohanemanesh, Michael
+Wick, Karl Schultz, and Sameer Singh. Factorie: Ef-
+ﬁcient probabilistic programming for relational factor
+graphs via imperative declarations of structure, inference
+
+A Appendix for Composing inference algorithms as program transformations
+
+Software for running all experiments is available for reviewers.
+
+A.1 Complete example of inference composition in action
+
+We motivate transformations by using them in an example. The following is a simpliﬁcation of a linear dynamical system
+where we are trying to ﬁnd the posterior distribution over noiseT and noiseE given observations m1 and m2.
+
+noiseT
+
+∼ Uniform(3, 8)
+
+noiseE
+x1 | noiseT
+
+∼ Uniform(1, 4)
+∼ Normal(0, noiseT )
+
+m1 | x1, noiseE ∼ Normal(x1, noiseE)
+x2 | x1, noiseT ∼ Normal(x1, noiseT )
+
+m2 | x2, noiseE ∼ Normal(x2, noiseE)
+
+We would represent this model in our language as follows:
+
+kalman = Bind(Uniform(3,8), noiseT,
+
+Bind(Uniform(1,4), noiseE,
+
+Bind(Normal( 0, noiseT), x1,
+
+Bind(Normal(x1, noiseE), m1,
+
+Bind(Normal(x1, noiseT), x2,
+
+Bind(Normal(x2, noiseE), m2,
+
+Dirac(((m1, m2),
+
+(noiseT, noiseE)))))))))
+
+We apply disintegration, a transformation we explain in more detail in Section 4, to get another program. The disintegration
+of kalman is a program which takes as input m1 and m2 and returns the distribution over (noiseT, noiseE) where
+the values given for m1 and m2 held in kalman.
+
+kalman2=
+Lam((m1,m2),
+
+Bind(Uniform(3, 8), noiseT,
+
+Bind(Uniform(1, 4), noiseE,
+
+Bind(Normal(0, noiseT), x1,
+
+Bind(Normal(x1, noiseT), x2,
+Superpose((((exp((-(((m2-x2)*(m2-x2))/
+
+((2/1)*(noiseEˆ(2/1))))))/noiseE)/
+
+sqrt(((2/1)*Pi))),
+Superpose((((exp((-(((m1-x1)*(m1-x1))/
+
+sqrt(((2/1)*Pi))),
+
+Dirac((noistT, noiseE))))))))))))
+
+((2/1)*(noiseEˆ(2/1))))))/noiseE)/
+
+We then further simplify kalman2 to get kalman3. This program is equivalent to kalman2, except we have integrated
+out the normals inside
+
+kalman3((m1,m2)) =
+Superpose((((1/Pi)*(1/6)),
+Bind(Uniform(3, 8), noiseT,
+
+Bind(Uniform(1, 4), noiseE,
+
+Superpose(
+(((exp((((((((((noiseT*noiseT)*
+
+(m1*m1))*2)+
+
+((((noiseT*noiseT)*
+m1)*m2)*(-2)))+
+
+((noiseT*noiseT)*
+(m2*m2)))+
+
+((noiseE*noiseE)*
+(m1*m1)))+
+
+((noiseE*noiseE)*
+(m2*m2)))*
+
+(1/((((noiseT*noiseT)*
+(noiseT*noiseT))+
+(((noiseE*noiseE)*
+
+(noiseT*noiseT))*3))+
+
+((noiseE*noiseE)*
+(noiseE*noiseE)))))*
+
+(-1/2)))*
+
+(1/sqrt((((noiseTˆ4)+
+
+(((noiseEˆ2)*
+
+(noiseTˆ2))*3))+
+(noiseEˆ4)))))*3),
+Dirac((noiseT, noiseE)))))))))
+
+Then we apply the mh transformation to kalman3 along with a program representing the proposal distributions to get the
+program in Figure 1.
+
+proposal((m1, m2), (noiseT, noiseE)) =
+
+Bind(Bernoulli(0.5), b,
+
+If(b, Bind(Uniform(3, 8), noiseT’,
+
+Dirac((noiseT’, noiseE))),
+
+Bind(Uniform(1, 4), noiseE’,
+
+Dirac((noiseT, noiseE’)))))
+
+mh(proposal, kalman3)
+
+Figure 2 is the program we obtain after performing algebraic simpliﬁcations in Maple.
+
+kalman4 =
+
+Lam(x0,
+
+App(Lam(x1,
+
+Lam(x2, Bind(Superpose(((1/2), Bind(Uniform(3, 8), a3, Dirac((a3, x2[1])))),
+
+((1/2), Bind(Uniform(1, 4), a4, Dirac((x2[0], a4))))),
+
+a5,
+Dirac((a5, (App(x1,a5)/App(x1,x2))))))),
+
+Lam(x6, App(App(App(Lam(x7,
+
+Lam(x8,
+App(Lam(x9,
+App(Lam(x10,
+App(Lam(x11,
+App(Lam(x12,
+
+(Superpose((x9, x10[0]), (x11, x12[0])),
+Lam(x13, ((0+( x9*App(x10[1],x13)))
+
++(x11*App(x12[1],x13)))))),
+
+(Superpose(), Lam(x14, 0)))),1)),
+
+App(Lam(x15,
+App(Lam(x16,
+App(Lam(x17,
+App(Lam(x18,
+
+(Superpose((x15, x16[0]), (x17, x18[0])),
+Lam(x19, ((0+(x15*App(x16[1],x19)))
+
++(x17*App(x18[1],x19)))))),
+
+(Superpose(), Lam(x20, 0)))),1)),
+
+App(Lam(x21,
+App(Lam(x22,
+
+(Superpose((x21, x22[0])),
+Lam(x23, (0+(x21*App(x22[1],x23)))))),
+
+App(Lam(x24,
+App(Lam(x25,
+
+(Superpose((x24, x25[0])),
+Lam(x26, (0+(x24*App(x25[1],x26)))))),
+
+App(Lam(x27,
+App(Lam(x28,
+App(Lam(x29,
+App(Lam(x30,
+
+(Superpose((x27, x28[0]), (x29, x30[0])),
+Lam(x31, ((0+(x27*App(x28[1],x31)))
+
++(x29*App(x30[1],x31)))))),
+
+(Superpose(), Lam(x32, 0)))),1)),
+
+If((x8[1]<4), If((1<x8[1]),
+App(Lam(x33,
+App(Lam(x34,
+
+(Superpose((x33, x34[0])),
+Lam(x35, (0+(x33*App(x34[1],x35)))))),
+
+App(Lam(x36,
+App(Lam(x37,
+App(Lam(x38,
+App(Lam(x39,
+
+(Superpose((x36, x37[0]), (x38, x39[0])),
+Lam(x40, ((0+(x36*App(x37[1],x40)))
+
++(x38*App(x39[1],x40)))))),
+
+(Superpose(), Lam(x41, 0)))),1)),
+
+If((x8[0]<8), If((3<x8[0]),
+
+App(Lam(x42,
+App(Lam(x43,
+
+(Superpose((x42, x43[0])),
+Lam(x44, (0+(x42*App(x43[1],x44)))))),
+
+App(Lam(x45,
+
+(Dirac(x45), Lam(x46, App(x46,x45)))),
+
+(x8[0], x8[1])))),((1/Pi)*(1/6))),
+
+(Superpose(), Lam(x47, 0))),
+(Superpose(), Lam(x48, 0))))),1))),(1/5)),
+(Superpose(), Lam(x49, 0))),
+(Superpose(), Lam(x50, 0))))),1))),(1/3)))),
+((exp(((((((((((((((x8[0]*x8[0])*
+
+((((x8[0]*x8[0])*x7[0])*x7[1])*(-2)))+
+
+(x7[0]*x7[0]))*2)+
+
+((x8[0]*x8[0])*(x7[1]*x7[1])))+
+((x8[1]*x8[1])*(x7[0]*x7[0])))+
+((x8[1]*x8[1])*(x7[1]*x7[1])))+
+(((x8[0]*x8[0])*x7[0])*(-42)))+
+(((x8[1]*x8[1])*x7[0])*(-42)))+
+(((x8[1]*x8[1])*x7[1])*(-42)))+
+((x8[0]*x8[0])*441))+
+((x8[1]*x8[1])*882))*
+
+(1/((((x8[0]*x8[0])*
+(x8[0]*x8[0]))+
+
+(((x8[0]*x8[0])*(x8[1]*x8[1]))*3))+
+((x8[1]*x8[1])*(x8[1]*x8[1])))))*(-(1/2))))*
+(1/sqrt((((x8[0]ˆ4)+(((x8[0]ˆ2)*(x8[1]ˆ2))*3))+
+(x8[1]ˆ4)))))*3)))),1))),1))),x0),x6)[1],Lam(x51, 1)))))
+
+Figure 1: The result of applying the MH transformation to a posterior distribution
+
+kalman5 =
+
+Lam(x0,
+
+Lam(x1,
+
+Superpose(((1/2), Bind(Uniform(1, 4), a2, Dirac(((x1[0], a2),
+
+(If(If((x1[0]<3), true, (x1[0]=3)),
+
+0,
+If((x1[0]<8),
+
+((((exp((((((((((((((a2ˆ2)*(x0[0]ˆ2))+
+((a2ˆ2)*(x0[1]ˆ2)))+
+((x0[0]ˆ2)*((x1[0]*x1[0])*2)))+
+(((x0[0]*x0[1])*
+
+(x1[0]*x1[0]))*(-2)))+
+
+((x0[1]ˆ2)*(x1[0]*x1[0])))+
+(((a2ˆ2)*x0[0])*(-42)))+
+(((a2ˆ2)*x0[1])*(-42)))+
+((x0[0]*(x1[0]*x1[0]))*(-42)))+
+((a2ˆ2)*882))+
+((x1[0]*x1[0])*441))*
+((((a2ˆ4)+((a2ˆ2)*((x1[0]*x1[0])*3)))+
+
+(x1[0]ˆ4))ˆ(-1)))*(-(1/2))))*
+
+((((a2ˆ4)+((a2ˆ2)*((x1[0]*x1[0])*3)))+
+
+(x1[0]ˆ4))ˆ(-(1/2))))*
+
+((((x1[0]ˆ4)+
+
+(((x1[0]*x1[0])*(x1[1]*x1[1]))*3))+
+(x1[1]ˆ4))ˆ(1/2)))*(Piˆ(-1)))*(1/30)), 0))*
+
+If(If((x1[1]<4),
+
+If((1<x1[1]),
+
+If((x1[0]<8), (3<x1[0]), false),
+false),
+
+false),
+
+(exp((((((((((((((x0[0]ˆ2)*((x1[0]*x1[0])*2))+
+
+(((x0[0]*x0[1])*
+
+(x1[0]*x1[0]))*(-2)))+
+
+((x0[1]ˆ2)*(x1[0]*x1[0])))+
+((x0[0]ˆ2)*(x1[1]*x1[1])))+
+((x0[1]ˆ2)*(x1[1]*x1[1])))+
+((x0[0]*(x1[0]*x1[0]))*(-42)))+
+((x0[0]*(x1[1]*x1[1]))*(-42)))+
+((x0[1]*(x1[1]*x1[1]))*(-42)))+
+((x1[0]*x1[0])*441))+
+((x1[1]*x1[1])*882))*
+((((x1[0]ˆ4)+
+
+(((x1[0]*x1[0])*(x1[1]*x1[1]))*3))+
+(x1[1]ˆ4))ˆ(-1)))*(1/2)))*(Pi*30)),
+
+infinity)))))),
+
+((1/2), Bind(Uniform(3, 8), a3, Dirac(((a3, x1[1]),
+
+(If(If((x1[1]<1), true, (x1[1]=1)),
+
+0,
+If((x1[1]<4),
+
+((((exp(((((((((((((((a3ˆ2)*(x0[0]ˆ2))*2)+
+
+((((a3ˆ2)*x0[0])*x0[1])*(-2)))+
+((a3ˆ2)*(x0[1]ˆ2)))+
+((x0[0]ˆ2)*(x1[1]*x1[1])))+
+((x0[1]ˆ2)*(x1[1]*x1[1])))+
+(((a3ˆ2)*x0[0])*(-42)))+
+((x0[0]*(x1[1]*x1[1]))*(-42)))+
+((x0[1]*(x1[1]*x1[1]))*(-42)))+
+((a3ˆ2)*441))+
+((x1[1]*x1[1])*882))*
+((((a3ˆ4)+((a3ˆ2)*
+
+((x1[1]*x1[1])*3)))+
+(x1[1]ˆ4))ˆ(-1)))*(-(1/2))))*
+
+((((a3ˆ4)+((a3ˆ2)*((x1[1]*x1[1])*3)))+
+
+(x1[1]ˆ4))ˆ(-(1/2))))*
+
+((((x1[0]ˆ4)+
+
+(((x1[0]*x1[0])*(x1[1]*x1[1]))*3))+
+(x1[1]ˆ4))ˆ(1/2)))*(Piˆ(-1)))*(1/30)), 0))*
+
+If(If((x1[1]<4),
+
+If((1<x1[1]),
+
+If((x1[0]<8), (3<x1[0]), false),
+false),
+
+false),
+
+(exp((((((((((((((x0[0]ˆ2)*((x1[0]*x1[0])*2))+
+
+(((x0[0]*x0[1])*
+
+(x1[0]*x1[0]))*(-2)))+
+
+((x0[1]ˆ2)*(x1[0]*x1[0])))+
+((x0[0]ˆ2)*(x1[1]*x1[1])))+
+((x0[1]ˆ2)*(x1[1]*x1[1])))+
+((x0[0]*(x1[0]*x1[0]))*(-42)))+
+((x0[0]*(x1[1]*x1[1]))*(-42)))+
+((x0[1]*(x1[1]*x1[1]))*(-42)))+
+((x1[0]*x1[0])*441))+
+((x1[1]*x1[1])*882))*
+((((x1[0]ˆ4)+
+
+(((x1[0]*x1[0])*
+
+(x1[1]*x1[1]))*3))+
+
+(x1[1]ˆ4))ˆ(-1)))*(1/2)))*(Pi*30)),
+
+infinity)))))))))
+
+Figure 2: The result of optimizing the program produced by the MH transformation
+
+

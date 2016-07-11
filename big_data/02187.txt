@@ -1,0 +1,1872 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+7
+
+ 
+
+ 
+ 
+]
+
+R
+C
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+7
+8
+1
+2
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Rigorous Analysis of Software Countermeasures against Cache Attacks
+
+Goran Doychev
+
+IMDEA Software Institute
+goran.doychev@imdea.org
+
+Boris K¨opf
+
+IMDEA Software Institute
+boris.koepf@imdea.org
+
+Abstract
+
+CPU caches reduce the latency of memory accesses on
+average, but not in the worst case. Thus, they introduce
+variations into the execution time that can be exploited
+by adversaries to recover secrets from programs, such as
+private information about users or cryptographic keys.
+
+Establishing the security of countermeasures against
+this threat often requires intricate reasoning about the in-
+teractions of the program and the hardware platform and
+has so far only been done for restricted cases.
+
+In this paper we devise novel techniques that pro-
+vide support for bit-level and arithmetic reasoning about
+pointers in the presence of dynamic memory allocation.
+These techniques enable us to perform the ﬁrst rigorous
+analysis of widely deployed software countermeasures
+against cache attacks on modular exponentiation, based
+on executable code.
+
+1 Introduction
+
+CPU caches reduce the latency of memory accesses on
+average, but not in the worst case. Thus, they introduce
+variations into the execution time that can be exploited
+by adversaries to recover secrets from programs, such as
+private information about users or cryptographic keys.
+
+A large number of techniques have been proposed to
+counter this threat. Some proposals work at the level
+of the operating system [13], others at the level of the
+hardware architecture [22] or the cryptographic proto-
+col [11]. However, so far only software countermeasures
+have seen wide-spread adoption in practice.
+
+The most defensive countermeasure is to forbid con-
+trol ﬂow, memory accesses, and execution time of in-
+dividual instructions to depend on secret data. While
+such code is easily seen to prevent leaks through in-
+struction and data caches, it also prevents the perfor-
+mance gains enabled by such accelerators. More per-
+missive countermeasures are to ensure that both branches
+
+of each conditional ﬁt into a single line of the instruc-
+tion cache, to preload lookup tables, or to permit secret-
+dependent memory access patterns as long as they are
+secret-independent at the granularity of cache lines or
+sets. Such permissive code can beneﬁt from hardware
+acceleration, however, analyzing its security requires in-
+tricate reasoning about the interactions of the program
+and the hardware platform and has so far only been done
+for restricted cases.
+
+A major hurdle for reasoning about such interactions
+is that it requires support for accurate, logical and arith-
+metic reasoning on pointers (for tracking cache align-
+ment), but it also requires dealing with pointers sym-
+bolically (for capturing dynamically allocated memory
+used by multi-precision integer arithmetic). In this paper
+we present novel reasoning techniques that support both
+features. Based on these techniques we devise novel ab-
+stractions that capture a range of adversary models, in-
+cluding those that can observe sequences of accessed ad-
+dresses, or those that can observe sequences of accessed
+memory blocks. We frame both contributions in terms of
+novel abstract domains, which we implement on top of
+the CacheAudit static analyzer [10].
+
+We evaluate the effectiveness of our techniques in a
+case study where we perform the ﬁrst formal analysis
+of commonly used software countermeasures for pro-
+tecting modular exponentiation algorithms against cache
+side channels. The paper contains a detailed description
+of our case study; here we highlight the following results:
+
+• We analyze the security of the scatter/gather coun-
+termeasure used in OpenSSL 1.0.2f for protecting
+window-based modular exponentiation. Scatter/-
+gather ensures that the pattern of data cache ac-
+cesses is secret-independent at the level of granu-
+larity of cache lines and, indeed, our analysis of
+the binary executables reports security against ad-
+versaries that can monitor only cache line accesses.
+
+• Our analysis of the scatter/gather countermeasure
+
+1
+
+to adversaries
+also reports a leak with respect
+that can monitor memory accesses at a more ﬁne-
+grained resolution. This weakness that has been
+exploited in the CacheBleed attack [24], where the
+adversary observes accesses to the individual banks
+within a cache line. We analyze the variant of scat-
+ter/gather published in OpenSSL 1.0.2g as a re-
+sponse to the attack and prove its security with re-
+spect to powerful adversaries that can monitor the
+full address trace.
+
+• Our analysis detects the side channel in the square-
+and-multiply based algorithm in libgcrypt 1.5.2
+that has been exploited in [23, 16], but can prove
+the absence of instruction and data cache leaks in
+the square-and-always-multiply algorithm used in
+libgcrypt 1.5.3, for some compiler optimization lev-
+els.
+
+Overall, our results illustrate the dependency of software
+countermeasures against cache attacks on brittle details
+of the compilation and the hardware architecture, and
+they demonstrate how the techniques developed in our
+paper can effectively support rigorous analysis of soft-
+ware countermeasures.
+
+In summary, our contributions are to devise novel tech-
+niques that enable cache-aware reasoning about dynam-
+ically allocated memory, and to put these techniques to
+work in the ﬁrst rigorous analysis of widely deployed
+permissive countermeasures against cache side channel
+attacks.
+
+The remainder of this paper is structured as follows.
+In Section 2 we illustrate the scope of our techniques by
+example. In Section 3 we deﬁne programs and adver-
+saries that observe them. In Section 4 and 5 we deﬁne
+our novel abstract domains. We present our case studies
+in Section 6 before we revisit prior art and conclude in
+Sections 7 and 8, respectively.
+
+Figure 1: Layout of pre-computed values in main mem-
+ory, for the windowed modular exponentiation imple-
+mentation from libgcrypt 1.6.1. Data highlighted in dif-
+ferent colors correspond to the pre-computed values p2
+and p3, respectively. Black lines denote the memory
+block boundaries, for an architecture with blocks of 64
+bytes.
+
+OpenSSL 1.0.2f instead uses a more permissive approach
+that accesses only one table entry, however it uses a smart
+layout of the tables to ensure that the requested memory
+blocks are loaded into cache in a constant order. An ex-
+ample layout for storing 8 pre-computed values is shown
+in Figure 2. The code that manages such tables consists
+
+2 Illustrative Example
+
+We illustrate the scope of the techniques developed in
+this paper using a problem that arises in implementations
+of windowed modular exponentiation. There, powers of
+the base are pre-computed and stored in a table for fu-
+ture lookup. Figure 1 shows an example memory lay-
+out of two such pre-computed values p1 and p2, each of
+3072 bits. An adversary that observes accesses to the six
+memory blocks starting at 80eb140 knows that p2 was
+requested, which can give rise to effective key-recovery
+attacks [16].
+
+Defensive approaches for table lookup, as imple-
+mented in NaCl or libgcrypt 1.6.3, avoid such vulnera-
+bilities by accessing all table entries, in a constant order.
+
+Figure 2: Layout of pre-computed values in main mem-
+ory, achieved with the scatter/gather countermeasure.
+Data highlighted in different colors correspond to pre-
+computed values p0, . . . , p7, respectively. Black lines de-
+note the memory block boundaries, for an architecture
+with blocks of 64 bytes.
+
+of three functions, which are given in Figure 3.
+
+• To create the layout, the function align aligns a
+buffer of memory with the memory block boundary
+by ensuring the least-signiﬁcant bits of the buffer
+address are zeroed, see Figure 3a.
+
+• To write a value into the array the function
+scatter ensures that the bytes of the precom-
+
+2
+
+puted values are stored spacing bytes apart, see
+Figure 3a.
+
+• Finally, to retrieve a pre-computed value from the
+buffer, the function gather assembles the value
+by accessing its bytes in the same order they were
+stored, see Figure 3c.
+
+3 Security Against Memory Trace Attacks
+
+In this section we deﬁne three kinds of adversaries
+that can monitor a program’s accesses to main memory,
+ranked by their observational capabilities. We begin by
+introducing abstract notions of programs and computa-
+tions.
+
+(1) align(buf)
+(2)
+
+return buf − buf & (block sz − 1) + block sz
+
+(a) Aligning a buffer with block boundary.
+
+3.1 Programs and Computations
+A program P = (S
+components:
+
+,I, A , T ) consists of the following
+
+(1) scatter(buf,p,k)
+(2)
+
+for i := 0 to N − 1 do
+
+(3)
+
+buf[k + i ∗ spacing] := p[k][i]
+
+(b) Storing a pre-computed value into a buffer.
+
+(1) gather(r,buf,k)
+(2)
+
+for i := 0 to N − 1 do
+
+(3)
+
+r[i] := buf[k + i ∗ spacing]
+
+(c) Retrieving a pre-computed value from a scattered buffer.
+
+Figure 3: Scatter/gather method for storing and retriev-
+ing pre-computed values.
+
+Reasoning about the effectiveness of such counter-
+measures is a daunting task, involving reasoning about
+the interactions of the program and the hardware plat-
+form. First, one must ensure that the compiler does not
+perform unexpected optimizations. Second, one must en-
+sure that the data is aligned correctly, considering the
+memory and cache geometry, e.g. considering the size
+of the cache lines. Third, one must ensure that the as-
+sertions hold when considering unknown dynamic loca-
+tions in memory, as practical implementations place the
+pre-computed values in heap memory.
+
+The techniques we develop in this paper enable, for
+the ﬁrst time, the rigorous security analysis of permis-
+sive countermeasures against side-channel attacks, such
+as the one in Figure 3, based on executable code. Specif-
+ically, our techniques enable the static analysis of ba-
+sic logical and arithmetic operations on symbolic val-
+ues, which is required for reasoning about cache align-
+ment in the presence of dynamically allocated memory in
+functions such as align, scatter, and gather. We
+further develop techniques for tracking sets of observa-
+tions of cache adversaries, and for computing their size,
+which enables the quantiﬁcation of leaks. The results we
+derive are quantitative upper bounds on the information
+leaked to different kinds of adversaries; they include for-
+mal proofs of non-leakage, but go beyond them in that
+they help shed insights into the severity of leaks, should
+they exist.
+
+- a set of states
+
+• S
+• I ⊆ S
+
+- a set of initial states
+
+• A - a set of addresses
+• T ⊆ S × A ∗ × S
+A transition (s i,a,s
+
+- a transition relation
+
+j) ∈ T captures two aspects of a
+computation step: ﬁrst it describes how the instruction
+set semantics operates on data stored in CPU registers
+and main memory, namely by updating s i to s
+j; second
+it describes the sequence of memory accesses a ∈ A ∗
+issued during this update, which includes the addresses
+accessed when fetching instructions from the code seg-
+ment, as well as the addresses containing accessed data.
+A computation of P is an alternating sequence of states
+and events s 0a0s 1a1 . . .s n such that s 0 ∈ I, and that
+for all i ∈ {0, . . . ,n − 1}, (s i,ai,s i+1) ∈ T . The set of
+all computations of P is its trace collecting semantics
+Col(P) ⊆ Traces. When considering terminating pro-
+grams, the trace collecting semantics can be formally de-
+ﬁned as the least ﬁxpoint of the next operator contain-
+ing I:
+
+Col(P) = I ∪ next(I) ∪ next2(I) ∪ . . . ,
+
+where next describes the effect of one computation step:
+next(S) = {t.s nans n+1 | t.s n ∈ S ∧ (s n,an,s n+1) ∈ T }
+
+In the rest of the paper, we assume that P is ﬁxed and
+abbreviate its trace collecting semantics by Col. More-
+over, we will consider only P that are deterministic and
+terminating.
+
+3.2 A Hierarchy of Memory Trace Ob-
+
+servers
+
+We deﬁne three notions of security against memory trace
+attacks, corresponding to different observational capabil-
+ities of the adversary. We express these capabilities in
+terms of views, which are functions that map traces in
+Col to the set of observations an adversary can make.
+
+3
+
+The views can be derived by successively applying lossy
+transformations to the sequence of memory accesses of
+a program, which leads to a hierarchy of security deﬁni-
+tions.
+
+Address-trace observer The ﬁrst adversary we con-
+sider is one that can observe the full sequence of mem-
+ory locations that are accessed. Security against this ad-
+versary implies resilience to many kinds of microarchi-
+tectural side channels, through cache, TLB, DRAM, and
+branch prediction buffer.1 This observer, when restricted
+to addresses of instructions, is equivalent to the program
+counter security model [20].
+
+Formally, we deﬁne the address-trace observer by the
+view which takes the initial state and returns the exact
+sequence of accessed addresses in memory:
+
+viewato : s 0a0s 1a1 . . .s n 7→ a0a1 . . . an−1 .
+
+Block-trace observer The second adversary is one
+that can observe the sequence of memory blocks loaded
+by the user to the cache. Security against this adver-
+sary implies resilience against adversaries that can mon-
+itor memory accesses at the level of granularity of cache
+lines.
+
+For the formalization, recall that the cache logic splits
+the bit-representation of an n-bit memory address in two
+parts: the least signiﬁcant log2 b bits represent the posi-
+tion of the address within a memory block of b bytes, and
+the most signiﬁcant n − log2 b bits represent the set index
+(identifying the cache set) and the tag (identifying data
+within a cache set).
+
+tag
+
+set index
+
+block offset
+
+The projection of an address a to the most signiﬁcant
+n − log2 b bits, denoted by block(a), hence gives a for-
+mal account of the observation an adversary makes by
+observing memory addresses at the granularity of blocks.
+The block-trace observer is then deﬁned by
+
+viewbto = (mapblock) ◦ viewato ,
+
+where mapblock is the natural lifting of block to se-
+quences.
+
+Note that security against the block-trace observer
+does not exclude side-channel attacks by adversaries that
+can make more precise observations about memory ac-
+cesses, e.g. by observing DRAM or cache bank accesses.
+Our analysis is easily adapted to capture such adversaries
+by including more or less bits into the projection of the
+address, see the discussion of the CacheBleed attack in
+Section 6.
+
+B-block trace observer Finally we consider a class
+of adversaries that can observe a sequence of memory
+blocks, but that can only make limited observations about
+repeated accesses to the same memory block (which we
+call stuttering). This captures that the adversary can-
+not count the number of executed instructions, as long
+as they are guaranteed not to access main memory2; it
+is motivated by the fact that the latency of cache misses
+dwarfs that of cache hits and is hence easier to observe.
+We formalize this intuition in terms of a function
+viewbbto that takes as input a sequence w of blocks and
+maps maximal subsequences br to the block b. That is,
+repetitions of any block are removed.
+
+Example 1. The function viewbbto maps both aabcddc
+and abbbccddcc to the sequence abcdc, making them in-
+distinguishable to the adversary.
+
+We also consider a more powerful observer adversary
+that can distinguish between repetitions of blocks if they
+exceed a certain number. We omit the technical details
+for brevity.
+
+3.3 Quantifying Leaks
+
+A common approach to quantifying the degree of conﬁ-
+dentiality provided by a program is to derive bounds on
+the number of observations an adversary can make [17,
+14]. We follow this approach, and quantify the informa-
+tion leakage (in bits) as
+
+log2 |view(Col)| .
+
+(1)
+
+An advantage of this approach is that it can be auto-
+mated using standard program analysis techniques and
+that it comes with different interpretations in terms of se-
+curity: For example, it can be related to a lower bound
+on the expected number of guesses an adversary has to
+make for successfully recovering the secret [19], or to an
+upper bound for the probability of successfully guessing
+the secret in one shot [21]. A disadvantage of the ap-
+plication of this approach in previous works is that they
+have not distinguished between variations in adversary
+observations that are due to secret data and those that are
+due to public data. Rather, all unknown data has been
+considered to be secret (see e.g. [10]), which can lead to
+severe imprecisions of the analysis.
+
+In the language of information ﬂow analysis, secret
+data is called high, and public data is called low. In this
+paper, we propose a novel approach to handle low data
+by introducing symbolic values, which are values that are
+If a
+not known in advance but do not contain secrets.
+
+1We do not model, or make assertions about, the inﬂuence of ad-
+
+2Here we rely on the (weak) assumption that the second b in any
+
+vanced features such as out-of-order-execution.
+
+access sequence ··· bb ··· is guaranteed to hit the cache.
+
+4
+
+symbolic value is part of the adversary’s view, the ad-
+versary will observe the concrete valuation of the value
+without learning additional information about the secret
+data. Thus, symbols take the role of low data, and all
+remaining variations of the output are potentially due to
+high data. In that sense, our analysis can be seen as the
+ﬁrst quantitative information-ﬂow analysis that can deal
+with low inputs symbolically. In Section 4, we describe
+our use of symbolic values to capture pointer arithmetic
+with unknown (but non-secret) memory locations.
+
+3.4 Statically Determining Bounds on
+
+Leaks
+
+In this paper, we perform static analysis to determine up-
+per bounds on information leakage as deﬁned in equa-
+tion (1). However, in order to obtain Col, a ﬁxpoint of
+the next operator is needed, which is practically infeasi-
+ble in most cases. Abstract interpretation [9] overcomes
+this fundamental problem by computing a ﬁxpoint with
+respect to an efﬁciently computable over-approximation
+of next. This new ﬁxpoint represents a superset of all
+computations, which is sufﬁcient for deriving an upper
+bound on the range of the channel and thus on the leaked
+information.
+
+Technically,
+
+the effects of computation steps are
+tracked by the abstract next ♯-operator, and its ﬁx-
+point results in an abstract collecting semantics Col♯ ⊆
+Traces♯. We obtain upper bounds on leaks by computing
+log2 |view(g (Col♯))|, where g
+is the concretization func-
+tion, delivering the set of concrete elements represented
+by an abstract element. The correctness of the derived
+bounds on leaks is established by the global soundness
+of the analysis, which is deﬁned as
+
+Col ⊆ g (cid:16)Col♯(cid:17) .
+
+(2)
+
+Informally, the global soundness states that the analysis
+overapproximates the computations of the program. A
+central results from [9] states that global soundness is
+fulﬁlled if the abstract domains satisfy local soundness,
+which is deﬁned as
+
+∀a ∈ Traces♯ : next (g (a)) ⊆ g (next ♯(a)) .
+
+(3)
+
+Informally, local soundness states that the effect of each
+computation step is overapproximated, in the sense that
+the computations reachable when applying the abstract
+next♯-operator are a superset of the computations reach-
+able when applying the concrete next-operator.
+
+4 Abstract Domain for Cache-Aware
+
+Pointer Arithmetic
+
+Cache-aware code often uses Boolean and arithmetic op-
+erations on pointers in order to achieve favorable mem-
+ory alignment. In this section we devise the masked sym-
+bol domain, which is a simple abstract domain that en-
+ables the static analysis of such code in the presence of
+dynamically allocated memory.
+
+4.1 Representation
+
+The masked symbol domain is based on ﬁnite sets of
+what we call masked symbols, namely pairs (s,m) con-
+sisting of a symbol s ∈ Syms and a mask m ∈ {0,1, ⊤}n.
+The idea is that the symbol s represents an unknown base
+address and m represents the pattern of known and un-
+known bits. Here, {0,1} stand for known bits and ⊤
+stands for unknown bits. The i-th bit of a masked symbol
+(s,m) is hence equal to mi, unless mi = ⊤, in which case
+it is unknown. In the ﬁrst case we call the bit masked, in
+the second symbolic. We abbreviate the mask (⊤, . . . , ⊤)
+by ⊤.
+
+Two special cases of masked symbols are worth point-
+
+ing out:
+
+1. (s, ⊤) represents an unknown constant, and
+
+2. (s,m) with m ∈ {0,1}n represents the bit-vector m.
+
+That is, pairs of the form (s,m) generalize both bitvectors
+and unknown constants.
+
+4.2 Concretization and Counting
+
+We now give a semantics to elements of the masked sym-
+bol domain. This semantics is parametrized w.r.t.
+in-
+stantiations of the symbols. For the case where masked
+symbols represent partially known heap addresses, a val-
+uation corresponds to one speciﬁc layout.
+
+Technically, we deﬁne the concretization of ﬁnite sets
+: Syms →
+
+a mapping s
+
+F ⊆ Syms × {0,1, ⊤}n w.r.t.
+{0,1}n taking symbols to bit-vectors:
+
+g s (F) = {s (s) ⊕ m | (s,m) ∈ F}
+
+Here ⊕ is deﬁned bitwise by ci ⊕ mi = mi whenever mi ∈
+{0,1}, and ci otherwise.
+
+The following proposition shows that precise valua-
+tion of the constant symbols can be ignored for deriving
+upper bounds on the numbers of values that the novel
+domain represents. It enables the quantiﬁcation of infor-
+mation leaks in the absence of exact information about
+locations on the heap.
+Proposition 1. For every valuation s
+have |g s (F)| ≤ |F|
+
+: Syms → B we
+
+5
+
+Note that, with this deﬁnition we do not assume any
+relationship between symbols. Below we will increase
+its precision by tracking basic arithmetic relations be-
+tween symbols.
+
+4.3 Update
+
+We support two kinds of operations on elements of the
+masked symbol domain. The ﬁrst tracks patterns on bit-
+vectors and is needed for reasoning about memory align-
+ment. The second tracks the arithmetic relationship be-
+tween masked symbols and is needed for basic pointer
+arithmetic and equality checks. Here we describe only
+operations between individual masked symbols, the lift-
+ing to sets is obtained by performing the operations on
+all pairs of elements.
+
+Tracking Bits An important class of operations for
+cache-aware coding are those that allow the alignment
+of data to memory blocks without knowing the precise
+pointer value.
+
+Example 2. The following code snippet allocates 1000
+bytes of heap memory and stores a pointer to this chunk
+in x.
+
+x = malloc(1000);
+y = (x & 0xFFFFFFC0) + 0x40;
+
+The second line ensures that the 6 least signiﬁcant bits of
+that pointer are set to 0, thereby aligning it with cache
+lines of 64 bytes. Finally, adding 0x40 ensures that the
+resulting pointer points into the allocated region while
+keeping the alignment.
+
+To reason about this kind of code, we distinguish be-
+tween operations that allow the introduction of a mask
+and those that maintain a symbol: The left column of Ta-
+ble 1 lists logical bit operations that translate symbolic
+bits into masked bits, i.e. creating a mask. For example,
+the operation x & 0xFFFFFFC0 in Example 2 results
+in a masked symbol
+
+(sx, (⊤ · · · ⊤000000)) .
+
+(4)
+
+The right column in Table 1 lists logical bit opera-
+tions that leave symbolic bits unmodiﬁed, thus maintain-
+ing the symbol. Information about the mask can also be
+maintained throughout arithmetic operations such as ad-
+ditions, as long as all carry bits can be absorbed within
+the mask. For example, the addition of 0x3F to (4) re-
+sults in a masked symbol
+
+(sx, (⊤ · · · ⊤111111)) ,
+
+for which we can statically determine containment in the
+same cache line as (sx, (⊤ · · · ⊤000000)).
+
+s & 0 = 0
+s | 1 = 1
+s ˆ s = 0
+s - s = 0
+
+s & 1 = ⊤
+s | 0 = ⊤
+s ˆ 0 = ⊤
+
+Table 1: Bit operations and their effect on masked sym-
+bols. The left column shows operations that recover
+mask bits from symbols. The right column contains op-
+erations that leave symbolic bits unmodiﬁed.
+
+In cases when an operation does affect the symbolic
+bits, we take a conservative approach and drop informa-
+tion about the symbols. Formally,
+
+(s1,m1) ◦ (s2,m2) = ((s3), ⊤) ,
+
+where s3 is a fresh symbol. For example, the addition of
+0x40 to (4) in Example 2 results in the masked symbol
+
+(sy, (⊤ · · · ⊤000000)) ,
+
+which points to the beginning of some (unknown) cache
+line.
+
+Tracking Arithmetic Relationships Besides provid-
+ing support for bit-operations on symbolic addresses we
+also require support for basic pointer arithmetic.
+
+Example 3. The following code snippet sets the values
+of array A for indices i = 0, . . . ,9.
+
+int *x = A + 10;
+int *y;
+for (y = A; y <= x; y++)
+*y = get_value (...);
+
+The loop terminates whenever pointer y points at or be-
+yond x. While pointer arithmetic here can be avoided by
+an implementation using an integer counter in the for-
+condition, modern compilers often optimize such imple-
+mentations to a form using pointer arithmetic.
+
+The operations on symbols deﬁned so far are not suf-
+ﬁcient for analyzing the code in example 3 in case that
+A has a symbolic value. The reason for this is that a
+fresh symbol is generated at each iteration, and we will
+not be able to establish that *y has reached A + 10.
+To address this shortcoming, we add support for track-
+ing simple arithmetic congruences between masked sym-
+bols. For masked symbols x,y, those congruences are
+terms of the form x = y + o, where o is an integer con-
+stant.
+
+Building up a set of constraints C between masked
+symbols means to gather further information about the
+memory layout. Technically, we model this by deﬁning
+
+6
+
+the semantics g s (F) of a set of masked symbols only
+w.r.t. symbol valuations s
+: Syms → {0,1}n that satisfy
+
+s (s1) ⊕ m1 = s (s2) ⊕ m2 + o ,
+
+for all (s1,m1) = (s2,m2) + o ∈ S. As in Proposition 1,
+adding constraints improves the precision of counting.
+
+CPU Flag Values When performing an update involv-
+ing masked symbols, CPU ﬂag values may be affected.
+By default we safely assume that all ﬂag combinations
+are possible. To improve precision of the analysis, we
+identify several cases where ﬂags are determined even
+though values are symbolic. Among those cases, we
+identify the following:
+
+1. If at least one masked bit of the result is non-zero,
+
+then ZF = 1.
+
+2. If the operation does not affect the (possibly sym-
+bolic) most-signiﬁcant bits of the operands, then CF
+= 0.
+
+3. For operations sub src, dst (or equivalently,
+cmp src, dst), if we can deduce that src =
+dst + c with c 6= 0, then ZF = 1.
+
+A combination of information about the values of ﬂags
+and arithmetic congruences between pointers enables the
+analysis to determine when to exit the loop in Example 3.
+
+Local Soundness To establish the local soundness
+(see (3) in Section 3.4) of the masked symbol domain,
+we consider the abstract next♯-operator for the domain,
+which is implemented by the update-function described
+in this section.
+
+Lemma 1. The masked symbol domain is locally sound.
+
+Informally, the soundness follows from the soundness
+of the ingredients of its update: (a) fresh symbols are
+used whenever exact values are not known; (b) the trivial
+congruence x = x + 0 is used whenever no congruence
+between x and another masked symbol is known; (c) all
+ﬂag combinations are considered whenever the operation
+does not determine the exact ﬂags.
+
+different side channel attackers can make. For this we de-
+vise the access-trace domains, which capture the adver-
+sary models introduced in Section 3.2: address-trace (ad-
+versary who can observe addresses), block-trace (adver-
+sary who can observe memory blocks), and b-block-trace
+(adversary who can observe memory blocks modulo rep-
+etitions). We describe those domains, and elaborate on
+developments which allow us to precisely capture cases
+where a b-block-trace adversary learns less information
+than an address- and block-trace adversary, as is the case
+in the following example.
+
+Example 4. The following code snippet presents implicit
+information ﬂow from the secret value s to the public
+output x.
+
+if ( s == 1 ) x = 1; else x = 0;
+
+Figure 4 shows layout of the code snippet in the binary.
+Regardless whether the layout of the executable causes
+the code to ﬁt into one memory block or two, the same
+sequence of blocks will be loaded into cache.
+
+(a) The if-branch causes two I-cache accesses to addresses within
+block 580; The else-branch causes one I-cache access to an ad-
+dress within block 580.
+
+(b) The if-branch causes two I-cache accesses to addresses within
+block 580; The else-branch causes one I-cache access to an ad-
+dress within block 5c0. Afterwards, in both cases instructions
+within block 5c0 will be executed.
+
+Figure 4: Two possible layouts of if-then-else code, com-
+piled with gcc. The highlighted code corresponds to the
+if-check and jump, the if-branch and the else-branch, re-
+spectively. The red curve represents the jump target in
+the end of the if-branch. Black lines denote block bound-
+aries, for an architecture with 64-byte memory blocks.
+
+5 Abstract Domains for Memory Access
+
+Traces
+
+5.1 Representation
+
+In this section, we present data structures for represent-
+ing the set of possible memory accesses a program can
+make, and for computing the number of observations that
+
+We use a directed acyclic graph (DAG) to compactly rep-
+resent traces of memory accesses. While a DAG repre-
+sentation can precisely represent a set of traces [10], a
+counting procedure which does not require enumerating
+
+7
+
+all traces may lose precision. The representation we de-
+vise is precise for the b-block observer, and provides an
+easy counting procedure.
+
+The DAG has a set of nodes N representing mem-
+ory accesses, with a unique root r and a set of edges
+E ⊆ N × N. We equip each node n ∈ N with a label
+L(n) that represents the adversary’s view of the node
+(i.e. addresses or blocks), and a repetition count R(n)
+that represents the number of times each address may be
+repeatedly accessed. We represent labels L(n) using the
+masked symbols abstract domain (see Section 4), and use
+a ﬁnite set abstraction to represent R(n).
+
+5.2 Concretization and Counting
+
+In an access-trace domain, each node n represents the set
+of traces of the program up to this point of the analysis.
+Its concretization function is deﬁned as
+g (n) =
+
+tk
+t0
+k | ℓi ∈ L(ni),ti ∈ R(ni)}
+{ℓ
+0 · · · ℓ
+
+[
+
+r=n0···nk=n is a
+path from r to n
+
+(5)
+For quantitatively assessing leaks we are interested
+in the number of observations |g (n)| an adversary can
+make. An upper bound on this number is easily com-
+puted from the access-trace domains using the following
+recursive equation:
+
+count(n) = |R(n)| · |L(n)| ·
+
+count(s)
+
+(6)
+
+(s,n)∈E
+
+For the b-block trace observer, we replace the factor
+|R(n)| from the expression in (6) by 1, which captures
+that this observer cannot distinguish between repetitions
+of accesses to the same memory block.
+
+5.3 Update and Join
+
+The access-trace domains are equipped with functions
+for update and join, which govern how sets of traces
+are extended and merged, respectively. The domains
+are deﬁned with respect to an observer modelled by the
+view ∈ {viewato,viewbto,viewbbto}, for the different views
+introduced in Section 3.3. Below we overload the nota-
+tion of view to take as input sets of addresses, and re-
+turn the respective set of observations (i.e. addresses or
+blocks).
+
+The update receives a node n representing a set of
+traces of memory accesses, and it extends n by a new
+access to a potentially unknown address that represented
+a ﬁnite set of masked symbols F. Technically:
+
+1. If the set of masked symbols is not a repetition (i.e.
+if L(n) 6= view(F)) the update function appends a
+new node n′ to n (adding (n,n′) to E) and it sets
+L(n′) = view(F) and R(n′) = {1}.
+
+8
+
+2. Otherwise (i.e. if L(n) = view(F)) it increments the
+
+possible repetitions in R(n) by one.
+
+The local soundness (see (3) in Section 3.4) of the
+access-trace domains follows directly because the ab-
+stract and the concrete updates are the same, with the
+difference that the abstract update results in a more com-
+pact representation in case of repetitions.
+
+Lemma 2. The access-trace domains are locally sound.
+
+The join for two nodes n1,n2 ﬁrst checks whether
+those nodes have the same parents and the same label, in
+which case n1 is returned, and their repetitions are joined.
+Otherwise a new node n′ with L(n′) = {e } is generated
+and edges (n1,n′) and (n2,n′) are added to E.
+
+To increase precision in counting for the b-block ad-
+versary, joins are delayed until the next update is per-
+formed. This captures cases where an if-then-else state-
+ment spans two memory blocks, both of which are ac-
+cessed regardless whether if-condition is taken or not, as
+demonstrated in Figure 4b.
+
+6 Case Study
+
+In this section we present a case study in which we
+leverage the techniques developed in this paper for the
+ﬁrst rigorous analysis of several countermeasures against
+cache side channel attacks against modular exponentia-
+tion algorithms from versions of libgcrypt and OpenSSL
+from April 2013 to March 2016. We report on results
+for leakage to the adversary models presented in Sec-
+tion 3.2 due to instruction-cache (I-cache) accesses and
+data-cache (D-cache) accesses.3 As the adversary mod-
+els are ordered according to their observational capabil-
+ities, this sheds light into the level of provable security
+that different protections offer.
+
+6.1 Tool building
+
+We implement the novel abstract domains described in
+Sections 4 and 5 on top of the CacheAudit open source
+static analyzer [10]. CacheAudit provides infrastructure
+for parsing, control-ﬂow reconstruction, and ﬁxed point
+computation. Our novel domains extend the scope of
+CacheAudit by providing support for (1) the analysis of
+dynamically allocated memory, and for (2) adversaries
+who can make ﬁne-grained observations about memory
+accesses. The resulting extensions to CacheAudit will be
+made publicly available.
+
+3We also analyzed the leakage from accesses to shared instruction-
+and data-caches; for the analyzed instances, the leakage results were
+consistently the maximum of the I-cache and D-cache leakage results.
+
+(cid:229)
+6.2 Target Implementations
+
+For libgcrypt we consider versions 1.5.2 to 1.6.3.
+In
+those versions of libgcrypt, four variants of modular ex-
+ponentiation are implemented, with different protections
+against side-channel attacks. In addition to those imple-
+mentations, we analyze two side-channel protections in-
+troduced in OpenSSL versions 1.0.2f and 1.0.2g, respec-
+tively. For fairness of comparison of security and perfor-
+mance we implement all protections on top of libgcrypt
+1.6.3 and analyze this code instead of OpenSSL.
+
+To generate the target executables of our experiments,
+we use ElGamal decryption routines based on each of the
+above-described implementations of modular exponenti-
+ation and the respective countermeasures, resulting in 5
+implementations. We compile them using GCC 4.8.4,
+on a 32-bit Linux machine running kernel 3.13. For El-
+Gamal decryption, we use a key size of 3072 bits.
+
+The current version of CacheAudit supports only a
+subset of the x86 instruction set and CPU ﬂags, which we
+extend on demand. To bound the required extensions we
+focus our analysis on the regions of the executables that
+were targeted by exploits and to which the corresponding
+countermeasures were applied, rather than the whole ex-
+ecutables. As a consequence, the formal statements we
+derive only hold for those regions. In particular, we do
+not analyze the code of the libgcrypt’s multi-precision in-
+teger multiplication and modulo routines, and we specify
+that the output of the memory allocation functions (e.g.
+malloc()) is symbolic (see Section 4).
+
+6.3 Square-and-Multiply Modular Expo-
+
+nentiation
+
+The ﬁrst target of our analysis is modular exponentia-
+tion by square-and-multiply. The algorithm is depicted
+in Figure 5 and is implemented, e.g., in libgcrypt ver-
+sion 1.5.2. Line 5 of the algorithm contains a condi-
+tional branch whose condition depends on a bit of the se-
+cret exponent. An attacker who can observe the victim’s
+accesses to instruction or data caches may learn which
+branch was taken and identify the value of the exponent
+bit. This weakness has been shown to be vulnerable to
+key-recovery attacks based on prime+probe [16, 25] and
+ﬂush+reload [23].
+
+In response to these attacks, libgcrypt 1.5.3 imple-
+ments a countermeasure that makes sure that the squar-
+ing operation is always performed, see Figure 6) for the
+pseudocode. It is noticeable that this implementation still
+contains a conditional branch that depends on the bits of
+the exponent in Line 7, namely the copy operation that
+selects the outcome of both multiplication operations.
+However, this has been considered a minor problem be-
+cause the branch is small and is expected to ﬁt into the
+
+same cache line as preceding and following code, or to be
+always loaded in cache due to speculative execution [23].
+In the following we apply the techniques developed in
+this paper to analyze whether the expectations on mem-
+ory layout are met.
+
+(1) r := 1
+(2) for i := |e| − 1 downto 0 do
+(3)
+
+r := mpi sqr(r)
+r := mpi mod(r,m)
+if ei = 1 then ← vulnerable conditional jump
+
+r := mpi mul(b,r)
+r := mpi mod(r,m)
+
+(7)
+(8) return r
+
+Figure 5: Pseudocode for square-and-multiply modular
+exponentiation
+
+(4)
+
+(5)
+
+(6)
+
+(4)
+
+(5)
+
+(6)
+
+(7)
+
+(1) r := 1
+(2) for i := |e| − 1 downto 0 do
+(3)
+
+r := mpi sqr(r)
+r := mpi mod(r,m)
+tmp := mpi mul(b,r)
+tmp := mpi mod(tmp,m)
+if ei = 1 then
+
+r := tmp
+
+(8)
+(9) return r
+
+Figure 6: Pseudocode for square-and-always-multiply
+modular exponentiation
+
+Observer
+I-Cache
+D-Cache
+
+address
+
+1 bit
+1 bit
+
+block
+1 bit
+1 bit
+
+b-block
+
+1 bit
+1 bit
+
+(a) Square-and-multiply from libgcrypt 1.5.2
+Observer
+b-block
+I-Cache
+D-Cache
+
+block
+1 bit
+0 bit
+
+0 bit
+0 bit
+
+address
+
+1 bit
+0 bit
+
+(b) Square-and-always-multiply from libgcrypt 1.5.3
+
+Figure 7: Leakage of modular exponentiation algo-
+rithms to observers of instruction and data caches, with
+cache line size of 64 bytes and compiler optimization
+level -O2.
+
+Results The results of our analysis are given in Fig-
+ure 7 and Figure 9
+
+• Our analysis identiﬁes a 1-bit data cache leak in
+square-and-multiply exponentiation, see line 2 in
+
+9
+
+Observer
+I-Cache
+D-Cache
+
+address
+
+1 bit
+1 bit
+
+block
+1 bit
+1 bit
+
+b-block
+
+1 bit
+1 bit
+
+Figure 8: Leakage of square-and-always-multiply from
+libgcrypt 1.5.3, with cache line size of 32 bytes and com-
+piler optimization level -O0.
+
+(a) Compiled with the default gcc optimization level -O2. Re-
+gardless whether the jump is taken or not, ﬁrst block 41a80 is
+accessed, followed by block 41aa0. This results in a 0-bit b-
+block leak.
+
+Figure 7a, which is due to memory accesses in
+the conditional branch in that implementation. Our
+analysis conﬁrms that this data cache leak is closed
+by square-and-always-multiply, see line 2 in Fig-
+ure 7b
+
+• Line 1 of Figures 7a and Figure 7b show that both
+implementations leak through instruction cache to
+powerful adversaries who can see each access to the
+instruction cache. However, for weaker, b-block ob-
+servers that cannot distinguish between repeated ac-
+cesses to a block, square-and-always-multiply does
+not leak, conﬁrming the intuition that the condi-
+tional copy operation is indeed less problematic
+than the conditional multiplication.
+
+• The data in Figure 8 demonstrates that the advan-
+tages of conditional copy over conditional multipli-
+cation depend on details such as cache line size and
+compilation strategy. Figure 9 illustrates this effect
+for the conditional copy operation, where more ag-
+gressive compilation leads to more compact code
+that ﬁts into single cache lines. The same effect is
+observable for data caches, where more aggressive
+compilation avoids data cache accesses altogether.
+
+6.4 Windowed Modular Exponentiation
+
+(b) Compiled with gcc optimization level -O0. The memory block
+5d060 is only accessed when the jump is taken. This results in a
+1-bit b-block leak.
+
+Figure 9: Layout of libgcrypt 1.5.3 executables with 32-
+byte memory blocks (black lines denote block bound-
+aries). The highlighted code corresponds to the condi-
+tional branching in lines 7–8 in Figure 6. The red region
+corresponds to the executed instructions in the if-branch.
+The blue curve points to the jump target, where the jump
+is taken if the if-condition does not hold.
+
+if (e0 == 0) {
+
+base_u = bp;
+base_u_size = bsize;
+
+} else {
+
+base_u = b_2i3[e0 - 1];
+base_u_size = b_2i3size[e0 - 1];
+
+}
+
+Figure 10:
+Sliding window table lookup from
+libgcrypt 1.6.1. Variable e0 represents the window,
+right-shifted by 1. The lookup returns a pointer to the
+ﬁrst limb of the multi-precision integer in base u, and
+the number of limbs in base u size. The ﬁrst branch
+deals with powers of 1 by returning pointers to the base.
+
+In this section we analyze windowed algorithms for mod-
+ular exponentiation. These algorithms differ from algo-
+rithms based on square-and-multiply in that they pro-
+cess multiple exponent bits in one shot. For this they
+commonly rely on tables ﬁlled with precomputed pow-
+ers of the base. For example, libgcrypt 1.6.1 precom-
+putes 7 multi-precision integers and handles the power
+1 in a branch, see Figure 10. For moduli of 3072 bits,
+each precomputed value requires 384 bytes of storage
+which amounts to 6-7 memory blocks in architectures
+with cache lines of 64 bytes. Key-dependent accesses
+to those tables can be exploited for mounting cache side
+channel attacks [16].
+
+We consider three countermeasures, which are com-
+monly deployed to defend against this vulnerability.
+They have in common that they all copy the table entries
+instead of returning a pointer to the entry.
+
+• The ﬁrst countermeasure ensures that in the copy
+process, a constant sequence of memory locations
+is accessed, see Figure 11 for pseudocode. The
+expression on line 7 ensures that only the k-th
+pre-computed value is actually copied to r. This
+countermeasure is implemented, e.g.
+in NaCl and
+libgcrypt 1.6.3.
+
+• The second countermeasure stores precomputed
+
+10
+
+(1) // Retrieves r from p[k]
+(2) defensive retrieve(r,p,k)
+for i := 0 to n − 1 do
+(3)
+
+(4)
+
+(5)
+
+(6)
+
+(7)
+
+for j := 0 to N − 1 do
+
+v := p[i][ j]
+s := (i == k)
+r[ j] := r[ j]ˆ((0 − s)&(r[ j]ˆv))
+
+Figure 11: A defensive routine for array lookup with a
+constant sequence of memory accesses, as implemented
+in libgcrypt 1.6.3.
+
+values in such a way that the i-th byte of all pre-
+computed values reside in the same memory block.
+This ensures that when the precomputed values are
+retrieved, a constant sequence of memory blocks
+will be accessed. This so-called scatter/gather tech-
+nique is described in detail in Section 2, with code
+in Fig 3, and is deployed, e.g. in OpenSSL 1.0.2f.
+
+• The third countermeasure is a variation of scatter/-
+gather, and ensures that the gather-procedure per-
+forms a constant sequence of memory accesses (see
+Figure 12). This countermeasure was recently in-
+troduced in OpenSSL 1.0.2g, as a response to the
+CacheBleed attack [24].
+
+(1) defensive gather(r,buf,k)
+for i := 0 to N − 1 do
+(2)
+
+(3)
+
+(4)
+
+(5)
+
+(6)
+
+(7)
+
+r[i] := 0
+for j := 0 to spacing − 1 do
+
+v := buf[ j + i ∗ spacing]
+s := (k == j)
+r[i] := r[i]|(v&(0 − s))
+
+Figure 12: A defensive implementation of gather (com-
+pare to Figure 3c) from OpenSSL 1.0.2g.
+
+Results Our analysis of the different versions of the ta-
+ble lookup yields the following results:4
+
+• Figure 13a shows the results of the analysis of the
+unprotected table lookup of Figure 10. The leakage
+of one bit for most adversaries is explained by the
+fact that they can observe which branch is taken.
+The layout of the conditional branch is demon-
+strated in Figure 14a;
+lowering the optimization
+level results in a different layout (see Figure 14b),
+and in this case our analysis shows that the I-Cache
+b-block leak is eliminated.
+
+4We note sliding window exponentiation exhibits further control-
+ﬂow vulnerabilities, some of which we also analyze. To avoid redun-
+dancy with Section 6.3, we focus the presentation of our results on the
+lookup-table management.
+
+• More powerful adversaries that can see the exact ad-
+dress can learn log2 7 = 2.8 bits per access. The
+static analysis is not precise enough to determine
+that the lookups are correlated, hence it reports that
+at most 5.6 bits are leaked.
+
+• Figure 13b shows that the defensive copying strat-
+egy from libgcrypt 1.6.3 (see Figure 11) eliminates
+all leakage to the cache.
+
+• Figure 13c shows that the scatter/gather copying-
+strategy eliminates leakage for any adversary that
+can observe memory accesses at the granularity of
+memory blocks, and this constitutes the ﬁrst proof
+of security of this countermeasure. For adversaries
+that can see the full address-trace, our analysis re-
+ports a 3 bit leakage for each memory access, which
+is again accumulated over correlated lookups be-
+cause of imprecisions in the static analysis. Below
+we comment on these results in the context of the
+recent CacheBleed attack.
+
+• Figure 13d shows that defensive gather introduced
+OpenSSL 1.0.2g (see Figure 12) eliminates all leak-
+age to cache.
+
+Observer
+I-Cache
+D-Cache
+
+address
+
+1 bit
+5.6 bit
+
+block
+1 bit
+1 bit
+
+b-block
+
+1 bit
+1 bit
+
+(a) Instruction- and Data-Cache leakage of secret-dependent ta-
+ble lookup in the modular exponentiation implementation from
+libgcrypt 1.6.1.
+
+Observer
+I-Cache
+D-Cache
+
+address
+
+0 bit
+0 bit
+
+block
+0 bit
+0 bit
+
+b-block
+
+0 bit
+0 bit
+
+(b) Instruction- and Data-Cache leakage in the patch from
+libgcrypt 1.6.3.
+
+Observer
+I-Cache
+D-Cache
+
+address
+
+0 bit
+
+1152 bit
+
+block
+0 bit
+0 bit
+
+b-block
+
+0 bit
+0 bit
+
+(c) Instruction- and Data-Cache leakage in the scatter/gather tech-
+nique, applied to libgcrypt 1.6.1.
+address
+
+b-block
+
+Observer
+I-Cache
+D-Cache
+
+0 bit
+0 bit
+
+block
+0 bit
+0 bit
+
+0 bit
+0 bit
+
+(d) Instruction- and Data-Cache leakage in the defensive gather
+technique from OpenSSL 1.0.2g, applied to libgcrypt 1.6.1.
+
+Figure 13: Instruction and data cache leaks of different
+table lookup implementations. Note that the leakage in
+Fig 13a accounts for copying a pointer, whereas the leak-
+age in Fig 13b and 13c refers to copying multi-precision
+integers.
+
+11
+
+the address-trace observer, but stronger than the block-
+trace observer.
+
+We perform the analysis of the scatter/gather imple-
+mentation (see Figure 13c) for the bank-trace D-cache
+observer. The analysis results in 384-bit leak, which cor-
+responds to one bit leak per memory access, accumulated
+for each accessed byte due to analysis imprecision (see
+above). The one bit leak in the i-th memory access is
+explained by the ability of this observer to distinguish
+between the two banks within which the i-th byte of all
+pre-computed values fall.
+
+Figure 15: Layout of pre-computed values in cache
+banks, for a platform with 16 banks of 4-bytes. The cells
+of the grid represent the cache banks.
+
+6.5 Discussion
+
+A number of comments are in order when interpreting
+the bounds delivered by our analysis.
+
+Use of Upper Bounds The results we obtain are upper
+bounds on the leaked information that are not necessar-
+ily tight, that is, they may be pessimistic. This means
+that while results of zero leakage corresponds to a proof
+of absence of leaks, positive leakage bounds do not cor-
+respond to proofs of the presence of leaks, that is, leaks
+may be smaller than what is reported by the analysis. The
+reason for this is that the amount of leaked information
+may be over-estimated due to imprecisions of the static
+analysis, as is the case with the D-Cache leak shown on
+Figure 13c.
+
+Practical Detectability of Leaks A reported leak may
+be practically easier to detect by an adversary in cases
+where the vulnerable code region produces more cache
+accesses. This is the case for the control-ﬂow leaks in
+square-and-multiply, where the vulnerable if-branch in-
+cludes multiplication and modulo-functions, practically
+resulting in ≈ 2 ·105 cache accesses.
+In contrast, the
+vulnerable if-branch in square-and-always-multiply does
+not include function calls, practically resulting in a small
+number of cache accesses, which may be more difﬁcult
+to detect from noisy observations.
+
+Use of Imperfect Models The guarantees we deliver
+are only valid to the extent to which the models used
+
+(a) Compiled with the default gcc optimization level -O2. If the
+jump is taken, ﬁrst block 4b980, followed by block 4ba40, fol-
+lowed by 4b980 again. If the branch is not taken, only block
+4b980 is accessed.
+
+(b) Compiled with gcc optimization level -O1. Regardless
+whether the jump is taken or not, ﬁrst block 47dc0 is accessed,
+followed by block 47e00.
+
+Figure 14: Layout of executables using libgcrypt 1.6.1.
+The highlighted code corresponds to a conditional
+branch. The blue region corresponds to the executed in-
+structions in case the if-branch, and the red region cor-
+responds to the executed instructions in the else-branch.
+Curves represent jump targets.
+
+The CacheBleed Attack The recently disclosed
+CacheBleed attack [24] against the scatter/gather imple-
+mentation from OpenSSL 1.0.2g exploits timing differ-
+ences due to cache-bank conﬂicts. Those are possible in
+CPUs where cache blocks are divided into banks (e.g. In-
+tel Sandy Bridge), to facilitate concurrent accesses to the
+data cache. For example, the platform targeted in [24]
+has 16 banks of 4 bytes; there, bits 2–5 of an address are
+used to determine the bank, and bits 0–1 are used to de-
+termine the offset within the bank. The distribution of
+the pre-computed values in scatter/gather (see Section 2)
+to different banks will be as shown in Figure 15.
+
+The leak leading to CacheBleed is visible in our data
+when comparing the results of the analysis with respect
+to address-trace and block-trace adversaries, however,
+its severity may be over-estimated due to the powerful
+address-trace observer. For a more accurate analysis of
+the effect of cache-bank conﬂicts, we deﬁne the bank-
+trace observer, who cannot distinguish between the ele-
+ments within a single bank. This observer is weaker than
+
+12
+
+countermeasure (CM)
+
+no CM
+
+algorithm square and multiply
+always
+multiply
+libgcrypt
+
+libgcrypt
+
+original implementation
+instructions (×106)
+cycles (×106)
+
+1.5.2
+90.32
+75.58
+
+1.5.3
+120.62
+100.73
+
+sliding window
+
+scatter/
+gather
+openssl
+1.0.2f
+74.21
+61.65
+
+access all
+
+defensive
+
+bytes
+
+libgcrypt
+
+1.6.3
+74.61
+62.20
+
+gather
+openssl
+1.0.2g
+75.29
+62.28
+
+no CM
+
+libgcrypt
+
+1.6.1
+73.99
+61.58
+
+Figure 16: Performance of the different versions of modular exponentiation, implemented on top of libgcrypt 1.6.3.
+
+accurately capture the aspects of the execution platform
+relevant to known attacks. A recent empirical study of
+OS-level side channels on different platforms [7] shows
+that advanced microarchitectural features may interfere
+with the cache, which may render countermeasures inef-
+fective — and formal guarantees invalid.
+
+6.6 Performance
+
+We conclude the case study by considering the ef-
+fect of the different countermeasures on the perfor-
+mance of modular exponentiation. For this, we use
+libgcrypt 1.6.3 as a base, and we compile it with the
+respective mod exp.c, corresponding to each of the
+considered variants. For performance measurement, we
+use the time for performing exponentiations on a sample
+of random bases and exponents, and measure the clock
+count (through the rdtsc instruction), as well as the
+number of performed instructions (through the PAPI li-
+brary). We follow the approach for performance mea-
+surement from [12], performing 100,000 exponentiations
+with exponents, after a warm-up period of 25,000 expo-
+nentiations, and take the minimum over 5 repeated exper-
+iments to minimize the noise of background processes.
+The measurements are performed on a machine with
+an Intel Q9550 CPU. This architecture does not feature
+more recent performance-enhancing technologies such
+as Turbo-Boost Technology and Hyper-Threading Tech-
+nology.
+
+Figure 16 summarizes our measurements. The re-
+sults show that the applied countermeasure for square
+and multiply causes a signiﬁcant slow-down of the ex-
+ponentiation. A slow-down is observed with sliding-
+window countermeasures as well, however at a much
+lower scale.5 Notable is also the performance gain from
+using the sliding-window algorithm compared to square-
+and-multiply.
+
+5We note that performance penalties of countermeasures can be
+higher when considering a whole cryptographic operation, different
+platforms, implementations within other crypto libraries, different key
+sizes. For example, in commit messages prior to OpenSSL 1.0.2g’s re-
+lease, developers report performance penalties of up to 10% for 2048-
+bit RSA on some platforms.
+
+7 Related Work
+
+Agat proposes a program transformation for removing
+control-ﬂow timing leaks by equalizing branches of con-
+ditionals with secret guards [1], with follow-up work
+in [5, 18]. In an accompanying technical report [2] Agat
+presents the implementation of the transformation in Java
+bytecode, which includes an informal discussion of the
+effect of instruction and data caches on the security of
+the transformation. Our approach relies on lower-level
+models, namely x86 executables and simple but accurate
+cache models, based on which we can prove the security
+of cache-aware programming.
+
+Molnar et al. [20] propose a program transformation
+that eliminates branches on secret to remove leaks due to
+control ﬂow and instruction caches, together with a static
+check for the resulting x86 executables. Our approach
+is more permissive than theirs that it can establish the
+security of code that contains restricted forms of secret-
+dependent control ﬂow and memory access patterns. It is
+worth emphasizing that the increased permissiveness of
+our approach comes from the fact that we rely on models
+of the hardware architecture for our analysis. If no such
+models are available, the safe way to go is to forbid all
+kinds of secret-dependent behavior.
+
+Doychev et al. [10] develop the CacheAudit static an-
+alyzer for cache side-channels, which we utilize for our
+analyses. The capabilities of CacheAudit however do
+not allow reasoning about dynamic memory addresses,
+which limits the scope of the analysis mostly to symmet-
+ric cryptography, and their analysis is limited to weaker
+models of adversaries who can observe the ﬁnal cache
+states or traces of cache hits and misses.
+
+Coppens et al. [8] investigate mitigations for timing-
+based side channels on x86 architecture, and they iden-
+tify new side channels in programs without secret-
+dependent memory lookups due to out-of-order execu-
+tion. In contrast, we prove the security of countermea-
+sures. For this we rely on accurate models of caches, but
+we do not take into account out-of-order execution.
+
+Bernstein et al. advocate defensive programming [6]
+that avoids all secret-dependent memory lookups and
+branching and demonstrate the practicality of their pro-
+
+13
+
+[11] S. Dziembowski and K. Pietrzak. Leakage-resilient cryptography.
+
+In FOCS. IEEE, 2008.
+
+[12] S. Gueron. Efﬁcient software implementations of modular expo-
+
+nentiation. J. Cryptographic Engineering, 2(1):31–43, 2012.
+
+[13] T. Kim, M. Peinado, and G. Mainar-Ruiz. StealthMem: System-
+level protection against cache-based side channel attacks in the
+cloud. In 19th USENIX Security Symposium. USENIX, 2012.
+
+[14] B. K¨opf and A. Rybalchenko. Approximation and randomization
+for quantitative information-ﬂow analysis. In CSF, pages 3–14.
+IEEE, 2010.
+
+[15] A. Langley. Checking that functions are constant time with val-
+https://www.imperialviolet.org/2010/04/01/ctgrind.html,
+
+grind.
+2010. Accessed: 6 March 2016.
+
+[16] F. Liu, Y. Yarom, Q. Ge, G. Heiser, and R. B. Lee. Last-level
+cache side-channel attacks are practical. In IEEE Symposium on
+Security and Privacy, pages 605–622. IEEE Computer Society,
+2015.
+
+[17] G. Lowe. Quantifying Information Flow.
+
+In Proc. 15th IEEE
+Computer Security Foundations Symposium (CSFW 2002), pages
+18–31. IEEE, 2002.
+
+[18] H. Mantel and A. Starostin. Transforming out timing leaks, more
+
+or less. In ESORICS, pages 447–467. Springer, 2015.
+
+[19] J. L. Massey. Guessing and Entropy. In Proc. 1994 IEEE Sympo-
+sium on Information Theory (ISIT 1994), page 204. IEEE, 1994.
+
+[20] D. Molnar, M. Piotrowski, D. Schultz, and D. Wagner. The pro-
+gram counter security model: Automatic detection and removal
+of control-ﬂow side channel attacks. In Information Security and
+Cryptology-ICISC 2005, pages 156–168. Springer, 2006.
+
+[21] G. Smith. On the foundations of quantitative information ﬂow. In
+
+FoSSaCS. Springer, 2009.
+
+[22] Z. Wang and R. B. Lee. A novel cache architecture with enhanced
+performance and security. In 41st IEEE/ACM Intl. Symposium on
+Microarchitecture (MICRO), pages 83–93, 2008.
+
+[23] Y. Yarom and K. Falkner. FLUSH+RELOAD: A high resolution,
+In USENIX Security
+
+low noise, L3 cache side-channel attack.
+Symposium. USENIX Association, 2014.
+
+[24] Y. Yarom, D. Genkin, and N. Heninger. Cachebleed: A timing at-
+tack on openssl constant time rsa. Cryptology ePrint Archive, Re-
+port 2016/224, March 2016. http://eprint.iacr.org/.
+
+[25] Y. Zhang, A. Juels, M. K. Reiter, and T. Ristenpart. Cross-VM
+side channels and their use to extract private keys. In CCS. ACM,
+2012.
+
+posal with NaCl. Almeida et al. develop a static analyzer
+that can automatically conﬁrm that programs follow that
+regime [3]. Barthe et al. [4] establish that adhering to
+that policy provides security against very strong adver-
+sary models.
+
+Langley [15] shows how to perform a dynamic anal-
+ysis based on Valgrind and memcheck. His technique
+ﬂags the secret-dependent (but cache-line independent)
+memory lookups of the OpenSSL sliding window-based
+modular exponentiation as a potential leak. Our tech-
+nique gives more ﬁne-grained insights about its security,
+including proofs of security for adversaries that can ob-
+serve memory accesses only at the granularity of mem-
+ory blocks.
+
+8 Conclusions
+
+In this paper we devise novel techniques that provide
+support for bit-level and arithmetic reasoning about
+pointers in the presence of dynamic memory allocation.
+These techniques enable us to perform the ﬁrst rigorous
+analysis of widely deployed software countermeasures
+against cache attacks on modular exponentiation, based
+on executable code.
+
+References
+
+[1] J. Agat. Transforming out timing leaks. In POPL 2000, pages
+
+40–53. ACM, 2000.
+
+[2] J. Agat. Transforming out timing leaks in practice: An experi-
+ment in implementing programming language-based methods for
+conﬁdentiality, 2000.
+
+[3] J. B. Almeida, M. Barbosa, J. S. Pinto, and B. Vieira. Formal veri-
+ﬁcation of side-channel countermeasures using self-composition.
+Sci. Comput. Program., 78(7):796–812, 2013.
+
+[4] G. Barthe, G. Betarte, J. Campo, C. Luna, and D. Pichardie.
+System-level non-interference for constant-time cryptography. In
+Proceedings of the 2014 ACM SIGSAC Conference on Computer
+and Communications Security, pages 1267–1279. ACM, 2014.
+
+[5] G. Barthe, T. Rezk, and M. Warnier. Preventing Timing Leaks
+Through Transactional Branching Instructions.
+In Proc. 3rd
+Workshop on Quantitative Aspects of Programming Languages
+(QAPL 2006), Electronic Notes in Theoretical Computer Science
+(ENTCS), pages 33–55. Elsevier, 2005.
+
+[6] D. J. Bernstein, T. Lange, and P. Schwabe. The security impact
+of a new cryptographic library. In LATINCRYPT, pages 159–176.
+Springer, 2012.
+
+[7] D. Cock, Q. Ge, T. Murray, and G. Heiser. The last mile: An
+empirical study of timing channels on sel4. In CCS. ACM, 2014.
+[8] B. Coppens, I. Verbauwhede, K. D. Bosschere, and B. D. Sut-
+ter. Practical mitigations for timing-based side-channel attacks
+on modern x86 processors. In SSP, pages 45–60. IEEE, 2009.
+
+[9] P. Cousot and R. Cousot. Abstract interpretation: a uniﬁed lattice
+model for static analysis of programs by construction of approxi-
+mation of ﬁxpoints. In POPL, pages 238–252, 1977.
+
+[10] G. Doychev, , B. K¨opf, L. Mauborgne, and J. Reineke. Cacheau-
+dit: A tool for the static analysis of cache side channels. ACM
+Transactions on Information and System Security, 18(1):4:1–
+4:32, June 2015.
+
+14
+
+

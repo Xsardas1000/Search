@@ -1,0 +1,1003 @@
+First Person Action-Object Detection with EgoNet
+
+Gedas Bertasius1, Hyun Soo Park1, Stella X. Yu2, and Jianbo Shi1
+
+1University of Pennsylvania, 2UC Berkeley / ICSI
+
+Abstract. Objects afford visual sensation and motor actions. A ﬁrst person cam-
+era, placed at the person’s head, captures unscripted moments of our visual sen-
+sorimotor object interactions. Can a single ﬁrst person image tell us about our
+momentary visual attention and motor action with objects, without a gaze track-
+ing device or tactile sensors? To study the holistic correlation of visual attention
+with motor action, we introduce the concept of action-objects—objects associ-
+ated with seeing and touching actions, which exhibit characteristic 3D spatial
+distance and orientation with respect to the person. A predictive action-object
+model is designed to re-organize the space of interactions in terms of visual and
+tactile sensations, which is realized by our proposed EgoNet network. EgoNet
+is composed of two convolutional neural networks: 1) Semantic Gaze Pathway
+that learns 2D appearance cues with ﬁrst person coordinate embedding, and 2)
+3D Spatial Pathway that focuses on 3D depth and height measurements relative
+to the person with brightness reﬂectance attached. Retaining two distinct path-
+ways enables effective learning from a limited number of examples, diversiﬁed
+prediction from complementary visual signals, and ﬂexible architecture that is
+functional with RGB image without depth information. We show that our model
+correctly predicts action-objects in a ﬁrst person image where we outperform the
+existing approaches across different datasets.
+
+1 Introduction
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+5
+1
+
+ 
+ 
+]
+
+V
+C
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+8
+0
+9
+4
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Our visual sensation is developed along with the neuromotor system while interacting
+with surrounding objects [1–5]. This tight interplay between visual sensation and mo-
+tor signal makes spatial scene and object understanding possible through interactions.
+These interactions between a person and objects are often encoded in a form of the
+gaze movement and the 3D formation of the objects around that person. For instance,
+consider a woman entering a canned food corner at a grocery store as shown in Fig-
+ure 1. When she schemes through hundreds of canned foods to ﬁnd the tuna can that
+she looks for, she remains 3-5m from the foods for efﬁcient search. Once she ﬁnds
+the tuna, she approaches it (1-3m), and then reaches her left hand to pick the tuna can
+(<1m). While she gazes at the expiration date in the label of the can, the distance gets
+smaller (<0.5m). Not only does the tuna can stimulate her visual attention but it also
+affects her physical actions, such as head or hand movements.
+
+We deﬁne such object as an action-object—an object that triggers person’s visual
+and motor signals. The key properties of the action-object are: (1) it is associated with
+speciﬁc actions such as seeing or touching; (2) it possesses characteristic distance and
+orientation with respect to the person (i.e 3D formation); and (3) it stimulates person’s
+visual attention, i.e. the object stays in the particular ﬁeld of the person’s view. These
+
+2
+
+G.Bertasius, H.S. Park, S. X. Yu, and J.Shi
+
+Fig. 1: We predict action-object from the ﬁrst person RGBD images (best viewed in
+color) where action-objects are deﬁned as objects that facilitate people’s tactile (grab-
+bing a food package) or visual interactions (watching a TV). Left: a woman approaches
+a shelf to pick up a food item (red). Right: The food (action-object) is detected progres-
+sively as she approaches and reaches her hand to pick it up.
+properties provide a strong cue to predict the person’s behavior and also to better un-
+derstand his visual sensorimotor coordination [1] that plays a critical role in detecting
+the developmental disabilities such as autism spectrum disorder [6, 7].
+
+A fundamental research question is whether we can build a model that can detect
+action-objects as we observe a person interacting with his environment without a gaze
+tracking devices or tactile sensors. This question is challenging despite of recent success
+of computer vision systems because (a) a person’s gaze direction does not necessarily
+correspond to action-objects. In other words, not all objects within the person’s ﬁeld
+of view are consciously attended. (b) Additionally, there exist inﬁnite spatial conﬁgu-
+rations of general objects with respect to the person, which makes the task even more
+challenging. (c) Finally, action-objects are not speciﬁc to object category because many
+object categories can correspond to the same action, e.g., TV and a mirror both afford a
+seeing action, and therefore, an object speciﬁc model may not be able to represent the
+action-objects. In this paper, we address these challenges by leveraging a ﬁrst person
+camera that inherently organizes the space and objects around the person to facilitate
+his interactions with the environment [8].
+
+The use of a ﬁrst person camera, placed directly at the source of person-object
+interaction, is a signiﬁcant departure from the traditional passive observation from a
+third person camera such as a surveillance setting. Not only does the ﬁrst person camera
+captures what the person sees in terms of object/scene appearance, but it also tells us if
+she is positioned and oriented herself for a speciﬁc action (e.g. seeing or touching). Her
+relative head orientation indicates what she is attending to, whereas her body position
+relative to the objects constrains physical feasibility of an action.
+
+Learning to recognize action-objects in the ﬁrst person view has signiﬁcant bene-
+ﬁts. Action-objects are spatially normalized to the ﬁrst person camera, e.g., regardless
+of object types, the distance and orientation from objects remains approximately ﬁxed
+(0.3-0.5m) for a touching action due to the arm length, and therefore there is less vari-
+
+t = 0t = 1t = 2DepthPredictionGround trutht = 0t = 2t = 1RGBAction-objectFirst person stereoFirst Person Action-Object Detection with EgoNet
+
+3
+
+ation in object appearance in the ﬁrst person images. Our goal is to leverage these ﬁrst
+person properties along with the 3D spatial cues to build a model that predicts action-
+objects. Building such model is different from a classic object detection task because
+action-object is associated with the actions without explicit object categories. It also
+differs from a visual saliency detection task because the visual saliency does not neces-
+sarily correspond to a speciﬁc action. Finally, our action-object task differs from activity
+recognition tasks because we reason about the actions as a function of objects.
+
+We employ wearable stereo cameras to collect the data containing 2D visual and
+3D spatial information around the person, which involves with many object interactions
+such as cooking, shopping, and dish-washing. The camera wearer who knows action-
+objects provides the per-pixel binary labels of the ﬁrst person images. We leverage this
+data to learn ﬁrst person 2D and 3D cues of action-objects. We present a novel EgoNet, a
+predictive network model that takes a ﬁrst person RGB(D) image as an input and learns
+object’s visual appearance, ﬁrst person’s gaze, and 3D spatial cues to predict a per-pixel
+action-object likelihood map. Our network is composed of two distinct pathways: one
+of which learns visual appearance, and ﬁrst person gaze cues, and the other pathway
+that learns 3D spatial relationship of action-objects. We quantitatively demonstrate that
+these two pathways produce complementary action-object predictions, which exhibits
+strong predictive and generalization power across datasets.
+
+Our core contributions include (1) the concept of an action-object that links peo-
+ple’s visual attention and motor actions, (2) a ﬁrst person action-object dataset with the
+per-pixel annotations provided by the the camera wearer, (3) EgoNet network design
+that predicts action-objects, which can be effectively applied to various interaction data
+including children behavior analysis [9].
+
+2 Related Work
+
+First Person Vision. A ﬁrst person camera captures what the person sees during her
+interaction with an object, which has a direct access to her visual attention and mo-
+tor actions [10]. This ﬁrst person property has been exploited in various tasks such
+as summarizing daily activities using a ﬁrst person video [11, 12], creating a hyper-
+lapse video [13], detecting objects [14, 15], and recognizing activities [16–20]. In par-
+ticular, egocentric spatial representations [16, 21] have demonstrated stronger predic-
+tive power than that of a third person for activity recognition [16, 17], gaze move-
+ment [19, 22] and future ego-motion [23]. Such representations were used for vari-
+ous personalized [6, 24, 25], and social [26, 27] interactions. Unlike prior approaches
+that used hand-crafted representations for their tasks [19], we directly learn to predict
+action-objects by integrating object appearances, ﬁrst person’s gaze, and 3D spatial cues
+into our design.
+
+Complementary Object and Activity Recognition in Third Person. Actions are per-
+formed in the context of objects. This coupling provides a complementary cue to rec-
+ognize actions [28–30]. Some approaches also used low level bag-of-feature models
+to learn the spatial relationship between objects and activities from a single third per-
+son image [31]. Conversely, the activity can provide a functional cue to recognize ob-
+
+4
+
+G.Bertasius, H.S. Park, S. X. Yu, and J.Shi
+
+Fig. 2: Our proposed EgoNet architecture (best viewed in color) takes as input ﬁrst
+person RGB and DHG images, which encode 2D visual appearance and 3D spatial
+cues, respectively. We design two pathways: the Semantic Gaze Pathway that learns
+visual appearance with ﬁrst person coordinate embedding and the 3D Spatial Pathway
+that learns 3D spatial relationship with respect to the ﬁrst person. The information from
+both pathways is combined via the Joint Pathway and further integrated by element-
+wise averaging to predict a per-pixel action-object likelihood.
+
+jects [32–34]. Such a model becomes even more powerful when incorporating the cues
+of how the object is physically manipulated [35–37]. In addition, object affordance can
+be learned by simulating human motion in the 3D space [38,39]. Whereas most of these
+methods require detected objects or body pose as an input, our work does not need to
+detect objects or human pose a priori by taking advantage of a ﬁrst person camera.
+
+First Person Deep Learning. Convolutional neural networks have shown remarkable
+performance achievement on vision tasks including boundary detection, image classiﬁ-
+cation, and semantic segmentation [40–44]. However, due to different visual statistics
+between natural images and ﬁrst person images and a limited number of annotated ﬁrst-
+person data, ﬁrst person vision has not been fully exploited by deep learning techniques,
+except with the pre-trained models as generic feature extractors [20, 23, 45]. Unlike
+prior work, we propose EgoNet, a novel network design using fully convolutional net-
+works [46] that learns ﬁrst person view, visual appearance and 3D spatial cues, for our
+newly deﬁned action-object detection task.
+
+3 First Person Action-Object RGBD Dataset
+
+We use two stereo GoPro Hero 3 cameras with 100mm baseline to capture ﬁrst person
+RGBD videos as shown in Figure 2. The stereo cameras are synchronized manually
+and each camera is set to 1280×960 with 100 fps. The ﬁsheye lens distortion is pre-
+calibrated and depth image is computed by estimating disparities between cameras via
+dense image matching with dynamic programming.
+
+Two subjects participated in capturing their daily interactions with objects in ac-
+tivities such as cooking, shopping, working at their ofﬁce, dining, buying groceries,
+dish-washing, and staying in a hotel room. 7 scenes were recorded and 4229 frames
+with per-pixel action-objects were annotated by the subjects with GrabCut [47]. They
+also annotated object classes including non-action-objects (a total of 41 object classes).
+Please ﬁnd the Supplementary material for the detailed dataset description.
+
+First person coordinate embeddingSGP(cid:42)39x39x409639x39x51239x39x2SGP(cid:36)39x39x2JNT(cid:36)3D(cid:36)3D(cid:42)39x39x409639x39x2Action-object predictionGround truthFirst person RGBFirst person DHGSemantic Gaze Pathway3D Spatial PathwayJoint PathwayFirst person stereoVGG FCN trained on first personVGG FCN First Person Action-Object Detection with EgoNet
+
+5
+
+We acknowledge that our dataset has a limited number of sequences, scenes, and
+subjects. A key question is “can we design a machine that predicts action-objects in
+general ﬁrst person scenes using the limited training data?”. We show that our EgoNet
+has strong generalization power: using our dataset, we learn the common patterns be-
+hind people’s object interactions captured in the ﬁrst person image, and therefore, it can
+predict in a novel scene. We demonstrate this generalization and predictive power of
+EgoNet in Section 5.
+
+4 EgoNet
+
+In this section, we design EgoNet, a predictive network model that detects action-
+objects from a ﬁrst person RGB(D) image. This model learns visual and spatial char-
+acteristics of the action-objects from our ﬁrst person action-object RGBD dataset (Sec-
+tion 3).
+
+4.1 Motivation
+
+What people see/look at reﬂects how they are going to act. Conversely, how people act
+affects what they see at that moment. An action-object measures the momentary visual
+attention and motor action with objects. This property of the action-object contrasts
+with most current visual attention studies which focus solely on visual gaze (ﬁxation).
+We note that the act of looking (gaze) can be random, and does not always lead to seeing
+(conscious awareness). While gaze is directly measurable from a ﬁrst person camera,
+visual attention with intent-to-interact requires directed human annotations. Our major
+innovation is proposing a learning model for action-object prediction in a ﬁrst person
+video using a small set of training examples (≈ 4K).
+
+We propose a learning method that holistically integrates a set of visual appearance,
+head direction, and 3D spatial cues. In contrast, most of the current approaches em-
+ploy hand-crafted features to predict gaze direction using head/hand pose and motion
+cues [11, 22, 48]. None of these methods considers the fact that the gaze of a person fo-
+cuses on the objects in the scene rather than any non-semantic regions in the image [49].
+This integration is implemented with two distinct pathways: 1) a Semantic Gaze
+Pathway that learns object visual appearance with ﬁrst person coordinate embedding;
+and 2) a 3D Spatial Pathway that isolates 3D depth and height measurements relative
+to the person with brightness reﬂectance attached. Retaining two distinct pathways is
+beneﬁcial over a network design that trivially concatenates 2D (RGB) and 3D (depth
+and height) inputs to predict action-objects. First, there are far limited number of depth
+images for learning action-objects. Bootstrapping Semantic Gaze Pathway from the ex-
+isting RGB object recognition enables more effective learning from a limited number
+of examples. Second, 2D visual appearance and 3D spatial cues are not entirely orthog-
+onal, as RGB images could predict depth indirectly. The separate pathways allow us
+to predict action-objects using redundant information from different prospectives anal-
+ogous to a random forest classiﬁer. Finally, we note that most of the existing datasets
+do not have 3D information associated with them. Our architecture design is ﬂexible to
+
+6
+
+G.Bertasius, H.S. Park, S. X. Yu, and J.Shi
+
+(a) Eating dinner
+
+(b) Watching TV
+
+Fig. 3: First person gaze coordinate embedding is beneﬁcial to predict action-objects.
+The ﬁrst column depicts an input image, and the second and third column shows acti-
+vation of fully convolutional networks averaged over 4096 and 512 channels without
+and with the ﬁrst person gaze coordinate embedding, respectively. The ﬁrst person gaze
+coordinate embedding allows us to accurately localize the regions of the action-objects
+(the food plate, and the TV).
+
+predict action-object solely via the Semantic Gaze Pathway from a ﬁrst person RGB im-
+age without depth information. We verify and characterize our conjecture quantitatively
+in Section 4.3.
+
+4.2 EgoNet Architecture
+
+EgoNet is composed of two pathways: Semantic Gaze Pathway, which uses high-level
+object appearance cues and ﬁrst person gaze coordinate embedding; and 3D Spatial
+Pathway which uses 3D spatial cues to learn prototypical distance and orientation of
+action-objects. These two pathways are then integrated via the Joint Pathway. Finally,
+the outputs from all three pathways are combined by averaging the response maps of
+the three pathways, resulting in the per-pixel action-object prediction. The schematics
+of the EgoNet design is illustrated in Figure 2.
+
+Semantic Gaze Pathway. An action-object that stimulates person’s visual attention
+exhibits two key properties. First, objects with a particular visual appearance attract
+person’s gaze. For instance, we are more likely to look at the objects that are colored
+brightly and stand out from the background. Second, the object is often mapped to the
+speciﬁc locations in a ﬁrst person image due to the 3D geometric conﬁguration of an
+action-object with respect to the person. For instance, a laptop keyboard is often seen at
+the bottom of a ﬁrst person image because we often look down at it while typing with
+our hands.
+
+We design the Semantic Gaze Pathway using a fully convolutional network [46]. It
+leverages two sources of visual information: object visual semantics and person’s gaze
+distribution. Our primary conjecture is that different objects are mapped to different lo-
+cations in the ﬁrst person image. This conjecture differs from prior work that assumed
+that a gaze distribution is universal to all object classes (e.g. a center prior) [11,19]. Ob-
+ject visual semantics are encoded in the FC7SGP layer of the Semantic Gaze Pathway
+represented by 4096 convolutional output channels. We embed object visual semantics
+into the ﬁrst person coordinate system by concatenating the ﬁrst person gaze coordi-
+nate channels with these 4096 channels. This embedding enables us to model the ob-
+ject speciﬁc gaze distribution. Note that this gaze distribution is integrated with visual
+semantics learned by pre-training the network to recognize speciﬁc object categories
+
+First Person Action-Object Detection with EgoNet
+
+7
+
+Fig. 4: The ﬁgure depicts the outputs of the Semantic Gaze and 3D Spatial pathways
+with their respective RGB and DHG inputs. Note that the Semantic Gaze Pathway
+“ﬁres” on the semantically meaningful action-objects (a TV), while the 3D Spatial
+Pathway focuses on the objects based on their 3D position relative to the person (a
+remote control).
+
+from the ﬁrst person images. The visual semantics with the coordinate embedding pro-
+duces 512 channel output, RSGP
+person image. We then attach an extra convolutional layer, which produces per-pixel
+action-object likelihood, LSGP
+optimized by minimizing softmax loss.
+
+(cid:0)I RGB(cid:1) ∈ R39×39×512 where I RGB is an RGB ﬁrst
+(cid:0)I RGB(cid:1) ∈ R39×39×2. The Semantic Gaze Pathway is
+
+3D Spatial Pathway. An action-object also possesses the following 3D spatial proper-
+ties. It exhibits characteristic distance to the person due to anthropometric constraints,
+e.g., arm length. For example, when a woman picks up a tuna can, her distance from the
+can is approximately 0.5m (average arm length of US women is 0.61m). The action-
+object also has a speciﬁc orientation relative to a person because of its design. For
+instance, when the person carries a cup, she holds it via the handle, which determines
+the pose of the cup with respect to that person. We hypothesize that these 3D spatial
+properties can be used to predict the action-objects.
+
+We design the 3D Spatial Pathway using the VGG fully convolutional network,
+which learns 3D spatial relationship between a person and action-object. We use depth
+and height [50] to represent the 3D environment around the person to handle the pitch
+movements of the head, i.e., the height information tells us about the orientation of the
+person’s head with respect to 3D environment. In addition, the gray scale image is used
+to capture the visual appearance cues. Note that we do not use full RGB channels to
+limit the contribution of 2D visual appearance cues. This diversiﬁes the cues used in the
+two pathways, which produces complementary predictions.
+The learned 3D spatial cues by this pathway are then encoded in the 4096 channel
+outputs of the FC73D layer in the 3D Spatial Pathway, R3D
+where I DHG is a 3-channel image composed of depth, height, and gray scale image. An
+extra convolutional layer is then attached to these 4096 channels to produce per-pixel
+action-object likelihood, L3D
+mized to minimize the softmax loss function.
+
+(cid:0)I DHG(cid:1) ∈ R39×39×4096
+(cid:0)I DHG(cid:1) ∈ R39×39×2. The 3D Spatial Pathway is opti-
+
+Combination of Pathways. As shown in Figure 4, the two pathways produce different
+response maps: action-objects based on (1) ﬁrst person coordinate aware visual ap-
+pearance, and (2) 3D spatial cues. We combine these two sources of information by
+integrating the high-level representations from both pathways, which are captured by
+
+First person RGBFirst person DHGSemantic gaze pathway3D spatial pathway8
+
+G.Bertasius, H.S. Park, S. X. Yu, and J.Shi
+
+Fig. 5: We qualitatively compare our EgoNet model with other representations (the mir-
+ror and the fry pan are the action-objects). The visual saliency methods (GBVS and
+RR-RGBD) fail because they do not incorporate object level cues. Hand detector fails
+to identify visual interactions (the mirror) whereas a classic object detector incorrectly
+treats every object as an action-object. In comparison, the EgoNet accurately predicts
+action-objects in both cases.
+the earlier 512 and 4096 channel outputs (RSGP
+Semantic Gaze and 3D Spatial pathways, respectively. Additional convolutional layer
+is used to integrate these outputs (referred to as Joint Pathway), which produces the
+per-pixel action-object likelihood, LJNT ∈ R39×39×2.
+We predict action-objects by averaging the outputs of three pathways (LSGP, L3D,
+LJNT), which produces a joint response map L ∈ R39×39×2. This map is upsampled to
+the original image dimension via a bilinear interpolation. The entire network is jointly
+optimized by minimizing the per-pixel softmax loss function with respect to the binary
+ground truth action-object labels.
+
+(cid:0)I DHG(cid:1)) from the
+
+(cid:0)I RGB(cid:1) and R3D
+
+The predictions by the three pathways are complementary, i.e., one can correct the
+mistakes made by the other pathway. For instance, in Figure 2, each pathway correctly
+predicts the action-objects (the steak and the bottle) but also has some false positive
+predictions. By combining all three pathways, the false positive predictions are assigned
+to have lower probabilities.
+
+4.3 Analysis of EgoNet Architecture
+
+We quantitatively characterize the design factors of our EgoNet architecture in Table 1
+using our ﬁrst person action-object RGBD dataset (Section 3). The black checkmarks
+indicate the components that were used in the EgoNet, and the red checkmarks indicate
+which likelihood outputs (LSGP,L3D,LJNT) were used for the ﬁnal action-object pre-
+diction. All the results are evaluated using the standard Max F-Score (MF) and Average
+Precision (AP) metrics.
+
+Are Separate Pathways Necessary? We compare our proposed architecture with a
+design of trivial concatenation of inputs, RGB, DHG, and ﬁrst person coordinate em-
+bedding. The column 3 indicates that such design produces inferior performance, i.e.,
+14.4% and 12.6% lower MF and AP compared to ours.
+
+RGB inputFCNHand detectorGVBSRR-RGBDEgoNet (ours)First Person Action-Object Detection with EgoNet
+
+9
+
+3
+(cid:88)
+(cid:88)
+(cid:88)
+(cid:88)
+(cid:88)
+
+(cid:88)
+(cid:88)
+
+(cid:88)
+
+1
+
+2
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+
+(cid:88)
+
+(cid:88)
+
+(cid:88)
+
+(cid:88)
+
+(cid:88)
+
+(cid:88)
+(cid:88)
+
+(cid:88)
+(cid:88)
+(cid:88)
+(cid:88)
+(cid:88)
+
+(cid:88)
+(cid:88)
+(cid:88)
+(cid:88)
+(cid:88)
+(cid:88)
+
+Concatenating RGB, DHG, XY?
+(cid:88)
+First person object pre-training? (cid:88)
+(cid:88)
+Height?
+(cid:88)
+First person coordinates?
+(cid:88)
+Semantic Gaze Pathway?
+(cid:88)
+3D Spatial Pathway?
+(cid:88)
+Joint Pathway?
+0.222 0.244 0.249 0.277 0.299 0.323 0.363 0.372 0.388 0.393
+Mean max F-score (MF)
+0.129 0.162 0.166 0.174 0.206 0.181 0.250 0.253 0.283 0.292
+Mean average precision (AP)
+Table 1: We characterize design factors in EgoNet (best viewed in color). Each column
+represents a particular architecture and each checkmark indicates which components
+were used for that experiment. The checkmarks that are colored in red indicate which
+likelihood outputs (LSGP,L3D,LJNT), were used for the ﬁnal action-object prediction.
+More than one colored checkmark means that the outputs from several pathways have
+been combined via the elemntwise averaging.
+
+Is First Person Object Pretraining Necessary? Objects in the ﬁrst person view may
+be seen differently than objects in the natural images [51]. We compare the performance
+of action-object prediction by Semantic Gaze Pathway with and without the ﬁrst person
+object pre-training. The columns 5 and 7 demonstrate that the ﬁrst person object pre-
+training improves the accuracy by 6.4% (MF) and 4.4% (AP).
+
+Are First Person Coordinate Embedding Necessary? In our EgoNet architecture,
+we embed the ﬁrst person gaze coordinates to encode the location prior of an action-
+object. The columns 1 and 7 show that this ﬁrst person coordinate embedding improves
+the accuracy (14.1% of MF and 12.1% of AP improvement). In Figure 3, we visual-
+ize the activations inside the convolutional layers averaged across the 4096 channels of
+the Semantic Gaze Pathway without (left) and with (right) the ﬁrst person coordinate
+embedding. We observe that in the former case, the activations in the network are not
+consistent with the action-objects (the food plate, and the TV) whereas in the latter case,
+the activations highlight the action-objects.
+
+Are 3D Spatial Cues Contributing? Earlier we claimed that the 3D spatial cues play
+an important role in action-object prediction task. The columns 7 and 9 in Table 1 shows
+that incorporating 3D Spatial Pathway boosts the accuracy by 2.5% (MF) and 3.3%
+(AP). The height information in our DHG representation also contributes to the perfor-
+mance as it yields 4.6% (MF) and 0.7% (AP) improvement over the design without the
+height (see column 4 and 6). In Figure 4, we also present qualitative comparisons of
+what is predicted by the Semantic Gaze Pathway and 3D Spatial Pathway. The Seman-
+tic Gaze Pathway predicts action-objects based on their visual appearance and person’s
+gaze distribution (e.g. a TV), whereas the 3D Spatial Pathway predicts action-objects
+based on 3D spatial layout around the person (e.g a remote control). This implies that
+the two pathways provide diverse cues about action-objects, and their combination im-
+proves overall action-object detection accuracy.
+
+10
+
+G.Bertasius, H.S. Park, S. X. Yu, and J.Shi
+
+hotel
+
+dining
+
+shopping
+
+dishwash
+
+grocery
+
+desk work
+
+cooking
+MF AP MF AP MF AP MF AP MF AP MF AP MF AP MF AP
+FCN [52] 0.091 0.033 0.158 0.054 0.052 0.020 0.225 0.105 0.181 0.084 0.110 0.044 0.077 0.021 0.128 0.052
+Hand Det. 0.210 0.085 0.148 0.045 0.161 0.044 0.315 0.142 0.234 0.086 0.106 0.024 0.078 0.012 0.179 0.062
+GBVS [53] 0.213 0.113 0.231 0.138 0.043 0.014 0.504 0.502 0.200 0.106 0.116 0.057 0.161 0.088 0.210 0.146
+0.366 0.264 0.195 0.084 0.180 0.086 0.394 0.222 0.421 0.327 0.137 0.074 0.267 0.178 0.280 0.176
+MCG [54] 0.224 0.113 0.274 0.136 0.243 0.126 0.597 0.389 0.400 0.283 0.200 0.093 0.281 0.170 0.317 0.187
+RR-RGBD 0.306 0.182 0.358 0.237 0.188 0.107 0.503 0.377 0.556 0.451 0.404 0.279 0.258 0.180 0.367 0.259
+EgoNet
+0.474 0.362 0.318 0.206 0.234 0.159 0.523 0.499 0.504 0.423 0.308 0.166 0.386 0.228 0.393 0.292
+
+mean
+
+SP
+
+Table 2: We evaluate predictive power of EgoNet using our ﬁrst person RGBD dataset.
+We measure max F-score (MF) and average precision (AP). All the methods (except
+GBVS, which is unsupervised) were trained on our dataset using the leave-one-out
+cross validation. The result indicates that EgoNet has the strongest predictive power
+with at least 2.6% (MF) and 3.3% (AP) gain.
+
+Is Combination of Pathways Necessary? The Joint Pathway without response averag-
+ing performs worse than the combined outputs from the Semantic Gaze and 3D Spatial
+pathways. Column 8, 9, and 10 show the effects of the Joint Pathway and averaging of
+all pathways. Column 10 is the full model, 8 is without averaging, and 9 is without Joint
+Pathway. Fusing the three pathways by averaging, yields 2.1%, and 3.9% improvement
+comparing to the designs using a single pathway, which suggests that all three pathways
+contribute diverse action-object information, which improves the ﬁnal prediction.
+
+Implementation Details
+
+4.4
+We implement EgoNet using Caffe [55]. The Semantic Gaze and 3D Spatial pathways
+are built upon the VGG fully convolutional network [46]. The Semantic Gaze Pathway
+is pre-trained to predict 41 object classes from our ﬁrst person action-object dataset
+while the 3D Spatial Pathway uses the VGG pre-trained model to diversify the learning
+capability. We trained our network for 3000 iterations, at the learning rate of 10−6,
+momentum of 0.9, weight decay of 0.0005, batch size of 20, and the dropout rate of
+0.5. To optimize the network, we employed a per-pixel softmax loss with respect to the
+ground truth action-object annotations. We handle the unbalanced class labels using a
+gradient weighting scheme [56].
+
+We sequentially train the EgoNet via four steps for the efﬁcient GPU memory foot-
+print in practice. This sequential training allows us to boostrap a good initialization
+and regularization which are essential for such large networks. (1) We pre-train the Se-
+mantic Gaze Pathway for the ﬁrst person object recognition that enables the network to
+detect objects from ﬁrst person RGB images. (2) Next, we independently train Semantic
+Gaze Pathway and 3D Spatial Pathway to predict action-objects. (3) We then optimize
+the layers in the Joint Pathway while freezing the parameters in the earlier layers. (4)
+Finally, we jointly optimize the full network except for the parameters in the ﬁrst 14
+convolutional layers of the Semantic Gaze Pathway and 3D Spatial Pathway.
+
+5 Results
+
+We evaluate our method both quantitatively and qualitatively across different ﬁrst per-
+son datasets. The main focus of the quantitative evaluation is two-fold: (1) predictive
+
+First Person Action-Object Detection with EgoNet
+
+11
+
+Fig. 6: We illustrate short sequences of our results from our ﬁrst person RGBD dataset
+(best viewed in color). The 1st, 3rd, 5th rows depict the EgoNet predictions whereas
+the 2st, 4th, 6th rows illustrate ground truth action-objects overlaid on RGB images.
+Our method predicts what the person will do next even though we have not explicitly
+trained it to do so. For instance, in column 4 of the 1st row, the EgoNet predicts multiple
+objects that can be taken out of the fridge. In column 6, the person takes one of these
+objects. We also note, that even in the cases of false positive prediction (see 5th row),
+EgoNet makes pretty sensible predictions.
+
+power on our dataset, and (2) generalization power on other datasets. We also qualita-
+tively evaluate our method’s performance on ﬁrst person YouTube videos that contain
+various actions, objects, and for some of which, the camera wearer is a non-human, e.g.,
+dog, and on children’s social interaction data.
+
+5.1 Quantitative Evaluation of Predictive Power
+
+We evaluate the predictive power of EgoNet using the maximum F-score (MF) and
+average precision (AP). We compare our approach to the state-of-the-art baseline meth-
+ods on our ﬁrst person action-object RGBD dataset. We include the following baseline
+methods in our comparisons: (1) GBVS [53]: a bottom-up visual saliency prediction
+method; (2) MCG [54]: a multiscale object segmentation proposal method; (3) Hand
+detector: a Gaussian distribution around a detected hand trained on our dataset; (4) Spa-
+tial Prior (SP): the average action-object location mask obtained from our dataset; (5)
+
+12
+
+G.Bertasius, H.S. Park, S. X. Yu, and J.Shi
+
+pizza
+
+snack
+
+salad
+
+pasta
+
+breakfast
+MF AP MF AP MF AP MF AP MF AP MF AP MF AP MF AP
+RR-RGB 0.214 0.129 0.194 0.116 0.188 0.113 0.182 0.087 0.179 0.099 0.110 0.044 0.186 0.107 0.189 0.109
+MCG [54] 0.387 0.289 0.312 0.204 0.352 0.259 0.321 0.226 0.306 0.208 0.325 0.231 0.312 0.231 0.331 0.235
+GBVS [53] 0.294 0.179 0.363 0.259 0.356 0.274 0.426 0.328 0.378 0.282 0.262 0.168 0.343 0.250 0.346 0.249
+0.417 0.253 0.408 0.262 0.417 0.287 0.458 0.333 0.395 0.275 0.346 0.252 0.415 0.322 0.408 0.288
+
+sandwich
+
+EgoNet
+
+burger
+
+mean
+
+Table 3: Quantitative results on GTEA Gaze+ dataset for the ﬁxation prediction task.
+The dataset contains ﬁrst person RGB videos of several people cooking 7 different
+meals. We rely solely on the Semantic Gaze Pathway to make our predictions. We show
+that EgoNet outperforms all the other methods on this dataset by at least 6.2% MF and
+3.9% AP. We note that none of these methods were retrained on GTEA Gaze+ dataset
+in order to test their generalization ability.
+
+FCN [52]: a fully convolutional object detection network trained on our dataset with 41
+object classes; and (6) RR-RGBD: a region-based regression method with hand-crafted
+features. RR-RGBD predicts action-objects using a random forest regressor on the seg-
+ments provided by the MCG [54] method. The features include region properties such
+as shape, size, its location in the ﬁrst person frame, histograms of depth, etc. Many
+of these features were successfully used in [11, 49, 54]. Please ﬁnd the Supplementary
+material for more details of RR-RGBD.
+
+All methods are trained on our dataset except for GBVS which is an unsupervised
+method. The training is conducted using the leave-one-out cross validation scheme as is
+standard for ﬁrst person videos. Based on the results in Table 2, we observe that EgoNet
+outperforms all baseline methods by at least 2.6% (MF) and 3.3% (AP). FCN performs
+poorly because it ignores the ﬁrst person view cues. Hand detector based method fails
+to identify visual interactions. The results of SP method, indicate that the ﬁrst person
+spatial prior is not enough to precisely predict action-objects. Finally, we show that
+EgoNet also outperforms popular GBVS and MCG methods.
+
+Figure 5 illustrates our qualitative action-object predictions. The visual saliency
+methods (GBVS and RR-RGBD) do not predict action-objects correctly because they
+do not use any object-level information. For instance, the RR-RGBD method predicts a
+rectangular region of wall in the column 4 at the bottom as an action-object. Given that
+the region is rectangular, RR-RGBD method incorrectly assumes that it’s likely to be an
+object such as TV. In comparison, the EgoNet was explicitly trained to recognize objects
+in the pre-training stage, and thus it correctly identiﬁes action-objects. We also observe
+that while Hand Detector with a Gaussian on top, may detect objects facilitating tactile
+sensation, it fails with visual sensation (looking at the mirror) whereas our method
+correctly detects action-objects in both cases. An FCN trained for a classical object
+detection performs poorly since it treats every object as an action-object without the ﬁrst
+person cues. In contrast, our method holistically integrates a set of visual appearance,
+head direction, and 3D spatial cues, which allows it to detect action-objects with high
+accuracy.
+
+5.2 Quantitative Evaluation on Generalization Power
+
+We quantitatively evaluate the generalization power of EgoNet on GTEA Gaze+ dataset [19].
+The GTEA Gaze+ dataset consists of multiple people cooking 7 different meals, with
+
+First Person Action-Object Detection with EgoNet
+
+13
+
+Fig. 7: Our results on 3 ﬁrst person RGB YouTube videos (best viewed in color). First
+row depicts a video of a person dressing up and feeding his cat. The second video shows
+a restaurant chef cooking a meal. The last video is captured by a dog-mounted camera
+in the park. We show that EgoNet produces better qualitative results than the MCG [53].
+We note that both methods were trained our ﬁrst person action-object dataset.
+
+their gaze annotations recorded using a wearable eye-tracker. We run our method on 7
+videos corresponding to each meal cooking activity. Since GTEA Gaze+ dataset con-
+tains only RGB information, our prediction relies solely on Semantic Gaze Pathway.
+The task for this dataset is to predict people’s ﬁxation from the ﬁrst person frames. To
+adapt the annotations to an action-object detection task, we threshold a Gaussian with
+the standard deviation of 60 in pixel at a ﬁxation point and use the the resulting mask
+as a binary ground truth map. We use MF and AP metrics to evaluate the results.
+
+All methods are trained on our ﬁrst person action-object dataset, and tested on
+GTEA Gaze+ dataset. The strong generalization ability of EgoNet is critical because
+the number of existing annotated ﬁrst person datasets are limited.
+
+In Table 3, our method shows the strongest generalization power compared to RR-
+RGB, MCG, and GBVS methods. While RR-RGB method exhibits a strong predictive
+power on our ﬁrst person RGBD action-object dataset, it achieves poor results on this
+dataset. Additionally, since the annotations on this dataset capture people’s ﬁxations,
+our results indicate that the Semantic Gaze Pathway implicitly learns to model person’s
+ﬁxation even if no 3D information is available.
+
+5.3 Qualitative Evaluation
+
+We qualitatively demonstrate our method’s results for the videos that capture people’s
+daily activities and social interactions.
+
+YouTube Videos. We use the Semantic Gaze Pathway to predict action-object in the ﬁrst
+person RGB YouTube videos. These videos include a person dressing up and feeding a
+cat, a restaurant chef making a dish, and playing in the park from a dog’s ﬁrst person
+view. In Figure 7, we compare EgoNet with MCG trained on our ﬁrst person action-
+object dataset where EgoNet predicts more semantically meaningful action-objects than
+MCG. Additionally, we note that due to our method’s ability to generalize, EgoNet can
+successfully predict action-objects in novel scenes and even from non-human’s view.
+
+RGB inputRGB inputMCGMCGEgoNet (ours)EgoNet (ours)14
+
+G.Bertasius, H.S. Park, S. X. Yu, and J.Shi
+
+Fig. 8: We predict action-objects from the data that captures children’s social interac-
+tions. The EgoNet shows strong predictive and generalization power, which detects
+semantically meaningful action-objects (person, block, and painting) although such
+scenes are not presented in the training data.
+
+Our model ﬁnds action-objects which are important for the ﬁrst person while classic
+object detectors would detect all objects indiscriminately.
+
+Children’s Social Interaction Videos. Our model has scientiﬁc impact on computa-
+tional behavioral analysis. In particular, it can analyze children’s visual sensorimotor
+behavior where the early detection of behavioral diseases such as autism spectrum dis-
+order is critical for remedy and rehabilitation. Figure 8 shows action-object prediction
+on ﬁrst person children’s interactions [57], which includes playing a card game, building
+block towers, and playing hide-and-seek. Due to strong generalization power, EgoNet
+enables qualitatively meaningful predictions even though it has not been trained in this
+environment.
+
+6 Summary
+
+We present a novel concept of an action-object to study the holistic relation of visual
+attention with motor actions using a ﬁrst person RGB(D) image. We design EgoNet, a
+predictive network model that detects action-objects by integrating the Semantic Gaze
+Pathway and 3D Spatial Pathway, both of which leverage 2D and 3D complementary
+visual cues encoded in the ﬁrst person image. We demonstrate that our method quanti-
+tatively outperforms other methods on our ﬁrst person action-object RGBD dataset.
+
+We also demonstrate that our model generalizes very well across a variety of diverse
+datasets. It is readily applicable to many exciting applications such as personalized
+video dialog creation, video summarization, dexterous hand skill acquisition, and em-
+pirical understanding of visual sensorimotor systems of humans and even non-humans.
+
+First Person Action-Object Detection with EgoNet
+
+15
+
+References
+
+1. Johansson, R.S., Westling1, G., Bäckström, A., Flanagan, J.R.: Eye hand coordination in
+
+object manipulation. Journal of Neuroscience (2001) 1, 2
+
+2. Perone, S., Madole, K.L., Ross-Sheehy, S., Carey, M., Oakes, L.M.: The relation between
+infants’ activity with objects and attention to object appearance. Developmental Psychology
+(2008) 1
+
+3. Vidoni, E.D., McCarley, J.S., Edwards, J.D., Boyd, L.A.: Manual and oculomotor perfor-
+mance develop contemporaneously but independently during continuous tracking. Experi-
+mental Brain Research (2009) 1
+
+4. Bowman, M.C., Johannson, R.S., Flanagan, J.R.: Eye hand coordination in a sequential
+
+target contact task. Experimental Brain Research (2009) 1
+
+5. Lazzari, S., Mottet, D., Vercher, J.L.: Eye hand coordination in rhythmical pointing. Journal
+
+of Motor Behavior (2009) 1
+
+6. Rehg, J.M., Abowd, G.D., Rozga, A., Romero, M., Clements, M.A., Sclaroff, S., Essa, I.,
+Ousley, O.Y., Li, Y., Kim, C., Rao, H., Kim, J.C., Presti, L.L., Zhang, J., Lantsman, D.,
+Bidwell, J., Ye, Z.: Decoding children’s social behavior. In: CVPR. (2013) 2, 3
+
+7. Takarae, Y., Luna, B., Minshew, N.J., Sweeney, J.A.: Visual motion processing and visual
+sensorimotor control in autism. Journal of International Neuropsychology Society (20148)
+2
+
+8. Hall, E.T.: A system for the notation of proxemic behaviour. American Anthropologist
+
+(1963) 2
+
+9. Park, H.S., Jain, E., Sheikh, Y.: 3d gaze concurrences from head-mounted cameras.
+
+In:
+
+NIPS. (2012) 3
+
+10. Kanade, T., Hebert, M.: First person vision. In: IEEE. (2012) 3
+11. Lee, Y.J., Grauman, K.: Predicting important objects for egocentric video summarization.
+
+IJCV (2015) 3, 5, 6, 12
+
+12. Lu, Z., Grauman, K.: Story-driven summarization for egocentric video. In: CVPR. (2013) 3
+13. Kopf, J., Cohen, M.F., Szeliski, R.: First-person hyper-lapse videos. TOG (SIGGRAPH)
+
+(2014) 3
+
+14. Ren, X., Gu, C.: Figure-ground segmentation improves handled object recognition in ego-
+
+centric video. In: CVPR. (2010) 3
+
+15. Bolaños, M., Radeva, P.: Ego-object discovery. arxiv:1504.01639 (2015) 3
+16. Pirsiavash, H., Ramanan, D.: Detecting activities of daily living in ﬁrst-person camera views.
+
+In: CVPR. (2012) 3
+
+17. Fathi, A., Farhadi, A., Rehg, J.M.: Understanding egocentric activities. In: ICCV 3
+18. Taralova, E.H.S., De la Torre, F., Hebert, M.: Temporal segmentation and activity classiﬁca-
+
+tion from ﬁrst-person sensing. In: CVPR Workshop 3
+
+19. Li, Y., Ye, Z., Rehg, J.M.: Delving into egocentric actions. In: CVPR 3, 6, 12
+20. Ryoo, M.S., Rothrock, B., Matthies, L.: Pooled motion features for ﬁrst person videos. In:
+
+CVPR. (2015) 3, 4
+
+21. Li, C., Kitani, K.M.: Pixel-level hand detection for ego-centric videos. In: CVPR. (2013) 3
+22. Li, Y., Fathi, A., Rehg, J.M.: Learning to predict gaze in egocentric video. In: ICCV 3, 5
+23. Park, H.S., Hwang, J.J., Niu, Y., Shi, J.: Egocentric future localization. In: CVPR. (2016) 3,
+
+4
+
+24. Ye, Z., Li, Y., Liu, Y., Bridges, C., Rozga, A., Rehg, J.M.: Detecting bids for eye contact
+
+using a wearable camera. In: FG. (2015) 3
+
+25. Pusiol, G., Soriano, L., Fei-Fei, L., Frank, M.C.: Discovering the signatures of joint attention
+
+in child-caregiver interaction. In: CogSci. (2014) 3
+
+16
+
+G.Bertasius, H.S. Park, S. X. Yu, and J.Shi
+
+26. Fathi, A., Hodgins, J.K., Rehg, J.M.: Social interaction: A ﬁrst person perspective.
+
+In:
+
+CVPR. (2012) 3
+
+27. Park, H.S., Jain, E., Sheikh, Y.: 3d social saliency. In: NIPS. (2012) 3
+28. Wu, J., Osuntogun, A., Choudhury, T., Philipose, M., Rehg, J.M.: A scalable approach to
+
+activity recognition based on object use. In: ICCV. (2007) 3
+
+29. Yao, B., Fei-Fei, L.: Grouplet: A structured image representation for recognizing human and
+
+object interactions. In: CVPR. (2010) 3
+
+30. Yao, B., Fei-Fei, L.: Modeling mutual context of object and human pose in human object
+
+interaction activities. In: CVPR. (2010) 3
+
+31. Delaitre, V., Sivic, J., Laptev, I.: Learning person-object interactions for action recognition
+
+in still images. In: NIPS. (2011) 3
+
+32. Turek, M.W., Hoogs, A., Collins, R.: Unsupervised learning of functional categories in video
+
+scenes. In: ECCV. (2010) 3
+
+33. Gall, J., Fossati, A., Van Gool, L.: Functional categorization of objects using real-time mark-
+
+erless motion. In: CVPR. (2011) 3
+
+34. Kjellstrom, H., Romero, J., Kragic, D.: Visual object action recognition: Inferring object
+
+affordances from human demonstration. CVIU (2011) 3
+
+35. Gupta, A., Davis, L.S.: Objects in action: An approach for combining action understanding
+
+and object perception. In: CVPR. (2007) 4
+
+36. Gupta, A., Satkin, S., Efros, A.A., Hebert, M.: From 3d scene geometry to human workspace.
+
+In: CVPR. (2011) 4
+
+37. Rabinovich, A., Vedaldi, A., Galleguillos, C., Wiewiora, E., Belongie, S.: Objects in context.
+
+In: ICCV. (2007) 4
+
+38. Fouhey, D.F., Delaitre, V., Gupta, A., Efros, A.A., Laptev, I., Sivic, J.: People watching:
+
+Human actions as a cue for single-view geometry. In: ECCV. (2012) 4
+
+39. Yu, L.F., Duncan, N., Yeung, S.K.: Fill and transfer: A simple physics-based approach for
+
+containability reasoning. In: ICCV. (2015) 4
+
+40. Bertasius, G., Shi, J., Torresani, L.: High-for-low and low-for-high: Efﬁcient boundary de-
+tection from deep object features and its applications to high-level vision. In: ICCV. (2015)
+4
+
+41. Krizhevsky, A., Sutskever, I., Hinton, G.E.: Imagenet classiﬁcation with deep convolutional
+
+neural networks. In: NIPS. (2012) 4
+
+42. Donahue, J., Jia, Y., Vinyals, O., Hoffman, J., Zhang, N., Tzeng, E., Darrell, T.: Decaf: A
+deep convolutional activation feature for generic visual recognition. arxiv:1310.153 (2013)
+4
+
+43. Toshev, A., Szegedy, C.: Deeppose: Human pose estimation via deep neural networks.
+
+arxiv:1312.4659 (2013) 4
+
+44. Taigman, Y., Yang, M., Ranzato, M., Wolf, L.: Deepface: Closing the gap to human-level
+
+performance in face veriﬁcation. In: CVPR. (2014) 4
+
+45. Park, H.S., Hwang, J.J., Shi, J.: Force from motion: Decoding physical sensation from a ﬁrst
+
+person video. In: CVPR. (2016) 4
+
+46. Simonyan, K., Zisserman, A.: Very deep convolutional networks for large-scale image recog-
+
+nition. arXiv:1409.1556 (2014) 4, 6, 10
+
+47. Rother, C., Kolmogorov, V., Blake, A.: "grabcut": Interactive foreground extraction using
+
+iterated graph cuts. ToG (SIGGRAPH) (2004) 4
+
+48. Bertasius, G., Park, H.S., Shi, J.: Exploiting egocentric object prior for 3d saliency detection.
+
+arXiv:1511.02682 (2015) 5
+
+49. Li, Y., Hou, X., Koch, C., Rehg, J., Yuille, A.: The secrets of salient object segmentation. In:
+
+CVPR. (2014) 5, 12
+
+50. Gupta, S., Girshick, R., Arbeláez, P., Malik, J.: Learning rich features from RGB-D images
+
+for object detection and segmentation. In: ECCV. (2014) 7
+
+First Person Action-Object Detection with EgoNet
+
+17
+
+51. Russakovsky, O., Deng, J., Su, H., Krause, J., Satheesh, S., Ma, S., Huang, Z., Karpathy, A.,
+Khosla, A., Bernstein, M., Berg, A.C., Fei-Fei, L.: ImageNet Large Scale Visual Recognition
+Challenge. arXiv:1409.0575 (2014) 9
+
+52. Long, J., Shelhamer, E., Darrell, T.: Fully convolutional networks for semantic segmentation.
+
+In: CVPR. (2015) 10, 12
+
+53. Harel, J., Koch, C., Perona, P.: Graph-based visual saliency. In: NIPS. (2007) 10, 11, 12, 13
+54. Arbeláez, P., Pont-Tuset, J., Barron, J., Marques, F., Malik, J.: Multiscale combinatorial
+
+grouping. In: CVPR. (2014) 10, 11, 12
+
+55. Jia, Y., Shelhamer, E., Donahue, J., Karayev, S., Long, J., Girshick, R., Guadarrama, S.,
+Darrell, T.: Caffe: Convolutional architecture for fast feature embedding. arXiv:1408.5093
+(2014) 10
+
+56. Xie, S., Tu, Z.: Holistically-nested edge detection. In: ICCV. (2015) 10
+57. Park, H.S., Shi, J.: Social saliency prediction. In: CVPR. (2015) 14
+
+

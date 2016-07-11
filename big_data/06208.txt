@@ -1,0 +1,1105 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+0
+2
+
+ 
+ 
+]
+
+V
+C
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+8
+0
+2
+6
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+RotationNet: Learning Object Classiﬁcation
+Using Unsupervised Viewpoint Estimation
+
+Graduate School of Information Science and Technology, The University of Tokyo
+
+Asako Kanezaki
+
+Abstract. The recent popularization of depth sensors and the avail-
+ability of large-scale 3D model databases such as ShapeNet have drawn
+increased attention to 3D object recognition. Despite the convenience of
+using 3D models captured oﬄine, we are allowed to observe only a single
+view of an object at once, with the exception of the use of special en-
+vironments such as multi-camera studios. This impedes the recognition
+of diverse objects in a real environment. If a mechanical system (or a
+robot) has access to multi-view models of objects and is able to estimate
+the viewpoint of a currently observed object, it can rotate the object to
+a better view for classiﬁcation. In this paper, we propose a novel method
+to learn a deep convolutional neural network that both classiﬁes an ob-
+ject and estimates the rotation path to its best view under the predicted
+object category. We conduct experiments on a 3D model database as well
+as a real image dataset to demonstrate that our system can achieve an
+eﬀective strategy of object rotation for category classiﬁcation.
+
+Keywords: Convolutional Neural Network, 3D Object Recognition, Pose
+Estimation, Next-Best-View Estimation, Active Vision
+
+Is it a cup?
+
+Yes, it’s a 
+
+cup!
+
+Is it a shelf?
+
+No, it’s not.
+Is it a piano?
+
+Yes, it’s a 
+
+piano!
+
+rotaƟon
+
+rotaƟon
+
+rotaƟon
+
+1st view
+
+2nd view
+
+(a)
+
+1st view
+
+2nd view
+
+3rd view
+
+(b)
+
+Fig. 1. Concept of our proposed system. The prediction of an object category is likely
+to be improved by rotating it to obtain another view. Our system updates the object
+category prediction after observing other view(s) by rotating the object to its “front”
+view based on the estimated category and pose of the previous view.
+
+2
+
+1
+
+Asako Kanezaki
+
+Introduction
+
+The recent remarkable advancement of image recognition techniques suggests
+that almost any types of objects found in images on the internet can be classi-
+ﬁed automatically. However, the classiﬁcation of objects in a real environment
+remains a challenge. Suppose that a mobile robot (e.g., a robot cleaner) mounted
+with a camera automatically moves around its daily environment. Objects in au-
+tomatically captured images have a much larger variety of postures than those in
+images on the internet, where users tend to capture the front of objects, whether
+or not by conscious eﬀort. This impedes the recognition of automatically cap-
+tured photos of objects in the real world. Thus, if such a robot can manipulate
+an object or move around it to change its viewpoint, it can obtain better views
+of the object for classiﬁcation.
+
+We propose a method to improve object classiﬁcation performance by rotat-
+ing an object to its better view(s). Figure 1 depicts the concept of our designed
+system. Our system estimates the category and viewpoint of an object from a
+single input image, and then rotates the object to the “front” view based on
+the estimation. If the ﬁrst estimation of the object’s category and viewpoint is
+correct, the conﬁdence of the estimation is increased by the rotation (see Fig. 1
+(a)). Otherwise, if the ﬁrst estimation is incorrect, the estimation of the cate-
+gory and/or viewpoint of the object in its new view is likely to change (see Fig. 1
+(b)). In this case, the classiﬁcation performance may be improved by a further
+rotation.
+
+The main issues we address to realize our goals are as follows.
+
+1. Determine how to decide the “front” view of each object category.
+2. Determine how to decide the “front” view of each object instance for training.
+
+First, we must select the best view for object classiﬁcation as the “front” view
+of an object category. Second, we must select the view that best matches the
+“front” view of the objects category as the “front” view of an object instance.
+We argue that these two problems can only be solved by joint learning
+of the object classiﬁcation and pose estimation. Our method learns a
+convolutional neural network (CNN) for simultaneous object classiﬁcation and
+pose estimation, which outputs N M -dimensional predictions, where N is the
+number of categories and M is the number of views of an object. For training,
+we use multi-view images of objects generated from 3D models or captured
+using tools such as a turntable. We input M images of each object instance
+with its category label at a time. Then, the system labels the image that has
+the highest probability of its category as the “front” view and assigns consistent
+pose labels to the other images. Our method constitutes unsupervised learning
+with respect to the pose estimation because we only require the category labels
+for training. Furthermore, our method does not require the postures of objects
+to be consistent across training instances; thus, it can be applied to a 3D model
+dataset where the reference axis of one object instance diﬀers from another. In
+most cases, the basis axes of 3D models in such datasets are calculated using
+techniques such as principal component analysis (PCA), which is known to be
+
+RotationNet
+
+3
+
+sensitive to noise and individual diﬀerences in shapes. In contrast, we decide
+the basis axes of objects based on their appearance in an unsupervised manner
+rather than calculating them during preprocessing. During testing, the system
+outputs an object’s category label and a discrete pose label from a single view
+image. The main contributions of our work are as follows.
+
+– We develop a novel CNN-based method that estimates both the category
+
+and pose of an object from a single-view image.
+
+– Our method learns pose estimation in an unsupervised manner and does not
+
+require pose normalization as a preprocessing step.
+
+– Using our method, we automatically obtain the “front” views of object cat-
+
+egories that better facilitate classiﬁcation compared with other views.
+
+– We demonstrate that our system can achieve better classiﬁcation perfor-
+
+mance by rotating an object to its estimated “front” view.
+
+2 Related work
+
+Owing to the success of deep convolutional neural networks (deep CNN) in image
+recognition [1], the deep CNN framework for 3D object recognition has recently
+been drawing a lot of attention. Wu et al. [2] introduced a convolutional deep
+belief network that learns 3D voxel data converted from the CAD models of
+objects in 40 categories. Fang et al. [3] proposed a method that learns deep
+neural networks using a heat kernel signature (HKS) [4] as input to obtain a
+novel 3D deep shape descriptor that demonstrated accurate performance in 3D
+shape retrieval. Although these approaches work well for complete 3D models,
+they are not directly applicable to partial views of real objects captured by
+devices such as depth sensors. For real data perception in 3D, partial view heat
+kernel (PVHK) descriptors [5] or other well-known 3D local descriptors such as
+the spin-image [6], SHOT [7], or FPFH [8] are more appropriate than HKS, but
+are rather sensitive to individual diﬀerences between objects because of their
+requirement of normal or boundary estimation. For this reason, the existing 3D
+descriptors for real objects are more suitable for speciﬁc object recognition rather
+than general object recognition.
+
+Even when working with 3D objects, 2D-based approaches are eﬀective for
+general object recognition tasks. The LightField descriptor [9] represents a 3D
+object by a set of features extracted from its silhouette views captured from
+virtual cameras located on the vertices of a virtual dodecahedron encompassing
+the object. Similarly, Su et al. [10] proposed multi-view CNN (MVCNN), which
+takes multi-view images of an object captured from surrounding virtual cam-
+eras as input and outputs the objects category label. MVCNN demonstrated a
+90.1% classiﬁcation accuracy for 40 object categories in ModelNet [11], highly
+outperforming the 77% attained by Wu et al. [2]. 2D-based approaches can be
+more eﬀective for category-level object recognition than 3D-based descriptors
+because they are robust to individual diﬀerences between objects in the same
+category. Note that the LightField descriptor [9] and MVCNN [10] require multi-
+view images of an object not only for training but also for testing. Unlike these
+
+4
+
+Asako Kanezaki
+
+approaches, our method requires only a single view of an object for testing be-
+cause it is unfeasible to simultaneously obtain multi-view images of an object in
+the real world. These images can only be obtained sequentially by changing the
+viewpoint.
+
+To recognize an object from its single view, pose estimation is generally re-
+quired. With respect to classical approaches to object detection, deformable part
+models (DPM) [12] consist of a small number of mixture components that are
+each trained with subsets divided according to the aspect ratios of the bounding
+boxes. These components correspond to diﬀerent views (e.g., the front, diag-
+onal front, and the side) of objects such as a bicycle or a dog. Furthermore,
+a series of 3D DPM (including [13,14,15]) approaches were proposed to dis-
+cover larger variations of object poses. The signiﬁcance of object pose estimation
+from a single-view image is also discussed in recent publications that synthesize
+3D CAD models of objects into real images for learning real object recogni-
+tion [16,17,13,18,19,20]. Papon and Schoeler [16] learned a CNN that takes the
+normal, intensity, and depth images corresponding to a single view as input and
+outputs the category labels, positions, and rotation parameters of objects using
+synthetic scenes created with CAD models. Su et al. [17] created a large-scale
+image dataset with pose angles by synthesizing CAD models in ShapeNet [21]
+into various background images under various light conditions. Their method
+then learned a CNN that estimates the categories and viewpoints of objects.
+These methods assume the complete and uniform poses of all of the models used
+for synthesis to ensure precise pose annotations for the training samples. How-
+ever, the poses of 3D CAD models automatically collected from the internet are
+not always uniform; for instance, one may encounter the top of a persons head
+viewed from the z direction while the back of another person is viewed from
+the same direction. The common way to obtain the bases of 3D models involves
+calculating PCA for the vertices of the models, which is known to be sensitive
+to noise and individual diﬀerences in shape. Our method does not require the
+consistency of the poses of 3D models across samples.
+
+Object pose estimation is signiﬁcant in its role in improving object classiﬁca-
+tion. Zhu et al. [22] achieve better face identiﬁcation performance by generating
+face images from diﬀerent viewpoints after observing a single view. Similarly,
+Su et al. [23] synthesized HOG features of diﬀerent views of an object to obtain
+view-independent feature representation. Chen and Grauman [24] inferred un-
+seen views of people from a single snapshot by probabilistic tensor completion.
+All of these methods “imagine” the appearance of objects’ unobserved proﬁles,
+which is innately more uncertain than using real observations. For instance, one
+might imagine a handle on the back-side of a cup, but it is impossible to verify
+if the cup has a handle until the back-side is observed.
+
+Next-best-view (NBV) estimation is one of the most signiﬁcant issues in the
+domain of active vision, which aims to obtain additional information about ob-
+jects or environments by moving. NBV estimation was addressed mainly in a 3D
+reconstruction task [25] and also in an active 3D recognition task [26,27,28,29,30].
+Our method can be classiﬁed as an active approach for 3D recognition of objects.
+
+RotationNet
+
+5
+
+The most characteristic aspect of our method is that it automatically decides
+the best view, which we call the “front” view, of each object category to be dis-
+tinguished from other categories. We choose the front view of the category that
+is estimated by using the current view as the NBV in our method. Unlike most
+existing NBV estimation methods that calculate the entropy of visibility or the
+spatial occupancy of observations to evaluate NBV candidates, our method does
+not require any additional processing except for the classiﬁcation of the current-
+view image. Our method combines object classiﬁcation, pose estimation, and
+NBV estimation into a single processing stage.
+
+3 Method
+
+3.1 Pipeline
+
+Our method learns a CNN that takes a single-view image of an object as input
+and outputs its category label and pose label (i.e., label of discrete views). More
+speciﬁcally, our CNN outputs an N M -dimensional score vector where N is the
+number of object categories and M is the number of views, and then extracts
+the category and pose that correspond to the highest element of the score vector.
+Our system labels the best view for each object category (the “front” view) as
+“pose 1”, and assigns consistent labels (“pose 2” for its next view, “pose 3” for
+the view following “pose 2”, . . . ) to the subsequent views. For testing, if the
+estimated pose label is diﬀerent from “pose 1”, the system rotates the object
+into “pose 1”. Thus, we call our method RotationNet.
+
+Figure 2 shows a comparison of the training/testing pipelines for a standard
+CNN and RotationNet. Here, a standard CNN indicates a CNN that classiﬁes
+objects into N categories without pose estimation; it considers that objects in
+any pose belong to the same class if they belong to the same object category. We
+use AlexNet [1] as the standard CNN, which mainly consists of ﬁve convolution
+layers, three pooling layers, three fully-connected layers, and a single softmax
+layer. We modiﬁed its last fully-connected layer’s output from N -dimensional to
+N M -dimensional to deﬁne our RotationNet. To train RotationNet, we ﬁne-tune
+the weights pre-trained using the ILSVRC 2012 dataset [31].
+
+3.2 Standard CNN
+
+In the training process, a standard CNN takes a pair of a single-view image
+of an object and its category label as input. The last layer of the CNN is a
+softmax layer, and it outputs the N -dimensional probability of object categories
+corresponding to a score vector whose L1 norm equals to one. Then, the diﬀerence
+between the score vector and its ground truth probability which is a vector
+with all of its elements set to zero except for the one corresponding to the
+training sample’s category label is back propagated. This forward and backward
+processing is iterated T times with random sorting of the training samples.
+Usually, the training phase uses multiple images of an object instance captured
+
+6
+
+Asako Kanezaki
+
+d
+r
+a
+d
+n
+a
+t
+s
+
+)
+d
+e
+s
+o
+p
+o
+r
+p
+(
+
+t
+e
+N
+n
+o
+Ɵ
+a
+t
+o
+R
+
+training
+
+probability
+
+forward
+
+…
+
+(cid:18441)
+
+(cid:18439)
+
+backward
+
+car
+
+…
+
+…
+
+…
+
+(cid:18441)
+
+(cid:18439)
+
+(cid:18441)
+
+(cid:18439)
+
+(cid:18441)
+
+(cid:18439)
+
+car
+
+max
+
+class: “car”
+
+test
+
+…
+
+…
+
+pose: 3
+
+best
+
+pose: 1
+
+pose: 2
+
+class: “car”
+pose:  2
+
+rotaƟon to 
+pose 1
+
+…
+
+class: “car”
+pose:  1
+
+1
+2
+3
+
+1
+2
+3
+
+Fig. 2. Training/testing pipelines for a standard CNN and for RotationNet. For sim-
+plicity, we set M = 3 in this example.
+
+from various viewpoints and treats the multiple views independently. During the
+testing process, the trained CNN takes a single-view image of an object as input
+and extracts the category label corresponding to the highest probability.
+
+3.3 RotationNet
+
+In the training process, our CNN (RotationNet) takes a set of M images of an
+object captured from multiple viewpoints and its category label as input. All of
+the M images pass through the same CNN that outputs M N M -dimensional
+score vectors. The N M -dimensional score vector consists of M N -dimensional
+probability vectors of object categories for diﬀerent views, namely, “pose 1”,
+“pose 2”, . . . , and “pose M ”. The last layer of RotationNet is a modiﬁed softmax
+layer that concatenates the M outputs of the softmax processing for the N -
+dimensional probabilities for the diﬀerent views. Let the probability of object
+categories for “pose j” of the i-th image be pi
+j,N )⊤ ∈ RN , the
+output of RotationNet for the i-th image si ∈ RN M is calculated as follows.
+
+j,1, . . . , pi
+
+j = (pi
+
+⊤
+
+1 , . . . , pi⊤
+M (cid:1)
+
+si = (cid:0)pi⊤
+Then, we obtain {si}M
+i=1, which is a set of score vectors si. Next, the image that
+corresponds to “pose 1” is selected from the M images. In other words, if c is the
+training sample’s category label, we select the image whose c-th element of the
+probability vector of “pose 1” is the highest among the M images. The index of
+
+(i = 1, . . . , M ).
+
+(1)
+
+RotationNet
+
+7
+
+the image for “pose 1” ibest is decided as follows.
+
+ibest = arg max
+
+i
+
+pi
+1,c.
+
+(2)
+
+Let vi denote the pose label of the i-th image. Here, vi is a latent variable that
+is decided according to ibest; vi is decided consistently as vibest = 1, vibest +1 = 2,
+vibest +2 = 3, . . . , and so on. We set vi ← vi − M when vi is larger than M .
+
+The ground truth score vector for the i-th image ti ∈ RN M is decided
+according to vi. Let the target probability for “pose j” of the i-th image be
+qi
+j = (qi
+
+j,N )⊤ ∈ RN , ti ∈ RN M is calculated as follows.
+
+j,1, . . . , qi
+
+ti = (cid:0)qi⊤
+j,k is deﬁned as follows:
+
+⊤
+
+1 , . . . , qi⊤
+M (cid:1)
+
+where qi
+
+(i = 1, . . . , M ),
+
+qi
+j,k =
+
+
+
+
+(j = vi and k = c)
+(j = vi and k 6= c)
+
+1
+0
+1
+N (j 6= vi).
+
+(3)
+
+(4)
+
+This equation means that we want the c-th element to be 1 and the rest 0
+for “pose vi” of the i-th image, and also that we want all of the elements of
+the probability vectors for the views other than “pose vi” to be even. Then,
+the diﬀerence between the ground truth scores and the current outputs ti − si
+is propagated. After a certain number of iterations of these processing steps,
+RotationNet is learned such that it outputs a score vector where only the c-th
+element of the probability for “pose vi” is high when the i-th image is input.
+
+In the testing process, we repeatedly rotate the target object to obtain “pose
+1” R times (where 0 ≤ R < M ) according to the estimated pose label of the
+object. Let VR+1 denote a set of the selected R + 1 views and s ∈ RN M denote
+the score vector of the target object after the observation of R + 1 views, s is
+calculated as follows.
+
+s =
+
+1
+
+R + 1 X
+
+i∈VR+1
+
+si.
+
+(5)
+
+Figure 3 illustrates the comparison of the test processing of MVCNN [10] and
+RotationNet. Unlike MVCNN [10], which requires all of the multi-view images
+to be inputted simultaneously to classify an object, RotationNet repeats the
+classiﬁcation of a single-view image and adds the obtained scores sequentially.
+
+The most characteristic aspect of our method is that it automatically decides
+the pose labels of images vi according to the CNN outputs. Thus, our method is
+an unsupervised, fully sample-based learning approach with respect to pose esti-
+mation. Here, for “pose 1”, the image that has the highest score for its category
+label c is always selected. Owing to this strategy, the most representative
+view for each category, in other words, the best view for distinguish-
+ing from other categories, is assigned as “pose 1” during the training
+process. The training process of RotationNet essentially entails the M views of
+
+8
+
+Asako Kanezaki
+
+images
+
+view 1
+
+view 2
+
+view 3
+
+CNN
+
+CNN
+
+CNN
+
+MVCNN
+
+RotaƟonNet (ours)
+
+images
+
+view 1
+
+view
+pooling
+
+scores
+
+view 2
+
+CNN
+
+CNN
+
+scores
+
+decide 
+view 2
+
+scores
+
++
+
+scores
+
+decide 
+view 3
+
+view 3
+
+CNN
+
+scores
+
++
+
+scores
+
+Fig. 3. Comparison between the testing process of MVCNN [10] and RotationNet
+
+each object category competing to be labeled as “pose 1”. Intuitively, because
+the side view of a bookshelf is hard to distinguish from a closet, the probability
+for bookshelf is relatively low for the side view, and this view is consequently
+not likely to be “pose 1”. Conversely, a view of a cup with its handle is more
+likely to obtain “pose 1” than another view of the cup where its handle is oc-
+cluded because it is easier to distinguish a cup with a handle from a bowl. We
+take advantage of this tendency and deﬁne “pose 1” as the “front” view of each
+object category.
+
+3.4 Multi-view setup
+
+Unlike a standard CNN, RotationNet requires a set of multi-view images of an
+object for the training process. These multi-view images should be sequential
+and equally discretized to a certain rotation. In this paper, we used two diﬀerent
+set-ups: with and without an upright orientation assumption, as derived from
+MVCNN [10]. In the case where we assume upright orientation, we ﬁx a rotation
+axis on a speciﬁc axis (e.g., the z-axis) as the upright orientation, and then place
+virtual cameras at intervals of the angle θ around the axis, elevated by 30◦ from
+the ground plane. If we set θ = 30◦, we obtain 12 views for an object (M = 12).
+Here, we deﬁne that “pose α + 1” is obtained by rotating the view “pose α”
+by the angle θ on the z-axis. Note that the view obtained by rotating the view
+“pose M ” by the angle θ on the z-axis corresponds to “pose 1”. In the case
+where we do not assume upright orientation, we place virtual cameras on the 20
+vertices of a virtual dodecahedron encompassing the object; in this case M = 20.
+Unlike the ﬁrst case where there is a unique solution, there are three diﬀerent
+patterns of rotation from a certain view to “pose 1”, because three edges are
+connected to each vertex of a dodecahedron. Therefore, in the training process,
+we calculate the summation of the diﬀerence between the target score vectors
+i=1 |ti − si| for all three rotation patterns, and
+
+and the observed score vectors P20
+
+then select the pattern that minimizes the value.
+
+During the test process, if RotationNet outputs v (v 6= 1) as the pose label
+when we input a single view image of an object, the object is rotated from
+“pose v” to “pose 1” to achieve the next-best-view. When we use the upright
+orientation assumption, we achieve this by rotating the object by an angle of
+−(v − 1) × θ around the z-axis. In the case without the upright orientation
+assumption, there are again three patterns of rotation to attain “pose 1”. Here,
+unlike in the training process, we cannot predict the best pattern because we
+
+RotationNet
+
+9
+
+only have a single view image before rotation. Thus, we try all three patterns
+in a random order, such that we need three rotation trials in the worst case to
+reach the ﬁrst estimated “pose 1”.
+
+In the above description, we assume the use of 3D object models for training
+for simplicity. Our method does not necessarily require 3D models and works
+with any type of consistent multi-view images captured from cameras placed
+at equally spaced intervals; for instance, images of objects on a rotating table
+captured at every θ angle of rotation is an acceptable substitute. The essential
+requirement is the knowledge of the relative rotation angle between diﬀerent
+views of the same object instance. As we mentioned above, our method does not
+require consistent object pose across samples. Therefore, we can disregard the
+object pose normalization that uses methods such as PCA.
+
+4 Experiment on a 3D model dataset
+
+In this section, we describe the experimental results on the 3D model dataset
+ModelNet40 [11,2], which consists of 3,983 object instances in 40 categories.
+There are 3,183 object instances in the training set and 800 object instances (20
+for each category) in the testing set. We obtained multi-view images (i) with the
+upright orientation assumption and (ii) without the upright orientation assump-
+tion using the rendering software published in [10]. In case (i), we obtained 12
+view images for each object instance with a rotation angle of θ = 30◦. In case
+(ii), as we described in Section 3.4, we obtained 20 view images for each object
+instance observed from the vertices of a virtual dodecahedron. In the training
+process, we select 10 object instances randomly for each iteration and update the
+weights of the CNN by back-propagation. Thus, the batch size is 12 × 10 = 120
+for case (i) and 20 × 10 = 200 for case (ii). Because the structure of our CNN
+is based on AlexNet [1], the GPU memory consumption was approximately 3.2
+GB for case (ii), and thus a standard GPU such as Geforce GTX 980 with 4GB
+memory is suitable. The ﬁne-tuning of our CNN converged within 40,000 iter-
+ations, which takes approximately 7 hours using Geforce GTX 980. We set the
+learning rate to 0.001.
+
+(i) With upright orientation assumption
+
+Figure 4 shows the training/testing images labeled as “pose 1”, . . . , “pose 12”
+by RotationNet trained with the upright orientation assumption. From top to
+bottom, the ﬁgure shows the images labeled as “pose 1”, . . . , “pose 12”, whose
+object categories are “chair”, “airplane”, and “cup” from left to right. For each
+object category, the leftmost column shows the average images of the train-
+ing samples labeled as “pose v”(v = 1, . . . , 12), whereas the second to seventh
+columns show the test images with the six top scores for their respective pose la-
+bels. It can be seen that the training/testing images in similar poses are properly
+labeled with the same pose labels and that the learned poses are sequentially
+ordered. It is also worth noting that the images labeled as “pose 1” have strong
+
+10
+
+Asako Kanezaki
+
+Fig. 4. Training/testing images labeled as “pose 1”, . . . , “pose 12” by RotationNet
+trained with the upright orientation assumption. For each object category, the leftmost
+column shows the average images of the training samples labeled as “pose v”(v =
+1, . . . , 12), whereas the second to seventh columns show the test images with the six
+top scores for their respective pose labels.
+
+intra-class correlation, meaning that the discriminative views for the respective
+object categories are successfully selected as “pose 1”. This is particularly pro-
+nounced in the cup category where a view with the handle on the left is selected
+as “pose 1” and the six test images are similar to each other. In contrast, the
+view with largely occluded handles is selected as “pose 4” and the six test images
+are slightly unsynchronized. This demonstrates that the view selected as “pose
+1” is more stable than other views.
+
+Next, we examine whether RotationNet can improve the performance of ob-
+ject classiﬁcation by rotating an object to its estimated “pose 1”. We repeat the
+rotation of the target object to “pose 1” R times. If we reach “pose 1” earlier
+than the R-th rotation, we rotate the object to a randomly selected view among
+the unseen views. Figure 5 shows the classiﬁcation accuracy for R ranging from
+0 to 11. The red line represents the result obtained with the above-mentioned
+strategy, whereas the green line represents the result obtained with random rota-
+tions. The ﬁgure shows that the classiﬁcation accuracy increases with increasing
+R in both cases. The result with the proposed rotation strategy is better than
+that with random rotation for almost any value of R. In particular, we achieve
+between a 0.5% and 1% increase in accuracy compared with the random rotation
+in earlier phases, R = 1, 2, 3. It is particularly important to achieve better per-
+formance within earlier phases of rotation because it is rather diﬃcult to observe
+all of the views of an object when we assume a realistic scenario such as object
+manipulation by autonomous mobile robots.
+
+RotationNet
+
+11
+
+Fig. 5. Classiﬁcation accuracy versus R for
+case (i)
+
+Fig. 6. Classiﬁcation accuracy versus R for
+case (ii)
+
+Fig. 7. Training/testing images labeled as “pose 1” by RotationNet trained without
+the upright orientation assumption. For each object category, the average image of
+the training samples labeled as “pose 1” is shown on top and the test image with the
+highest score for “pose 1” is shown on the bottom.
+
+(ii) Without upright orientation assumption
+
+Figure 7 shows the training/testing images labeled as “pose 1” by RotationNet
+trained without the upright orientation assumption. For each object category, the
+top image depicts the average image of the training samples labeled as “pose 1”
+and the bottom image depicts the test image with the highest score for “pose 1”.
+Intuitively, characteristic views such as the views seen from an obliquely upward
+direction are selected for objects such as airplane, bathtub, and bed. However,
+there are also unnatural views for several object categories. For instance, the
+average image of the training samples labeled as “pose 1” for the curtain category
+(in the top row of the ninth column from the right) looks like a bar, which is not
+intuitively representative for a curtain. However, if we take a close look at the
+corresponding test image, we can see the unique stripe pattern caused by the
+overlap of folds in the fabric, which is actually characteristic for a curtain. The
+view selected for the laptop category (see the leftmost image in the bottom row)
+may also be unintuitive; however, it is also a characteristic view in the sense that
+we can easily understand the structure of a laptop with two planes connected at
+around 90◦.
+
+Figure 6 shows the classiﬁcation accuracy versus R for case (ii). In this case,
+the upper limit of R is 19 (= 20 − 1). Similarly to case (i), this ﬁgure shows that
+
+12
+
+Asako Kanezaki
+
+Fig. 8. Representative results whereby a wrong object category prediction is corrected
+using our rotation strategy. The results are obtained with R = 1 and R = 2.
+
+the classiﬁcation accuracy increases with increasing R in both cases and that
+the result using the proposed rotation strategy is better than that using random
+rotation for almost any value of R. The accuracy gain compared with a single
+view prediction obtained by observing multiple views is larger than in case (i)
+because there are more diverse and thus more diﬃcult test images presented in
+case (ii). However, the accuracy gain compared with random rotation obtained
+by the proposed rotation strategy for R = 1, 2 is lower than that for case (i).
+This is because we require three trials to examine all three rotation patterns to
+“pose 1”, as described in Section 3.4. Therefore, the accuracy gain of our method
+becomes highest when R = 3, corresponding to more than 1%.
+
+For comparison, the single-view image classiﬁcation accuracy with the up-
+right orientation assumption reported in [10] was 85.1%, which is similar to ours
+(see the point on R = 0 in Fig. 5). The classiﬁcation accuracy using multi-view
+images for MVCNN [10] without the upright orientation assumption was 90.1%,
+which surpasses our result (87.1% with R = 20). Note that we use only 20 views
+for an object whereas MVCNN [10] used 80 views generated by further rotating
+each view every 90◦ in the image plane.
+
+Figure 8 shows the representative results whereby the wrong prediction of
+the object category is changed to the correct prediction using our rotation strat-
+egy. The ﬁrst 10 results are obtained with R = 1 and the remaining results are
+obtained with R = 2. For instance, the ﬁrst view of the ﬁrst example was mis-
+classiﬁed as a cup because its depth is diﬃcult to measure from the given view.
+However, after observing a new view by rotating the object, the prediction was
+successfully modiﬁed to a bathtub whose cross-section surface is an ellipse.
+
+5 Experiment on a real image dataset
+
+In this section, we describe the experimental results on ETH-80 [32], which is
+a dataset of real images captured using a rotating table. The objective of this
+experiment is to showcase the eﬀectiveness of our method on real images and also
+to evaluate the accuracy of pose estimation. This dataset consists of 80 object
+instances in eight object categories (10 instances in each category). There are 41
+views in total for an object instance with seven levels of elevation angles. In this
+experiment, we used only the views seen from directions perpendicular to the
+
+RotationNet
+
+13
+
+Fig. 9. Average images of the training samples
+labeled as “pose 1” (top) and the test images with
+the highest scores for “pose 1” (bottom) in ETH-
+80.
+
+Fig. 10. Accuracy of pose estima-
+tion and categorization for ETH-80.
+
+rotation axis because our method requires equally spaced consistent views for the
+training process. This setup corresponds to case (i) with the upright orientation
+assumption with θ = 22.5◦ and M = 16. We set the number of training samples
+used for one iteration to 16 such that the batch size is 16 × 16 = 256. We set the
+maximum number of iterations to 20,000.
+
+Figure 9 shows the average images of the training samples labeled as “pose
+1” and the test images with the highest scores for “pose 1”. Similarly to the
+experiment with ModelNet40, the view of a cup with a handle on its side is
+selected as the representative view for the cup category. In contrast, the front
+view of a car is selected as “pose 1” in this case whereas the side view of a car
+was selected using ModelNet40. This is because the car instances in ETH-80
+are actually toys and are smaller than the objects in other categories. Because
+the front view of a car seems particularly compact, it is assumed to be more
+characteristic than other views.
+
+Finally, Fig. 10 shows the accuracy of pose estimation and categorization by
+RotationNet. Here, we used the n-th object instances of all object categories
+as test samples and used the others as training samples, and then reported the
+average accuracy over 10 trials (n = 1, . . . , 10). The poses of all of the object
+instances in the same category are normalized in ETH-80; namely, discretized
+global rotation angles (22.5◦, 45◦, . . . , 360◦) are given. However, we do not use
+the global rotation angles but only use the relative angles between diﬀerent views
+of the same object instance for the training process. After training RotationNet,
+we estimate the pose labels of all of the training samples using RotationNet.
+Then, we associate each pose label i to a global rotation angle that is most fre-
+quently attached to the training samples labeled as “pose i”. To estimate the
+pose of a test image, we estimate the pose label of the image using RotationNet
+and output the global rotation angle associated with the estimated pose label.
+While the pose estimation accuracy of the apple category was expectedly low
+(26%), it was still considerably higher than the chance rate (6.25%). It is worth
+noting that the categorization accuracy of the apple category was suﬃciently
+high (91%), indicating that the failure of pose estimation does not aﬀect catego-
+rization performance. The average categorization accuracy of all eight categories
+was 92%.
+
+14
+
+Asako Kanezaki
+
+6 Discussion
+
+The most distinctive property of our method is that it automatically determines
+the “front” view of each object category. Because this is a fully data-driven
+approach, the selected view depends on the training samples. As shown in our
+experiments, the “front” views of the car category were diﬀerent between the
+ModelNet40 dataset and the ETH-80 dataset. This also depends on the cate-
+gories targeted in the classiﬁcation task. Therefore, it would be interesting to
+analyze the changes in the “front” views as the number of target object categories
+increases.
+
+Although our method deﬁnes the “front” view of an object category as the
+most discriminative view, other aspects such as physical stability should also
+be considered for real applications. If a real robot manipulates an object and
+rotates it to its representative view, we want this pose to be physically stable.
+One solution to achieve a physically stable view is to introduce a function that
+evaluates the physical stability during the selection stage of the “pose 1” image
+in the training process. An alternative solution is to limit the degrees of freedom
+of rotation. In fact, the case with the upright orientation assumption is related
+to this approach. By ﬁxing the rotation axis to the direction of gravitational
+force, only the standing postures are candidates for the “front” view.
+
+A limitation of our method is that the multi-view images used for the training
+process are required to be equally angularly spaced and consistent with respect
+to a certain direction of rotation. If we consider the case with the upright ori-
+entation assumption, this condition is not too diﬃcult to satisfy using a setup
+such as a rotating table. However, in the case without the upright orientation as-
+sumption, this essentially requires complete 3D object models for training. Also
+in this case we require consistent rotations in a 3D space, which is complicated in
+real applications. Viewpoints should be on the vertices of a regular polyhedron
+to obtain a set of equally separated multiple views. The way to densely place
+viewpoints is to consider a dodecahedron, where the angle between neighboring
+viewpoints is still rather large. To achieve robustness to small pose variations,
+we can use data jittering for each view image.
+
+7 Conclusion
+
+We propose a novel method of learning a CNN for joint object categorization
+and pose estimation. Our method does not require pose normalization of the
+training objects or annotation of pose labels. The training process of our CNN
+automatically decides the latter based on appearance. We conducted experi-
+ments on a 3D model database and a real image dataset and demonstrated that
+our method eﬀectively obtains the representative views of object categories and
+learns pose estimation in an unsupervised manner. Furthermore, our method
+improves object classiﬁcation accuracy by rotating the target object to its best
+view estimated from the single view image observed in the test process. Our fu-
+ture work includes applying our method to a larger database with approximately
+10,000 object categories.
+
+References
+
+RotationNet
+
+15
+
+1. Krizhevsky, A., Sutskever, I., Hinton, G.E.:
+
+Imagenet classiﬁcation with deep
+In: Advances in Neural Information Processing
+
+convolutional neural networks.
+Systems (NIPS). (2012) 1097–1105
+
+2. Wu, Z., Song, S., Khosla, A., Yu, F., Zhang, L., Tang, X., Xiao, J.: 3D shapenets: A
+deep representation for volumetric shapes. In: Proceedings of the IEEE Conference
+on Computer Vision and Pattern Recognition (CVPR). (2015) 1912–1920
+
+3. Fang, Y., Xie, J., Dai, G., Wang, M., Zhu, F., Xu, T., Wong, E.: 3D deep shape de-
+scriptor. In: Proceedings of the IEEE Conference on Computer Vision and Pattern
+Recognition (CVPR). (2015) 2319–2328
+
+4. Sun, J., Ovsjanikov, M., Guibas, L.: A concise and provably informative multi-
+scale signature based on heat diﬀusion. Computer Graphics Forum 28(5) (2009)
+1383–1392
+
+5. Brand˜ao, S., Costeira, J.a.P., Veloso, M.: The partial view heat kernel descriptor
+for 3D object representation. In: Proceedings of the IEEE International Conference
+on Robotics and Automation (ICRA). (2014) 1054–1059
+
+6. Johnson, A.E., Hebert, M.: Using spin images for eﬃcient object recognition in
+cluttered 3D scenes. IEEE Transactions on Pattern Analysis and Machine Intelli-
+gence (PAMI) 21 (1999) 433–449
+
+7. Tombari, F., Salti, S., Stefano, L.D.: Unique signatures of histograms for local
+In: Proceedings of the European Conference on Computer
+
+surface description.
+Vision (ECCV). (2010) 356–369
+
+8. Rusu, R.B., Blodow, N., Beetz, M.: Fast point feature histograms (FPFH) for 3D
+In: Proceedings of the IEEE International Conference on Robotics
+
+registration.
+and Automation (ICRA). (2009) 3212–3217
+
+9. Chen, D.Y., Tian, X.P., Shen, Y.T., Ouhyoung, M.: On visual similarity based 3D
+
+model retrieval. Computer Graphics Forum 22(3) (2003) 223–232
+
+10. Su, H., Maji, S., Kalogerakis, E., Learned-Miller, E.G.: Multi-view convolutional
+neural networks for 3D shape recognition. In: Proceedings of the IEEE Interna-
+tional Conference on Computer Vision (ICCV). (2015) 945–953
+: The princeton modelnet. http://modelnet.cs.princeton.edu/.
+
+11.
+12. Felzenszwalb, P., Girshick, R., McAllester, D., Ramanan, D.: Object detection
+with discriminatively trained part based models. IEEE Transactions on Pattern
+Analysis and Machine Intelligence (PAMI) 32(9) (2010) 1627–1645
+
+13. Lim, J.J., Khosla, A., Torralba, A.: FPM: Fine pose parts-based model with 3D
+CAD models. In: Proceedings of the European Conference on Computer Vision
+(ECCV). (2014) 478–493
+
+14. Pepik, B., Gehler, P., Stark, M., Schiele, B.: 3D2PM–3D deformable part models.
+In: Proceedings of the European Conference on Computer Vision (ECCV). (2012)
+356–370
+
+15. Fidler, S., Dickinson, S., Urtasun, R.: 3D object detection and viewpoint estimation
+with a deformable 3D cuboid model. In: Advances in Neural Information Processing
+Systems (NIPS). (2012) 611–619
+
+16. Papon, J., Schoeler, M.: Semantic pose using deep networks trained on synthetic
+RGB-D. In: Proceedings of the IEEE International Conference on Computer Vision
+(ICCV). (2015) 774–782
+
+17. Su, H., Qi, C.R., Li, Y., Guibas, L.J.: Render for cnn: Viewpoint estimation in
+images using cnns trained with rendered 3D model views. In: Proceedings of the
+IEEE International Conference on Computer Vision (ICCV). (2015) 2686–2694
+
+16
+
+Asako Kanezaki
+
+18. Stark, M., Goesele, M., Schiele, B.: Back to the future: Learning shape models
+In: Proceedings of the British Machine Vision Conference
+
+from 3D CAD data.
+(BMVC). (2010) 106.1–11
+
+19. Liebelt, J., Schmid, C.: Multi-view object class detection with a 3D geometric
+model. In: Proceedings of the IEEE Conference on Computer Vision and Pattern
+Recognition (CVPR). (2010) 1688–1695
+
+20. Peng, X., Sun, B., Ali, K., Saenko, K.: Exploring invariances in deep convolutional
+
+neural networks using synthetic images. CoRR, abs/1412.7122 2 (2014)
+
+21. Chang, A.X., Funkhouser, T., Guibas, L., Hanrahan, P., Huang, Q., Li, Z.,
+Savarese, S., Savva, M., Song, S., Su, H., Xiao, J., Yi, L., Yu, F.: ShapeNet:
+An Information-Rich 3D Model Repository. Technical Report arXiv:1512.03012
+[cs.GR], Stanford University — Princeton University — Toyota Technological In-
+stitute at Chicago (2015)
+
+22. Zhu, Z., Luo, P., Wang, X., Tang, X.: Multi-view perceptron: a deep model for
+learning face identity and view representations. In: Advances in Neural Information
+Processing Systems (NIPS). (2014) 217–225
+
+23. Su, H., Wang, F., Yi, E., Guibas, L.J.: 3D-assisted feature synthesis for novel views
+of an object. In: Proceedings of the IEEE International Conference on Computer
+Vision (ICCV). (2015) 2677–2685
+
+24. Chen, C.Y., Grauman, K.: Inferring unseen views of people. In: Proceedings of the
+IEEE Conference on Computer Vision and Pattern Recognition (CVPR). (2014)
+2003–2010
+
+25. Pito, R.: A solution to the next best view problem for automated surface acqui-
+sition. IEEE Transactions on Pattern Analysis and Machine Intelligence (PAMI)
+21(10) (1999) 1016–1030
+
+26. Scott, W., Roth, G., Rivest, J.F.: View planning for automated 3D object recon-
+
+struction inspection. ACM Computing Surveys 35(1) (2003)
+
+27. Atanasov, N., Sankaran, B., Le Ny, J., Koletschka, T., Pappas, G.J., Daniilidis,
+K.: Hypothesis testing framework for active object detection. In: Proceedings of
+the IEEE International Conference on Robotics and Automation (ICRA). (2013)
+4216–4222
+
+28. Atanasov, N., Sankaran, B., Le Ny, J., Pappas, G.J., Daniilidis, K.: Nonmyopic
+view planning for active object classiﬁcation and pose estimation. IEEE Transac-
+tions on Robotics 30(5) (2014) 1078–1090
+
+29. Jia, Z., Chang, Y.J., Chen, T.: Active view selection for object and pose recogni-
+tion. In: Proceedings of the IEEE International Conference on Computer Vision
+Workshops (ICCV Workshops). (2009) 641–648
+
+30. Denzler, J., Brown, C.M.: Information theoretic sensor data selection for active
+object recognition and state estimation. IEEE Transactions on Pattern Analysis
+and Machine Intelligence (PAMI) 24(2) (2002) 145–157
+
+31. Russakovsky, O., Deng, J., Su, H., Krause, J., Satheesh, S., Ma, S., Huang, Z.,
+Karpathy, A., Khosla, A., Bernstein, M., Berg, A.C., Fei-Fei, L.: ImageNet Large
+Scale Visual Recognition Challenge.
+International Journal of Computer Vision
+(IJCV) 115(3) (2015) 211–252
+
+32. Leibe, B., Schiele, B.: Analyzing appearance and contour based methods for object
+categorization. In: Proceedings of the IEEE Conference on Computer Vision and
+Pattern Recognition (CVPR). (2003) 409–415
+
+

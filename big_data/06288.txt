@@ -1,0 +1,3923 @@
+Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+0
+2
+
+ 
+ 
+]
+L
+M
+
+.
+t
+a
+t
+s
+[
+ 
+ 
+
+1
+v
+8
+8
+2
+6
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Kirthevasan Kandasamy
+Gautam Dasarathy
+Junier Oliva
+Jeff Schneider
+Barnab´as P´oczos
+Carnegie Mellon University, Pittsburgh, PA, USA
+
+Abstract
+
+In many scientiﬁc and engineering applications,
+we are tasked with the optimisation of an expen-
+sive to evaluate black box function f. Traditional
+methods for this problem assume just the avail-
+ability of this single function. However, in many
+cases, cheap approximations to f may be ob-
+tainable. For example, the expensive real world
+behaviour of a robot can be approximated by a
+cheap computer simulation. We can use these
+approximations to eliminate low function value
+regions and use the expensive evaluations to f
+in a small promising region and speedily identify
+the optimum. We formalise this task as a multi-
+ﬁdelity bandit problem where the target function
+and its approximations are sampled from a Gaus-
+sian process. We develop a method based on up-
+per conﬁdence bound techniques and prove that
+it exhibits precisely the above behaviour, hence
+achieving better regret than strategies which ig-
+nore multi-ﬁdelity information. Our method out-
+performs such naive strategies on several syn-
+thetic and real experiments.
+
+1. Introduction
+In stochastic bandit optimisation, we wish to optimise a
+payoff function f : X → R by sequentially querying
+it and obtaining bandit feedback, i.e. when we query at
+any x ∈ X , we observe a possibly noisy evaluation of
+f (x). f is typically expensive and the goal is to identify
+its maximum while keeping the number of queries as low
+as possible. Some applications are hyper-parameter tuning
+in expensive machine learning algorithms (Bergstra et al.,
+2011; Hutter et al., 2011; Snoek et al., 2012), optimal pol-
+icy search in complex systems (Hornby et al., 2006; Li-
+zotte et al., 2007; Martinez-Cantin et al., 2007), and scien-
+tiﬁc experiments (Gonzalez et al., 2014; Parkinson et al.,
+2006). Historically, bandit problems were studied in set-
+
+KANDASAMY@CS.CMU.EDU
+GAUTAMD@CS.CMU.EDU
+JOLIVA@CS.CMU.EDU
+SCHNEIDE@CS.CMU.EDU
+BAPOCZOS@CS.CMU.EDU
+
+Figure 1. Average 5-fold CV log likelihood on datasets of size
+300, 3000 on a synthetic KDE task. The crosses are the maxima.
+
+tings where the goal is to maximise the cumulative reward
+of all queries to the payoff instead of just ﬁnding the maxi-
+mum. Applications in this setting include clinical trials and
+online advertising (Chakrabarti et al., 2008).
+Conventional methods in these settings assume access to
+only this single expensive function of interest f. We will
+collectively refer to them as single ﬁdelity methods.
+In
+many practical problems however, cheap approximations
+to f might be available. For instance, when tuning hyper-
+parameters of learning algorithms, the goal is to maximise
+a cross validation (CV) score on a training set, which can be
+expensive if the training set is large. But CV curves tend to
+vary smoothly with training set size; therefore, we can train
+and cross validate on small subsets to approximate the CV
+accuracies of the entire dataset. For a concrete example,
+consider kernel density estimation (KDE), where we need
+to tune the bandwidth h of a kernel. Figure 1 shows the
+CV likelihood against h for a dataset of size n = 3000 and
+a smaller subset of size n = 300. The two maximisers
+are different which is to be expected since optimal hyper-
+parameters are functions of the training set size. That said,
+the curve for n = 300 approximates the n = 3000 curve
+quite well. Since training/CV on small n is cheap, we can
+use it to eliminate bad values of the hyper-parameters and
+reserve the expensive experiments with the entire dataset
+for the promising candidates (e.g. boxed region in Fig. 1).
+In online advertising, the goal is to maximise the cumula-
+tive number of clicks over a given period. In the conven-
+tional bandit treatment, each query to f is the display of
+
+n=300n=3000Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+an ad for a speciﬁc time, say one hour. However, we may
+display ads for shorter intervals, say a few minutes, to ap-
+proximate its hourly performance. The estimate is biased,
+as displaying an ad for a longer interval changes user be-
+haviour, but will nonetheless be useful in gauging its long
+run click through rate. In optimal policy search in robotics
+and automated driving vastly cheaper computer simulations
+are used to approximate the expensive real world perfor-
+mance of the system. Scientiﬁc experiments can be approx-
+imated to varying degrees using less expensive data collec-
+tion, analysis and computational techniques.
+In this paper, we study multi-ﬁdelity bandit optimisation,
+assuming the availability of cheap approximate functions
+(ﬁdelities) to the payoff f. Our contributions are:
+1. We present a formalism for multi-ﬁdelity bandit opti-
+misation using Gaussian Process (GP) assumptions on
+f and its approximations. We develop a novel algo-
+rithm, Multi-Fidelity Gaussian Process Upper Conﬁ-
+dence Bound (MF-GP-UCB) for this setting.
+
+2. Our theoretical analysis proves that MF-GP-UCB ex-
+plores the space at lower ﬁdelities and uses the high ﬁ-
+delities in successively smaller regions to zero in on the
+optimum. As lower ﬁdelity queries are cheaper, MF-
+GP-UCB has better regret than single ﬁdelity strategies.
+3. Empirically, we demonstrate that MF-GP-UCB outper-
+forms single ﬁdelity methods on a series of synthetic
+examples, three hyper-parameter tuning tasks and one
+inference problem in Astrophysics. Our matlab imple-
+mentation and experiments will be made available.
+
+Related Work
+
+Since the seminal work by Robbins (1952), the multi-
+armed bandit problem has been studied extensively in the
+K-armed setting (Agrawal, 1995; Lai & Robbins, 1985).
+Recently, there has been a surge of interest in the opti-
+mism under uncertainty principle for K armed bandits,
+typiﬁed by upper conﬁdence bound (UCB) methods (Au-
+dibert et al., 2009; Auer, 2003; Bubeck & Cesa-Bianchi,
+2012). UCB strategies have also been used in other ban-
+dit tasks with linear (Dani et al., 2008) and Gaussian pro-
+cess (de Freitas et al., 2012; Srinivas et al., 2010) payoffs.
+There is a plethora of work on single ﬁdelity methods for
+global optimisation both with noisy and noiseless evalua-
+tions. Some examples are branch and bound techniques
+such as dividing rectangles (DiRect) (Jones et al., 1993),
+simulated annealing (Kirkpatrick et al., 1983), genetic al-
+gorithms (Koza, 1992) and more (Kawaguchi et al., 2015;
+Munos, 2011; P´oczos et al., 2009). A suite of single ﬁ-
+delity methods in the GP framework closely related to our
+work is Bayesian Optimisation (BO). Some examples of
+BO techniques are expected improvement (EI) (Mockus,
+1994), probability of improvement (PI) (Jones et al., 1998)
+
+Thompson sampling (Thompson, 1933) and predictive en-
+tropy search (Hern´andez-Lobato et al., 2014). Of particu-
+lar interest to us is the Gaussian process upper conﬁdence
+bound (GP-UCB) algorithm of Srinivas et al. (2010).
+There has been some work on multi-ﬁdelity optimisation
+with a plurality of them using GP assumptions (Forrester
+et al., 2007; Huang et al., 2006; Rajnarayan et al., 2008; Xu
+et al., 2014). However, to our knowledge, all these treat-
+ments are rather heuristic in nature and they neither for-
+malise nor analyse any notion of regret in the multi-ﬁdelity
+setting. In contrast, MF-GP-UCB is an intuitive UCB idea
+with good theoretical properties. Xiong et al. (2013) study
+2-ﬁdelity settings where the goal is to predict the outcome
+of a complex system with the aid of a simpler one. Multi-
+ﬁdelity methods are used in the robotics community for re-
+inforcement learning tasks by modeling each ﬁdelity as a
+Markov decision process (Abbeel et al., 2006; Cutler et al.,
+2014; Kennedy & O’Hagan, 1998). Zhang & Chaudhuri
+(2015) study active learning with a cheap weak labeler and
+an expensive strong labeler. The latter sets of works study
+problems different to optimisation, which is our focus here.
+Further, none of the papers above are in the bandit setting
+where there is a price for exploration.
+Our work builds on GP-UCB and other UCB strategies,
+but the multi-ﬁdelity framework ushers in substantially new
+theoretical and algorithmic challenges. Section 2 presents
+our formalism including a notion of regret for the multi-
+ﬁdelity problem and details the problem set up and assump-
+tions. Section 3 presents our algorithm. The theoretical
+analysis is given in Appendix C of the supplementary ma-
+terial with a synopsis for the 2-ﬁdelity case given in Sec-
+tion 4. Section 6 presents our experiments. Appendix A.1
+tabulates the notation used in the manuscript.
+
+2. Preliminaries
+The goal is to maximise a noisy black-box function f :
+X → R. We will focus on settings where X is either a ﬁnite
+discrete or compact subset of [0, r]d. We can interact with
+f only by querying at some x ∈ X and obtaining a noisy
+observation y = f (x) + . Let x(cid:63) ∈ argmaxx∈X f (x) and
+f(cid:63) = f (x(cid:63)). The goal of a bandit strategy is to maximise
+the sum of rewards(cid:80)n
+t=1 f (xt) or equivalently minimise
+the cumulative regret(cid:80)n
+t=1 f(cid:63) − f (xt) after n queries to
+f. Here, xt ∈ X is the queried point at time t. That is, we
+compete against an oracle which queries at x(cid:63) at all t.
+Our primary distinction from usual bandit settings is that
+we have access to M − 1 successively accurate approxi-
+mations f (1), f (2), . . . , f (M−1) to the payoff function f =
+f (M ). We will refer to these approximations as ﬁdelities.
+We encode the fact that lower ﬁdelities approximate the
+higher ﬁdelity via the assumption, (cid:107)f (M ) − f (m)(cid:107)∞ ≤
+
+Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+n
+
+n
+
+ζ (m) where, ζ (1) > ζ (2) > ··· > ζ (M ) = 0. Each query at
+ﬁdelity m expends a cost λ(m) of a resource (such as com-
+putational effort or advertising time). While are results are
+generally applicable, they are most interesting in settings
+where λ(1) (cid:28) λ(2) (cid:28) ··· (cid:28) λ(M ).
+A strategy for multi-ﬁdelity bandits is a sequence of
+query-ﬁdelity pairs {(xt, mt)}t≥0, where (xn, mn) could
+depend on the previous query-observation-ﬁdelity tuples
+t=1 . Here yt = f (mt)(xt) + . After n
+{(xt, yt, mt)}n−1
+steps we will have queried multiple times at any of the M
+ﬁdelities. T (m)
+(x) denotes the number of queries at x ∈ X
+at ﬁdelity m after n steps. T (m)
+(A) denotes the same for a
+subset A ⊂ X . D(m)
+n = {(xt, yt)}t:mt=m denotes the set
+of query-value pairs at the mth ﬁdelity until time n.
+Some smoothness assumptions on f (m)’s are needed to
+make the problem tractable. A standard in Bayesian non-
+parametric literature is to use a Gaussian process (GP)
+prior (Rasmussen & Williams, 2006) with covariance ker-
+nel κ.
+In this work we focus on the squared exponen-
+tial (SE) κσ,h and the Mat´ern κν,h kernels as their spec-
+tral properties are known and since they are popularly
+used in practice. Writing r = (cid:107)x − x(cid:48)(cid:107)2, they are de-
+ﬁned as κσ,h(x, x(cid:48)) = σ exp(cid:0)−r2/(2h2)(cid:1), κν,h(x, x(cid:48)) =
+h (cid:17), where Γ, Bν are the Gamma
+Γ(ν)(cid:16)√2νr
+h (cid:17)ν
+Bν(cid:16)√2νr
+21−ν
+and modiﬁed Bessel functions. A convenience the GP
+framework offers is that posterior distributions are analyt-
+If f ∼ GP(0, κ), and we have obser-
+ically tractable.
+i=1, where yi = f (xi) +  and
+vations Dn = {(xi, yi)}n
+ ∼ N (0, η2) is Gaussian noise, the posterior distribution
+for f (x)|Dn is also Gaussian N (µn(x), σ2
+(1)
+µn(x) = k(cid:62)∆−1Y,
+Here, Y ∈ Rn with Yi = yi, k ∈ Rn with ki = κ(x, xi)
+and ∆ = K + η2I ∈ Rn×n where Ki,j = κ(xi, xj).
+In keeping with the above, we make the following assump-
+tions on our problem.
+A1. f (m) ∼ GP(0, κ) for all m = 1, . . . , M.
+A2. (cid:107)f (M ) − f (m)(cid:107)∞ ≤ ζ (m) for all m = 1, . . . , M.
+A3. (cid:107)f (M )(cid:107)∞ ≤ B.
+The purpose of A3 is primarily to deﬁne the regret. In Re-
+mark 7, Appendix A.3 we argue that these assumptions are
+probabilistically valid, i.e. the latter two events occur with
+nontrivial probability when we sample the f (m)’s from a
+GP. So a generative mechanism would keep sampling the
+functions and deliver them when the conditions hold true.
+All probabilities henceforth, are conditioned on the above
+constraints being satisﬁed. A point x ∈ X can be queried
+at any of the M ﬁdelities. When we query at ﬁdelity m, we
+observe y = f (m)(x) +  where  ∼ N (0, η2).
+
+n(x) = κ(x, x) − k(cid:62)∆−1k.
+σ2
+
+n(x)2) with,
+
+We now present our notion of cumulative regret R(Λ) after
+spending capital Λ of a resource in the multi-ﬁdelity set-
+ting. R(Λ) should reduce to the conventional deﬁnition of
+regret for any single ﬁdelity strategy that queries only at
+M th ﬁdelity. As only the optimum of f = f (M ) is of inter-
+est to us, queries at ﬁdelities less than M should yield the
+lowest possible reward, (−B) according to A3. We deﬁne
+the instantaneous reward qt to be,
+
+qt =(cid:40)−B
+
+f (M )(xt)
+
+if mt (cid:54)= M,
+if mt = M.
+
+(2)
+
+Also, denote the instantaneous regret by rt = f(cid:63)−qt. R(Λ)
+should also factor in the costs of the ﬁdelity of each query.
+Finally, we should also receive (−B) reward for any un-
+used capital. Accordingly, we deﬁne R(Λ) as,
+
+λ(mt)rt.
+
+(3)
+
+N(cid:88)t=1
+
+λ(mt)(cid:19)(−B)(cid:35)
+
+λ(mt)qt + (cid:18)Λ −
+N(cid:88)t=1
+λ(mt)(cid:19)(f(cid:63) + B) +
+N(cid:88)t=1
+
+R(Λ) = Λf(cid:63) −(cid:34) N(cid:88)t=1
+=(cid:18)Λ −
+within capital Λ, i.e. the largest n such that(cid:80)n
+
+Here, N is the (random) number of queries at all ﬁdelities
+t=1 λ(mt) ≤
+Λ. Lower ﬁdelity queries use up our capital but yield the
+lowest possible reward. The goal however, is to leverage
+information from the cheap lower ﬁdelities to query pru-
+dently at the higher ﬁdelities and hence obtain better regret.
+According to (3) above, we wish to compete against an ora-
+cle that uses all its capital Λ to query x(cid:63) at the M th ﬁdelity.
+R(Λ) is at best 0 when we follow the oracle and at most
+2ΛB. Our goal is a strategy that has small regret for all
+values of (sufﬁciently large) Λ, i.e.
+the equivalent of an
+anytime strategy (as opposed to a ﬁxed time horizon strat-
+egy) in the usual bandit setting. For the purpose of optimi-
+sation, we deﬁne the simple regret as S(Λ) = mint rt =
+f(cid:63) − maxt qt. S(Λ) is the difference between f(cid:63) and the
+best highest ﬁdelity query (and f(cid:63) + B if we have never
+Λ R(Λ), any strategy
+queried at ﬁdelity M). Since S(Λ) ≤ 1
+with asymptotic sublinear regret limΛ→∞
+Λ R(Λ) = 0, is
+1
+also a consistent procedure for optimisation.
+A note on UCB strategies for bandits: Sequential optimi-
+sation methods adopting UCB principles maintain a high
+: X → R for f (x) for all
+probability upper bound ϕt
+x ∈ X . ϕt typically takes the form ϕt(·) = (cid:99)M(·) + (cid:98)U(·)
+where (cid:99)M,(cid:98)U are the estimated mean and a conﬁdence band
+from the previous t − 1 queries. At time t, we query at
+the maximiser xt = argmaxx∈X ϕt(x) of the UCB. The
+key intuition in UCB strategies is that (cid:99)M encourages an
+exploitative strategy –in that we want to query where we
+know the function is high– and (cid:98)U encourages an explo-
+
+rative strategy –in that we want to query at regions we
+
+Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+t σ(1)
+
+at the ﬁrst ﬁdelity. If β1/2
+t−1(xt) is smaller than a thresh-
+old γ, we proceed to check the second ﬁdelity and continue
+in a similar fashion.
+t−1(xt) > γ
+we query at ﬁdelity mt = m. If we proceed all the way
+to ﬁdelity M, we query at mt = M. We summarise the
+resulting procedure in Algorithm 1.
+
+If at any stage β1/2
+
+t σ(m)
+
+Figure 2. Illustration of GP-UCB. The solid black line is f (x) and
+the dashed blue line is ϕt(x). The observations until t − 1 are
+shown as black crosses. At time t, we query at the maximiser
+xt = argmaxx∈X ϕt(x) shown via the red star.
+
+are uncertain about f lest we miss out on high valued re-
+gions. For example, in the GP framework, GP-UCB uses
+ϕt(x) = µt−1(x) + β1/2
+t σt−1(x) where µt−1, σt−1 are
+the posterior mean and standard deviation of the GP condi-
+tioned on the previous t − 1 queries. µt−1 is the estimated
+mean explained in the previous paragraph, and for appro-
+priately chosen βt, β1/2
+t−1 forms a conﬁdence band. We
+have illustrated GP-UCB in Figure 2 and reviewed the algo-
+rithm along with its theoretical properties in Appendix A.2.
+
+t σ(m)
+
+3. MF-GP-UCB
+The proposed algorithm, MF-GP-UCB, will also maintain
+a UCB for f (M ) obtained via the previous queries at all
+ﬁdelities. Denote the mean and standard deviation of f (m)
+(x) = E[f (m)(x)|D(m)
+conditioned on D(m)
+],
+σ(m)
+t
+
+t
+])1/2. Then deﬁne,
+
+to be µ(m)
+
+t
+
+t
+
+(x) = (V[f (m)(x)|D(m)
+ϕ(m)
+
+(x) = µ(m)
+
+t
+
+t
+
+ϕt(x) = min
+
+m=1,...,M
+
+t−1(x) + β1/2
+ϕ(m)
+
+t σ(m)
+
+t−1(x) + ζ (m)
+(x)
+
+t
+
+(4)
+
+t
+
+t σ(m)
+
+t−1(x) + β1/2
+
+For appropriately chosen βt, µ(m)
+t−1(x) will
+upper bound f (m)(x). By A2, ϕ(m)
+(x) upper bounds
+f (M )(x) for all m. We have M such bounds, and their
+minimum ϕt(x) gives the best bound. Our next query is at
+the maximiser of this UCB, xt = argmaxx∈X ϕt(x).
+Next we need to determine which ﬁdelity to query at. Con-
+sider any m < M. The ζ (m) conditions on f (m) con-
+t σ(m)
+strain the value of f (M ) – the conﬁdence band β1/2
+t−1
+in the UCB for f (m) is lengthened by ζ (m) to obtain conﬁ-
+dence on f (M ). If β1/2
+t−1(xt) for f (m) is large, it means
+that we haven’t constrained f (m) sufﬁciently well at xt and
+should query at the mth ﬁdelity. On the other hand, querying
+indeﬁnitely in the same region to reduce β1/2
+t−1 in that
+region will not help us much as the ζ (m) elongation caps off
+how much we can learn about f (M ) from f (m); i.e. even
+if we knew f (m) perfectly, we will only have constrained
+f (M ) to within a ±ζ (m) band. Our algorithm captures this
+simple intuition. Having selected xt, we begin by checking
+
+t σ(m)
+
+t σ(m)
+
+Algorithm 1 MF-GP-UCB
+Input: kernel κ, bounds (ζ (m))M
+
+• For m = 1, . . . , M:
+0 ← ∅,
+D(m)
+• for t = 1, 2, . . .
+1. xt ← argmaxx∈X ϕt(x).
+2. for m = 1, . . . , M:
+
+, σ(m)
+
+(µ(m)
+
+0
+
+0
+
+m=1, parameter γ.
+
+) ← (0, κ1/2).
+
+(See Equation (4))
+
+if β1/2
+mt = m.
+
+t σ(m)
+
+t−1(xt) > γ, break;
+
+3. yt ← Query f (mt) at xt.
+t ← D(mt)
+4. D(mt)
+t ← D(m)
+5. D(m)
+6. Obtain µ(mt)
+
+t−1 ∪ {(xt, yt)}.
+t−1 for all m (cid:54)= mt.
+, σ(mt)
+
+t
+
+t
+
+conditioned on D(mt)
+
+t
+
+.
+
+t
+
+t σ(1)
+
+Figure 3 illustrates MF-GP-UCB via a 2–ﬁdelity simula-
+tion. At the initial stages, MF-GP-UCB is mostly exploring
+X in the ﬁrst ﬁdelity. β1/2
+t−1 is large and we are yet to
+constrain f (1) well to proceed to m = 2. By t = 14, we
+have constrained f (1) well around the optimum and there-
+fore have started querying at the second ﬁdelity in this re-
+gion. Notice that ϕ(2)
+dips to change ϕt in that region.
+MF-GP-UCB has identiﬁed the maximum x(cid:63) with just 3
+queries to f (2).
+In Appendix B we provide an extended
+version of this simulation and discuss further insights.
+Finally, we make an essential observation. The poste-
+rior distribution of any f (m)(x) conditioned on previous
+queries at all ﬁdelities D(m)
+, m = 1, . . . , M is not Gaus-
+sian due to the ζ (m) constraints (A2). However, |f (m)(x)−
+t−1(x)| < β1/2
+µ(m)
+t−1(x) holds with high probability,
+since, by conditioning only on D(m)
+we have Gaussian-
+ity for f (m)(x) (See Lemma 11, Appendix C.1). Next we
+summarise our main theoretical contributions.
+
+t σ(m)
+
+t
+
+t
+
+4. Summary of Theoretical Results
+For purely pedagogical reasons we present our results for
+the M = 2 case here. Appendix C contains theorem state-
+ments and proofs for general M. We also ignore con-
+stants and polylog terms whenever they are subdominant.
+(cid:46),(cid:16) denote inequality and equality ignoring constants. We
+begin by deﬁning the Maximum Information Gain (MIG)
+which characterises the statistical difﬁculty of GP bandits.
+Deﬁnition 1.
+(Maximum Information Gain) Let f ∼
+
+xϕtfMulti-ﬁdelity Gaussian Process Bandit Optimisation
+
+t
+
+, ϕ(2)
+
+t−1(xt) ≤ γ we play at ﬁdelity mt = 2 and otherwise at mt = 1. See Fig. 7 in Appendix B for an extended simulation.
+
+Illustration of MF-GP-UCB for a 2-ﬁdelity problem which has been initialised with 5 random points at the ﬁrst ﬁdelity. In
+. The solid green line is
+t ). The small crosses are queries from 1 to t − 1 and the red star is the maximiser of ϕt, i.e. the next query xt. x(cid:63),
+t−1 and the dashed black line is γ. When
+
+Figure 3.
+the top ﬁgures, the solid lines in brown and blue are f (1), f (2) respectively, and the dashed lines are ϕ(1)
+ϕt = min(ϕ(1)
+the optimum of f (2) is shown in magenta. In the bottom ﬁgures, the solid orange line is β1/2
+t σ(1)
+β1/2
+Consider any A ⊂ Rd and let (cid:101)A =
+GP(0, κ).
+{x1, . . . , xn} ⊂ A be a ﬁnite subset. Let f(cid:101)A, (cid:101)A ∈ Rn
+such that (f(cid:101)A)i = f (xi) and ((cid:101)A)i ∼ N (0, η2) and
+y(cid:101)A = f(cid:101)A + (cid:101)A. Let I denote the Shannon Mutual Infor-
+
+t σ(1)
+
+, ϕ(2)
+
+t
+
+t
+
+mation. The Maximum Information Gain of A is
+
+Recall, N is the (random) number of queries by a multi-
+ﬁdelity strategy within capital Λ at either ﬁdelity, N =
+N (X ) + T (2)
+T (1)
+N (X ). Let nΛ = (cid:98)Λ/λ(2)(cid:99) be the (non-
+random) number of queries by a single ﬁdelity method op-
+erating only at the second ﬁdelity. As λ(1) (cid:28) λ(2), N
+could be large for an arbitrary multi-ﬁdelity method. How-
+ever, our analysis reveals that for MF-GP-UCB, N is on the
+order of nΛ and most 2nd ﬁdelity queries are roughly in Xg.
+We ﬁrst present our theorem for M = 2 for ﬁnite dis-
+crete domains. Deﬁne, the following set parametrised by ρ,
+
+(cid:101)Xg,ρ = {x; f(cid:63) − f (1)(x) ≤ ζ (1) + ργ}. MF-GP-UCB will
+query at the second ﬁdelity mostly in (cid:101)Xg,ρ; the choice of γ,
+results in a slight inﬂation of Xg. As γ → 0, (cid:101)Xg,ρ → Xg.
+In addition, deﬁne (cid:101)Xb,ρ = X\(cid:101)Xg,ρ.
+Theorem 2. Let X ⊂ [0, r]d be ﬁnite and f (1), f (2) ∼
+GP(0, κ) satisfy Assumptions A2,A3. Pick δ ∈ (0, 1) and
+run MF-GP-UCB with βt (cid:16) log (|X|t/δ). Then, with
+probability > 1 − δ, for all sufﬁciently large Λ and for
+R(Λ) (cid:46) λ(1) ξ|(cid:101)Xb,ρ|βnΛ + λ(1) |(cid:101)Xg,ρ|βnΛ
+all α ∈ (0, 1), there exists ρ depending on α such that,
+(cid:113)
+λ(2)(cid:113)
+βnΛ nΛΨnΛ ((cid:101)Xg,ρ).
+
+γ2
+(X ) + λ(2)
+
+βnΛ|X|nα
+
+ΛΨ|X|nα
+
++
+
+Λ
+
+Here ξ is a problem dependent constant determined by the
+values f (m)(x) for all m, x.
+
+It is instructive to compare the above rates against that for
+GP-UCB (see Theorem 4, Appendix A.2). By dropping
+the common and subdominant terms, the rate for MF-GP-
+UCB is λ(2)(cid:113)nΛΨnΛ ((cid:101)Xg,ρ) + λ(2)(cid:113)nα
+(X ) whereas
+for GP-UCB it is λ(2)(cid:112)nΛΨnΛ (X ). For GP-UCB, the
+MIG for the entire X is coupled with nΛ, where as for
+MF-GP-UCB it is only coupled with the small nα
+Λ term.
+
+ΛΨnα
+
+Λ
+
+Ψn(A) = max
+
+(cid:101)A⊂A,|(cid:101)A|=n
+
+I(y(cid:101)A; f(cid:101)A).
+
+d(d+1)
+
+The MIG, which depends on the kernel and the set A, will
+be an important quantity in our analysis. For a given kernel
+it typically scales with the volume of A. For e.g. if A =
+[0, r]d then Ψn(A) ∈ O(rdΨn([0, 1]d)). For the SE kernel,
+Ψn([0, 1]d) ∈ O((log(n))d+1) and for the Mat´ern kernel,
+2ν+d(d+1) log(n)) (Srinivas et al., 2010).
+Ψn([0, 1]d) ∈ O(n
+Fundamental to the 2-ﬁdelity problem are the following
+sets: the “good” set Xg = {x ∈ X ; f(cid:63) − f (1)(x) ≤ ζ (1)}
+and the “bad” set Xb = X\Xg. Xg is good because it
+is a high valued region for f (2)(x). For instance, for all
+x ∈ Xg, f (2)(x) is at most 2ζ (1) away from the optimum.
+More interestingly, when ζ (1) is small, i.e. when f (1) is a
+good approximation to f (2), Xg will be much smaller than
+X . This is precisely the target domain for this research.
+For example, in optimal policy search in robotics a cheap
+computer simulator can be used to eliminate several bad
+policies and we could reserve the real world experiments
+for the promising candidates.
+If a multi-ﬁdelity strategy
+were to use the second ﬁdelity queries only in Xg, then the
+regret will only have Ψn(Xg) dependence after n high ﬁ-
+delity queries. In contrast, a strategy that only operates at
+the highest ﬁdelity (e.g. GP-UCB) will have Ψn(X ) depen-
+dence. In the scenario described above Ψn(Xg) (cid:28) Ψn(X ),
+and the multi-ﬁdelity strategy will have signiﬁcantly better
+regret than a single ﬁdelity strategy. We will see that MF-
+GP-UCB roughly achieves this goal.
+
+x⋆xtt=6ϕ(1)tϕ(2)tϕtf(1)f(2)x⋆xtt=14f(1)f(2)β1/2tσ(1)t−1(x)γmt=1γmt=2Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+MF-GP-UCB also has an MIG coupling with nΛ, but this
+
+is on the set (cid:101)Xg,ρ. Let us say that (cid:101)Xg,ρ is contained in a
+(possibly disconnected) region of volume ν (cid:28) rd, then
+ΨnΛ ((cid:101)Xg,ρ) (cid:28) ΨnΛ (X ) and MF-GP-UCB has better regret
+than GP-UCB. This directly captures previously mentioned
+intuitions: use lower ﬁdelities to eliminate bad regions of
+X and query the higher ﬁdelities only at promising regions.
+The price we have to pay is that part of our capital is spent
+on ﬁrst ﬁdelity queries. However these terms are loga-
+rithmic in nΛ and more importantly the queries are cheap
+(λ(1) (cid:28) λ(2)). In M ﬁdelities, there will be a hierarchy of
+M − 1 successively smaller “good sets” and MF-GP-UCB
+will query at ﬁdelity m only in the corresponding set.
+The bound also illustrates the trade-off on the choice of γ.
+
+As γ → 0, 1/γ2 increases but the set (cid:101)Xg,ρ decreases. This
+
+observation however, is of little practical use as there are
+problem dependent terms. In Section 5 we describe some
+heuristics to set γ which worked well in our experiments.
+Proof sketch of Theorem 2: We control the number of ﬁrst
+
+n (x) (cid:46) nα by appealing to previous ﬁrst ﬁdelity
+
+n (x) (cid:46) log(n) by argu-
+ing that it won’t be the UCB maximiser too many times.
+n (x) (cid:46) log(n)/γ2 using the switch-
+
+ﬁdelity queries in (cid:101)Xg,ρ, (cid:101)Xb,ρ and second ﬁdelity queries in
+(cid:101)Xb,ρ. For x ∈ (cid:101)Xb,ρ, we show T (1)
+For x ∈ (cid:101)Xg,ρ, T (1)
+ing criterion (step 2) in Algorithm 1. For x ∈ (cid:101)Xb,ρ, we
+show T (2)
+queries. Therefore n−T (2)
+n ((cid:101)Xg,ρ) ∈ o(n), i.e. most queries
+are at the second ﬁdelity and conﬁned to (cid:101)Xg,ρ. Finally, We
+invoke techniques from Srinivas et al. (2010) to control the
+regret. However, unlike them we analyse the MIG of (cid:101)Xg,ρ
+and (cid:101)Xb,ρ separately using the bound on T (1)
+n ((cid:101)Xb,ρ) and ob-
+tain a tighter bound on R(Λ). The theorem and proof for
+general M is in Appendix C.1.
+We now analyse compact and convex X . We consider
+a slightly different inﬂation ¨Xg,ρ,τ = {x ∈ X ; f(cid:63) −
+f (1)(x) ≤ ζ (1) + max(τ, ργ)}, of Xg. Denote ¨Xb,τ =
+X\ ¨Xg,τ .
+In addition, for any given α > 0 we will let
+¨Xg,ρ,τ,n = {x ∈ X : B2(x, r√d/nα/2d) ∩ ¨Xg,ρ,τ (cid:54)= ∅}
+denote a further inﬂation of ¨Xg,ρ,τ . Here B2(x, ) is the
+L2 ball of radius  centred at x. Observe that ∀ α > 0,
+as n → ∞, ¨Xg,ρ,τ,n → ¨Xg,ρ,τ . Finally, let Ωε(A) be the
+ε-covering number of a set A ⊂ X in the L2 metric.
+Theorem 3. Let X ⊂ [0, r]d be compact and convex and
+f (1), f (2) ∼ GP(0, κ) satisfy A2,A3. Pick δ ∈ (0, 1) and
+run MF-GP-UCB with βt (cid:16) d log(t/δ). Then, with proba-
+bility > 1−δ, for sufﬁciently large Λ and for all α ∈ (0, 1),
+R(Λ) (cid:46) λ(1)(cid:113)
+and τ > 0, there exists ρ depending on α such that,
+nΛβnΛ ΨnΛ (X ) + λ(1) Ωεn ( ¨Xg,ρ,τ )βnΛ
++ λ(2)(cid:113)
+
+(X ) + λ(2)
+
+M nα
+
+ΛβnΛ ΨM nα
+
+Λ
+
+γ2
+
+(cid:113)
+nΛβnΛ ΨnΛ ( ¨Xg,ρ,τ,nΛ )
+for Mat´ern.
+
+Here εn is (cid:16) γ√βn
+
+for the SE kernel and (cid:16) γ2
+
+βn
+
+There are a number differences from the discrete case.
+Previously, the ﬁrst term had only log(nΛ) dependence
+whereas here we have λ(1)(cid:112)nΛΨnΛ (X ). This is insigniﬁ-
+cant compared to GP-UCB when λ(1) (cid:28) λ(2). The second
+term is O(cid:0)r(cid:48)d(log(n))1+d/2/γd+2(cid:1) for the SE kernel and
+O(cid:0)r(cid:48)d(log(n))1+d/γ2d+2(cid:1) for the Mat´ern kernel, where
+r(cid:48) = diam( ¨Xg,ρ,τ ). Finally, the last term has ¨Xg,ρ,τ,nΛ
+instead of ¨Xg,ρ,τ . However, as ¨Xg,ρ,τ,nΛ shrinks to ¨Xg,ρ,τ
+polynomially fast, whenever vol( ¨Xg,ρ,τ ) (cid:28) vol(X ), MF-
+GP-UCB achieves better regret than GP-UCB .
+Proof sketch of Theorem 3: We bound the number of ﬁrst
+ﬁdelity plays in ¨Xg,ρ,τ , T (1)
+n ( ¨Xg,ρ,τ ) via a covering argu-
+ment. For this, we establish an upper bound on the poste-
+rior variance of a GP in a subset A ⊂ X after a certain num-
+n ( ¨Xb,ρ,τ ), we consider
+ber of queries in A. To bound T (1)
+only the ﬁrst ﬁdelity queries in an modiﬁed game at f (1)
+and show that MF-GP-UCB achieves good regret in this
+game. The purpose of the τ term in the inﬂation is to cre-
+ate a separation between the two sets – in the discrete case,
+the separation is guaranteed due to the discrete f (1) values
+n ( ¨Xb,ρ,τ ) (cid:46) nα
+and is factored in the ξ term. We show T (2)
+by appealing to previous ﬁrst ﬁdelity queries. The remain-
+der of the analysis follows similar to the discrete case by
+separately analysing the MIGs of ¨Xg,ρ,τ,n and ¨Xb,ρ,τ . The
+theorem and proof for general M is in Appendix C.2.
+Theorems 2, 3 can be generalised to cases where each f (m)
+is sampled from a different kernel κ(m), and observation
+noises η(m) are different. In fact, our practical implemen-
+tation uses different kernels. A polylog(nΛ) rate is also
+possible for the discrete case, similar to Theorem 1 in Dani
+et al. (2008), but it will have worse dependence on ΨnΛ.
+We stick to the above form which is comparable to the re-
+sults of Srinivas et al. (2010). We believe that the ζ (m)
+constraint can be relaxed to hold only in some neighbor-
+hood of x(cid:63) for MF-GP-UCB to still have good regret; i.e.
+f (M )(x) − f (m)(x) ≤ ζ (m) for all x in a neighborhood
+ν(m) of x(cid:63). Our proof will need some massaging. Just
+like any nonparametric method, our algorithm has expo-
+nential dependence on dimension. By assuming additional
+structure in the bandit problem (Djolonga et al., 2013; Kan-
+dasamy et al., 2015) we may alleviate this problem. Finally,
+we remind the reader that the above rates also translate to
+bounds on the simple regret S(Λ) for optimisation.
+
+5. Implementation Details
+Our implementation uses some standard techniques in
+Bayesian optimisation to learn the GP kernel such as ini-
+tialisation with random queries and periodic marginal like-
+lihood maximisation. We also use a more aggressive choice
+for βt than stipulated by our analysis. The above tech-
+niques might be already known to a reader familiar with
+
+Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+Figure 4. The simple regret S(Λ) against the spent capital Λ on synthetic functions. The title states the function, its dimensionality, the
+number of ﬁdelities and the costs we used for each ﬁdelity in the experiment. All curves barring DiRect (which is a deterministic), were
+produced by averaging over 20 experiments. The error bars indicate one standard error. See Figures 10, 11 12 in Appendix D for more
+synthetic results. The last panel shows the number of queries at different function values at each ﬁdelity for the Hartmann-3D example.
+
+the BO literature. We have elaborated these in Appendix B
+but now focus on the γ and ζ (m) parameters of our method.
+Algorithm 1 assumes that the ζ (m)’s are given with the
+problem description, which is hardly the case in prac-
+tice. In our implementation, instead of having to deal with
+M − 1, ζ (m) values we set (ζ (1), ζ (2), . . . , ζ (M−1)) =
+((M − 1)ζ, (M − 2)ζ, . . . , ζ) so we only have one value
+ζ. For e.g.
+this corresponds to (cid:107)f (m) − f (m−1)(cid:107)∞ ≤ ζ
+which is stronger than Assumption A2. Initially, we start
+with small ζ. Whenever we query at any ﬁdelity m > 1 we
+also check the posterior mean of the (m − 1)th ﬁdelity. If
+|f (m)(xt) − µ(m−1)
+(xt)| > ζ, we query again at xt, but at
+the (m − 1)th ﬁdelity. If |f (m)(xt) − f (m−1)(xt)| > ζ, we
+update ζ to twice the violation.
+To set γ we use the following intuition: if the algorithm,
+is stuck at a lower ﬁdelity for too long then γ is proba-
+bly too small. We start with a small value of γ.
+If the
+algorithm does not query above the mth ﬁdelity for more
+than λ(m+1)/λ(m) iterations, we increase γ to twice the
+current value. We found our implementation to be fairly
+robust even recovering from fairly bad approximations at
+the lower ﬁdelities (see Appendix D.2 for an experiment).
+
+t−1
+
+6. Experiments
+We present experiments for compact X since it is the more
+practically relevant setting. We compare MF-GP-UCB to
+the following single ﬁdelity optimisation methods: GP-
+UCB, EI, PI, RAND and DiRect. RAND is where we query
+X uniformly at random and take the maximum. For all GP
+methods (GP-UCB,EI,PI) we use the SE kernel. We could
+not ﬁnd software for any multi-ﬁdelity methods in previous
+literature. We implemented the GP based method of Huang
+et al. (2006) to our best interpretation but found that it did
+not perform as desired – it hardly queried above the ﬁrst
+ﬁdelity. Hence, we exclude it from the comparisons.
+A straightforward way to incorporate lower ﬁdelity infor-
+
+mation to single ﬁdelity GP methods is to query at lower ﬁ-
+delities and use them in learning the kernel by jointly max-
+imising the GP marginal likelihood. While the idea seems
+natural, we got mixed results in practice. On some prob-
+lems this approach improved the performance of all GP
+methods (including MF-GP-UCB), but on others all meth-
+ods worked poorly. One explanation is that while lower
+ﬁdelities approximate function values, they are not always
+best described by the same kernel. The results presented do
+not use lower ﬁdelity queries to learn the kernel as it was
+more robust. For MF-GP-UCB, the kernels for each f (m)
+were learned independently using queries at that ﬁdelity.
+
+6.1. Synthetic Examples
+
+We use the Currin exponential (d = 2), Park (d = 4) and
+Borehole (d = 8) functions in M = 2 ﬁdelity experiments
+and the Hartmann functions in d = 3 and 6 with M = 3
+and 4 ﬁdelities respectively. The ﬁrst three functions are
+taken from previous multi-ﬁdelity literature (Xiong et al.,
+2013) while we tweaked the Hartmann functions to obtain
+the lower ﬁdelities for the latter two cases. We show the
+simple regret S(Λ) against capital Λ for the Borehole and
+Hartmann-3D functions in Fig. 4 with the rest deferred to
+Appendix D due to space constraints. Very clearly, MF-
+GP-UCB outperforms the single ﬁdelity methods. Ap-
+pendix D also contains results for the cumulative regret
+R(Λ) and the formulae for these functions.
+The third panel of Fig. 4 shows a histogram of the num-
+ber of queries at each ﬁdelity after 184 queries of MF-GP-
+UCB, for different ranges of f (3)(x) for the Hartmann-3D
+example. Many of the queries at the low f (3) values are at
+ﬁdelity 1, but as we progress they decrease and the second
+ﬁdelity queries increase. The third ﬁdelity dominates very
+close to the optimum but is used sparingly elsewhere. This
+corroborates the prediction in our analysis that MF-GP-
+UCB uses low ﬁdelities to explore and successively higher
+ﬁdelities at more promising regions to zero in on x(cid:63). (Also
+see the simulation in Fig. 7, Appendix B.)
+
+2004006008001000100101102ΛS(Λ)BoreHole-8D,M=2,Costs=[1;10]  MF-GP-UCBGP-UCBEIPIRANDDiRect20004000600080001000010−310−210−1100Hartmann-3D,M=3,Costs=[1;10;100]ΛS(Λ)00.511.522.533.50510152025303540NumberofQueriesQueryfrequenciesforHartmann-3D  f(3)(x)m=1m=2m=3Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+Figure 5. Results on the hyper-parameter tuning experiments. The title states the experiment, dimensionality (number of hyperparam-
+eters) and training set size at each ﬁdelity. All curves were produced by averaging over 10 experiments. The lengths of the curves are
+different in time as we ran each method for a pre-speciﬁed number of iterations and they concluded at different times.
+
+Regression using additive kernels (AddKRR): We used
+the Additive kernel ridge regression method of Kandasamy
+& Yu (2015) on the 4-dimensional coal power plant
+dataset. We tuned the 6 hyper-parameters –the regulari-
+sation penalty, the kernel scale and the kernel bandwidth
+for each dimension– each in the range (10−3, 104) using
+5-fold cross validation. This experiment used M = 3 and
+2000, 4000, 8000 points at each ﬁdelity respectively.
+Viola & Jones face detection (V&J): The Viola & Jones
+cascade face classiﬁer (Viola & Jones, 2001), which uses
+a cascade of weak classiﬁers, is a popular method for face
+detection. To classify an image, we pass it through each
+classiﬁer. If at any point the classiﬁer score falls below a
+threshold, the image is classiﬁed as negative. If it passes
+through the cascade, then it is classiﬁed as positive. One
+of the more popular implementations comes with OpenCV
+and uses a cascade of 22 weak classiﬁers. The threshold
+values in the OpenCV implementation are pre-set based on
+some heuristics and there is no reason to think they are op-
+timal for a given face detection problem. The goal is to tune
+these 22 thresholds by optimising for them over a training
+set. We modiﬁed the OpenCV implementation to take in
+the thresholds as parameters. As our domain X we chose a
+neighbourhood around the conﬁguration used in OpenCV.
+We set this up as a M = 2 ﬁdelity experiment where the
+second ﬁdelity used 3000 images from the Viola and Jones
+face database and the ﬁrst used just 300. Interestingly, on
+an independent test set, the conﬁgurations found by MF-
+GP-UCB consistently achieved over 90% accuracy while
+the OpenCV conﬁguration achieved only 87.4% accuracy.
+Type Ia Supernovae: We use Type Ia supernovae data
+from Davis et al (2007) for maximum likelihood infer-
+ence on 3 cosmological parameters, the Hubble constant
+H0 ∈ (60, 80), the dark matter fraction ΩM ∈ (0, 1) and
+the dark energy fraction ΩΛ ∈ (0, 1). Unlike typical para-
+metric maximum likelihood problems we see in machine
+learning, the likelihood is only available as a black-box. It
+is computed using the Robertson–Walker metric which re-
+quires a (one dimensional) numerical integration for each
+
+Figure 6. Results on the supernova inference problem. The y-
+axis is the log likelihood so higher is better. RAND is not visible
+as it performed very poorly. See caption in Fig. 5 for more details.
+
+One should read synthetic results with a grain of salt. By
+making the lower ﬁdelity costs small (large) and their ap-
+proximations good (bad), the experiment can be designed
+favourably (unfavourably) for multi-ﬁdelity methods. The
+litmus test for this framework lies in how well cheap exper-
+iments approximate the highest ﬁdelity in practical prob-
+lems and if a method can exploit this information.
+
+6.2. Real Experiments
+
+We present results on three hyper-parameter tuning tasks
+(results in Fig. 5), and a maximum likelihood inference
+task in Astrophysics. We compare methods on computation
+time since that is the “cost” in all experiments. We include
+the processing time for each method in the comparison (i.e.
+the cost of determining the next query).
+Classiﬁcation using SVMs (SVM): We trained an SVM
+on the magic gamma dataset using the sequential minimal
+optimisation algorithm to an accuracy of 10−12. The goal is
+to tune the kernel bandwidth and the soft margin coefﬁcient
+in the ranges (10−3, 101) and (10−1, 105) respectively on
+a dataset of size 2000. We set this up as a M = 2 ﬁdelity
+experiment with the entire training set at the second ﬁdelity
+and 500 points at the ﬁrst. Each query was 5-fold cross
+validation on these training sets.
+
+0100020003000400050006000700080000.1150.120.1250.130.1350.14CPUTime(s)CV(Classiﬁcation)ErrorSVM-2D,M=2,ntr=[500,2000]  MF-GP-UCBGP-UCBEIPIRANDDiRect0100020003000400050006000700000.20.40.60.81AddKRR-6D,M=3,ntr=[2000,4000,8000]CPUTime(s)CV(LeastSquares)Error100020003000400050006000700080000.10.150.20.250.30.35V&J-22D,M=2,ntr=[300,3000]CPUTime(s)CV(Classiﬁcation)Error500100015002000250030003500−10−50510CPUTime(s)LogLikelihoodSupernova-3D,M=3,Grid=[100,10K,1M]  MF-GP-UCBGP-UCBEIPIRANDDiRectMulti-ﬁdelity Gaussian Process Bandit Optimisation
+
+sample in the dataset. We set this up as a M = 3 ﬁdelity
+task. At the third ﬁdelity, the integration was performed
+using the trapezoidal rule on a grid of size 106. For the ﬁrst
+and second ﬁdelities, we used grids of size 102, 104 respec-
+tively. The goal is to maximise the likelihood at the third
+ﬁdelity. The results are given in Fig. 6.
+
+7. Conclusion
+We introduced and studied the multi-ﬁdelity bandit prob-
+lem under Gaussian Process assumptions. Our theorems
+demonstrate that MF-GP-UCB explores the space using the
+cheap lower ﬁdelities, and uses the higher ﬁdelity queries
+on successively smaller regions hence achieving better re-
+gret than single ﬁdelity strategies. Experimental results
+demonstrate the efﬁcacy of our method and more generally,
+the utility of the multi-ﬁdelity framework.
+It will be useful to extend the multi-ﬁdelity framework to
+other bandit settings and more broadly to other sequential
+experiment selection problems such as active learning, on-
+line learning, reinforcement learning etc. This area of re-
+search, largely untapped, has potential for great impact on
+a wide range of real world applications.
+
+Acknowledgements
+
+We wish to thank Bharath Sriperumbudur for the helpful
+email discussions. This research was partly funded by DOE
+grant DESC0011114.
+
+References
+Abbeel, Pieter, Quigley, Morgan, and Ng, Andrew Y. Using
+inaccurate models in reinforcement learning. In ICML,
+2006.
+
+Agrawal, Rajeev. Sample Mean Based Index Policies with
+O(log n) Regret for the Multi-Armed Bandit Problem.
+Advances in Applied Probability, 1995.
+
+Audibert,
+
+Jean-Yves, Munos, R´emi, and Szepesv´ari,
+Csaba. Exploration-exploitation Tradeoff Using Vari-
+ance Estimates in Multi-armed Bandits. Theor. Comput.
+Sci., 2009.
+
+Auer, Peter. Using Conﬁdence Bounds for Exploitation-
+
+exploration Trade-offs. J. Mach. Learn. Res., 2003.
+
+Bergstra, James S., Bardenet, R´emi, Bengio, Yoshua, and
+K´egl, Bal´azs. Algorithms for Hyper-Parameter Opti-
+mization. In NIPS, 2011.
+
+Bubeck, S´ebastien and Cesa-Bianchi, Nicol`o. Regret anal-
+ysis of stochastic and nonstochastic multi-armed bandit
+problems. Foundations and Trends in Machine Learn-
+ing, 2012.
+
+Bull, Adam D. Convergence Rates of Efﬁcient Global Op-
+
+timization Algorithms. JMLR, 2011.
+
+Chakrabarti, Deepayan, Kumar, Ravi, Radlinski, Filip, and
+Upfal, Eli. Mortal Multi-Armed Bandits. In NIPS, 2008.
+
+Cutler, Mark, Walsh, Thomas J., and How, Jonathan P. Re-
+inforcement Learning with Multi-Fidelity Simulators. In
+ICRA, 2014.
+
+Dani, Varsha, Hayes, Thomas P., and Kakade, Sham M.
+Stochastic Linear Optimization under Bandit Feedback.
+In COLT, 2008.
+
+Davis et al, T. M. Scrutinizing Exotic Cosmological Mod-
+els Using ESSENCE Supernova Data Combined with
+Other Cosmological Probes. The Astrophysical Journ.,
+2007.
+
+de Freitas, Nando, Smola, Alex J., and Zoghi, Masrour. Ex-
+ponential Regret Bounds for Gaussian Process Bandits
+with Deterministic Observations. In ICML, 2012.
+
+Djolonga, Josip, Krause, Andreas, and Cevher, Volkan.
+In Ad-
+High-Dimensional Gaussian Process Bandits.
+vances in Neural Information Processing Systems, 2013.
+
+Forrester, Alexander I. J., S´obester, Andr´as, and Keane,
+Andy J. Multi-ﬁdelity optimization via surrogate mod-
+elling. Proceedings of the Royal Society A: Mathemati-
+cal, Physical and Engineering Science, 2007.
+
+Ghosal, Subhashis and Roy, Anindya. Posterior consis-
+tency of Gaussian process prior for nonparametric binary
+regression”. Annals of Statistics, 2006.
+
+Gonzalez, Javier, Longworth, Joseph, James, David, and
+Lawrence, Neil. Bayesian Optimization for Synthetic
+Gene Design. In NIPS Workshop on Bayesian Optimiza-
+tion in Academia and Industry, 2014.
+
+Hern´andez-Lobato, Jos´e Miguel, Hoffman, Matthew W,
+and Ghahramani, Zoubin. Predictive Entropy Search for
+Efﬁcient Global Optimization of Black-box Functions.
+In NIPS, 2014.
+
+Hornby, G. S., Globus, A., Linden, D.S., and Lohn, J.D.
+Automated Antenna Design with Evolutionary Algo-
+rithms. American Institute of Aeronautics and Astronau-
+tics, 2006.
+
+Brochu, Eric, Cora, Vlad M., and de Freitas, Nando. A
+Tutorial on Bayesian Optimization of Expensive Cost
+Functions, with Application to Active User Modeling
+and Hierarchical Reinforcement Learning. CoRR, 2010.
+
+Huang, D., Allen, T.T., Notz, W.I., and Miller, R.A.
+Sequential kriging optimization using multiple-ﬁdelity
+evaluations. Structural and Multidisciplinary Optimiza-
+tion, 2006.
+
+Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+Hutter, Frank, Hoos, Holger H., and Leyton-Brown, Kevin.
+Sequential Model-based Optimization for General Algo-
+rithm Conﬁguration. In LION, 2011.
+
+Parkinson, David, Mukherjee, Pia, and Liddle, Andrew R.
+A Bayesian model selection analysis of WMAP3. Phys-
+ical Review, 2006.
+
+P´oczos, B´arnabas, Abbasi-Yadkori, Yasin, Szepesvri,
+Csaba, Greiner, Russell, and Sturtevant, Nathan R.
+Learning when to stop thinking and do something!
+In
+ICML, 2009.
+
+Rajnarayan, Dev, Haas, Alex, and Kroo, Ilan. A multi-
+ﬁdelity gradient-free optimization method and applica-
+tion to aerodynamic design. In AIAA/ISSMO Multidisci-
+plinary Analysis and Optimization Conference, 2008.
+
+Rasmussen, C.E. and Williams, C.K.I. Gaussian Processes
+for Machine Learning. Adaptative computation and ma-
+chine learning series. University Press Group Limited,
+2006.
+
+Robbins, Herbert. Some aspects of the sequential design
+of experiments. Bulletin of the American Mathematical
+Society, 1952.
+
+Snoek, Jasper, Larochelle, Hugo, and Adams, Ryan P.
+Practical Bayesian Optimization of Machine Learning
+Algorithms. In NIPS, 2012.
+
+Srinivas, Niranjan, Krause, Andreas, Kakade, Sham, and
+Seeger, Matthias. Gaussian Process Optimization in the
+Bandit Setting: No Regret and Experimental Design. In
+International Conference on Machine Learning, 2010.
+
+Thompson, W. R. On the Likelihood that one Unknown
+Probability Exceeds Another in View of the Evidence of
+Two Samples. Biometrika, 1933.
+
+Viola, Paul A. and Jones, Michael J. Rapid Object De-
+tection using a Boosted Cascade of Simple Features. In
+Computer Vision and Pattern Recognition, 2001.
+
+Xiong, Shifeng, Qian, Peter Z. G., and Wu, C. F. Jeff. Se-
+quential design and analysis of high-accuracy and low-
+accuracy computer codes. Technometrics, 2013.
+
+Xu, Jie, Zhang, Si, Huang, Edward, Chen, Chun-Hung,
+Lee, Loo Hay, and Celik, Nurcin. Efﬁcient Multi-ﬁdelity
+In Proceedings of the 2014
+Simulation Optimization.
+Winter Simulation Conference, 2014.
+
+Zhang, Chicheng and Chaudhuri, Kamalika. Active Learn-
+
+ing from Weak and Strong Labelers. In NIPS, 2015.
+
+Jones, D. R., Perttunen, C. D., and Stuckman, B. E. Lips-
+chitzian Optimization Without the Lipschitz Constant. J.
+Optim. Theory Appl., 1993.
+
+Jones, Donald R., Schonlau, Matthias, and Welch,
+William J. Efﬁcient global optimization of expensive
+black-box functions. J. of Global Optimization, 1998.
+
+Kandasamy, Kirthevasan and Yu, Yaoliang. Additive Ap-
+proximations in High Dimensional Nonparametric Re-
+gression via the SALSA. CoRR, abs/1602.00287, 2015.
+
+Kandasamy, Kirthevasan, Schenider, Jeff, and P´oczos,
+Barnab´as. High Dimensional Bayesian Optimisation and
+Bandits via Additive Models. In International Confer-
+ence on Machine Learning, 2015.
+
+Kawaguchi, Kenji, Kaelbling, Leslie Pack, and Lozano-
+P´erez, Tom´as. Bayesian Optimization with Exponential
+Convergence. In Advances in Neural Information Pro-
+cessing (NIPS), 2015.
+
+Kennedy, M. C. and O’Hagan, A. Predicting the Output
+from a Complex Computer Code when Fast Approxima-
+tions are Available. Biometrika, 1998.
+
+Kirkpatrick, S., Gelatt, C. D., and Vecchi, M. P. Optimiza-
+
+tion by simulated annealing. SCIENCE, 1983.
+
+Koza, John R. Genetic programming : on the programming
+of computers by means of natural selection. Cambridge,
+Mass. MIT Press, 1992.
+
+Lai, T. L. and Robbins, Herbert. Asymptotically Efﬁcient
+Adaptive Allocation Rules. Advances in Applied Mathe-
+matics, 1985.
+
+Lizotte, Daniel, Wang, Tao, Bowling, Michael, and Schuur-
+mans, Dale. Automatic gait optimization with gaussian
+process regression. In IJCAI, 2007.
+
+Martinez-Cantin, R., de Freitas, N., Doucet, A., and Castel-
+lanos, J. Active Policy Learning for Robot Planning
+In Proceedings of
+and Exploration under Uncertainty.
+Robotics: Science and Systems, 2007.
+
+Mockus, Jonas. Application of Bayesian approach to nu-
+merical methods of global and stochastic optimization.
+Journal of Global Optimization, 1994.
+
+Munos, R. Optimistic Optimization of Deterministic Func-
+tions without the Knowledge of its Smoothness. In NIPS,
+2011.
+
+Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+Appendix
+
+A. Some Ancillary Material
+A.1. Table of Notations
+
+M
+
+f, f (m)
+λ(m)
+X
+x(cid:63), f(cid:63)
+
+A
+|A|
+∨,∧
+(cid:46), (cid:38),(cid:16)
+qt, rt
+R(Λ)
+S(Λ)
+ζ (m)
+µ(m)
+t
+κ(m)
+t
+σ(m)
+t
+xt, yt
+mt
+D(m)
+n
+βt
+ϕ(m)
+(x)
+
+t
+
+ϕt(x)
+
+γ
+˜Rn
+
+T (m)
+(·)
+n
+T (>m)
+(·)
+n
+nΛ
+Ψn(A)
+X (m)
+
+(m)
+
+τ
+
+τ
+
+,
+
+τ,n
+
+H(m)
+Hτ
+Xg,Xb
+
+H(m),H(m)
+(cid:98)
+(cid:98)
+H(m)
+(cid:98)H(m),
+(cid:98)H(m)
+(cid:101)Xg,ρ, (cid:101)Xb,ρ
+¨Xg,ρ,τ , ¨Xb,ρ,τ
+¨Xg,ρ,τ,n
+Ωε(A)
+
+The number of ﬁdelities.
+The payoff function and its mth ﬁdelity approximation. f (M ) = f.
+The cost for querying at ﬁdelity m.
+The domain over which we are optimising f.
+The optimum point and value of the M th ﬁdelity function.
+The complement of a set A ⊂ X . A = X\A.
+The cardinality of a set A ⊂ X if it is countable.
+Logical Or and And respectively.
+Inequalities and equality ignoring constant terms.
+The instantaneous reward and regret respectively. See Equation (2)
+The cumulative regret after spending capital Λ. See equation 3.
+The simple regret after spending capital Λ. See second paragraph under equation 3.
+A bound on the maximum difference between f (m) and f (M ), (cid:107)f (M ) − f (m)(cid:107)∞ ≤ ζ (m).
+The mean of the mth ﬁdelity GP f (m) conditioned on D(m)
+The covariance of the mth ﬁdelity GP f (m) conditioned on D(m)
+at time t.
+The standard deviatiation of the mth ﬁdelity GP f (m) conditioned on D(m)
+The queried point and observation at time t.
+The queried ﬁdelity at time t.
+The set of queries at the mth ﬁdelity until time n {(xt, yt)}t:mt=m.
+The coefﬁcient trading off exploration and exploitation in the UCB. See Theorems 10, 13.
+The upper conﬁdence bound provided by the mth ﬁdelity on f (M )(x).
+ϕ(m)
+The combined upper conﬁdence bound provided by all ﬁdelities on f (M )(x).
+ϕt(x) = minm ϕ(m)
+The parameter in MF-GP-UCB for switching between ﬁdelities. See step 2 of Algorithm 1.
+
+t−1(x) + ζ (m).
+
+t−1(x) + β1/2
+
+(x) = µ(m)
+
+t σ(m)
+
+at time t.
+
+at time t.
+
+(x).
+
+t
+
+t
+
+t
+
+t
+
+t
+
+τ
+
+t=1 λ(mt)rt.
+
+m=1 are partitionings of X for the discrete and compact cases respectively.
+)M
+
+m=1 is an entirely problem dependent partitioning of X . See Equation (6).
+m=1, (H(m)
+
+The cumulative regret for the queries after n rounds, ˜Rn =(cid:80)n
+rt = f(cid:63) + B if mt (cid:54)= M and rt = f(cid:63) − f (M )(xt) if mt = M.
+The number of queries at ﬁdelity m at any point in or subset of X until time n.
+The number of queries at ﬁdelities greater than m at any point in or subset of X until time n.
+Number of plays by a strategy querying only at ﬁdelity M within capital Λ. nΛ = (cid:98)Λ/λ(M )(cid:99).
+The maximum information gain of a set A ⊂ X after n queries in A. See Deﬁnition 1.
+(X (m))M
+(H(m))M
+See Equations (6) and (12). The analysis of MF-GP-UCB hinges on these partitionings.
+An additional n-dependent inﬂation of H(m)
+The arms “above”/“below” H(m). (cid:98)H(m) =(cid:83)M
+The arms “above”/“below” H(m)
+The good set and bad sets for M = 2 ﬁdelity problems. Xg = X (2) and Xb = X (1).
+The inﬂations of Xg,Xb in the discrete case.
+(cid:101)Xg,ρ = {x; f(cid:63) − f (1)(x) ≤ ζ (1) + ργ} = H(2) and (cid:101)Xb,ρ = X\(cid:101)Xg,ρ = H(1).
+The inﬂations of Xg,Xb in the compact case.
+¨Xg,τ = {x; f(cid:63) − f (1)(x) ≤ ζ (1) + max(τ, ργ)} = H(2)
+The additional n-dependent inﬂation of ¨Xg,ρ,τ . ¨Xg,ρ,τ,n = H(1)
+τ,n.
+The ε–covering number of a subset A ⊂ X in the (cid:107) · (cid:107)2 metric.
+
+. See paragraph under equation (12).
+(cid:96)=1 H((cid:96)).
+(cid:96)=m+1 H((cid:96)),
+. Deﬁned similar to above.
+
+(cid:98)
+H(m) =(cid:83)m−1
+
+τ,n, and ¨Xb,τ = X\ ¨Xg,τ = H(1)
+τ,n.
+
+τ
+
+τ
+
+Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+A.2. Review of GP-UCB
+The following bounds the regret Rn for the GP-UCB algorithm of Srinivas et al. (2010) after n time steps. The algorithm
+is given in Algorithm 2.
+Theorem 4. (Theorems 1 and 2 in (Srinivas et al., 2010)) Let f ∼ GP(0, κ), f : X → R and κ satisfy Assumption 8. At
+each query, we have noisy observations y = f (x) +  where  ∼ N (0, η2). Denote C1 = 8/ log(1 + η−2). Pick δ ∈ (0, 1).
+• If X is a ﬁnite discrete set, run GP-UCB with βt = 2 log(cid:16)|X|t2π2
+• If X = [0, r]d, run GP-UCB with βt = 2 log(cid:16) 2π2t2
+
+6δ (cid:17). Then,
+P(cid:16)∀n ≥ 1, Rn ≤(cid:112)C1nβnΨn(X )(cid:17) ≥ 1 − δ
+3δ (cid:17) + 2d log(cid:18)t2bdr(cid:113) 4ad
+δ (cid:19). Then,
+P(cid:16)∀n ≥ 1, Rn ≤(cid:112)C1nβnΨn(X ) + 2(cid:17) ≥ 1 − δ
+
+Here Ψn(X ) is the Maximum Information Gain of X after n queries (see Deﬁnition 1).
+Algorithm 2 GP-UCB
+Input: kernel κ.
+For t = 1, 2 . . .
+• D0 ← ∅, (µ0, σ2
+• (µ0, κ0) ← (0, κ)
+• for t = 1, 2, . . .
+
+0) ← (0, κ).
+
+1. xt ← argmaxx∈X µt−1(x) + β1/2
+2. yt ← Query f at xt.
+3. Dt = Dt−1 ∪ {(xt, yt)}.
+4. Perform Bayesian posterior updates to obtain µt, σt (See Equation (1)).
+
+t σt−1(x)
+
+A.3. Some Ancillary Results
+
+We will use the following results in our analysis. The ﬁrst is a standard Gaussian concentration result and the second is an
+expression for the Information Gain in a GP from Srinivas et al. (2010).
+Lemma 5 (Gaussian Concentration). Let Z ∼ N (0, 1). Then P(Z > ) ≤ 1
+Lemma 6 (Mutual Information in GP, (Srinivas et al., 2010) Lemma 5.3). Let f ∼ GP(0, κ), f : X → R and we observe
+y = f (x) +  where  ∼ N (0, η2). Let A be a ﬁnite subset of X and fA, yA be the function values and observations on
+this set respectively. Using the basic Gaussian properties they show that the mutual information I(yA; fA) is,
+
+2 exp(−2/2).
+
+I(yA; fA) =
+
+1
+2
+
+n(cid:88)t=1
+
+log(1 + η−2σ2
+
+t−1(xt)).
+
+where σ2
+
+t−1 is the posterior variance after observing the ﬁrst t − 1 points.
+
+We conclude this section with the following comment on our assumptions in Section 2.
+
+Remark 7 (Validity of the Assumptions A1, A2, A3).
+It is sufﬁcient to show that when the functions f (m) are sampled
+from GP(0, κ), the latter constraints, i.e. (cid:107)f (M )(cid:107)∞ ≤ B and (cid:107)f (M ) − f (m)(cid:107)∞ ≤ ζ (m) ∀ m, occur with positive probabil-
+ity. Then, a generative mechanism would repeatedly sample the f (m)’s from the GP and output them when the constraints
+are satisﬁed. For ﬁnite discrete X this is straightforward to show. When X is a compact space, the statement is true for
+well behaved kernels. For instance, using Assumption 8 (Appendix C) we can establish a high probability bound on the
+Lipschitz constant of the GP sample f (M ). Since for a given x ∈ X , P(−B < f (M )(x) < 0) is positive we just need to
+make sure that the Lipschitz constant is not larger than B/diam(X ). This bounds (cid:107)f (M )(cid:107)∞ < B. For the latter constraint,
+since f (M ) − f (m) ∼ GP(0, 2κ) is also a GP, the argument follows in an essentially similar fashion.
+
+Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+, ϕ(2)
+
+t
+
+, ϕ(2)
+
+t
+
+t
+
+t−1(xt) ≤ γ we play at ﬁdelity mt = 2 and otherwise at mt = 1.
+
+Illustration of MF-GP-UCB for a 2-ﬁdelity problem which has been initialised with 5 random points at the ﬁrst ﬁdelity. In
+. The solid green line is
+t ). The small crosses are queries from 1 to t − 1 and the red star is the maximiser of ϕt, i.e. the next query xt. x(cid:63),
+t−1 and the dashed black line is γ. When
+
+Figure 7.
+the top ﬁgures, the solid lines in brown and blue are f (1), f (2) respectively, and the dashed lines are ϕ(1)
+ϕt = min(ϕ(1)
+the optimum of f (2) is shown in magenta. In the bottom ﬁgures, the solid orange line is β1/2
+β1/2
+t σ(1)
+At the initial stages, MF-GP-UCB is mostly exploring X in the ﬁrst ﬁdelity. β1/2
+t−1 is large and we are yet to constrain f (1) well
+to proceed to m = 2. At t = 10, we have constrainted f (1) sufﬁciently well at a region around the optimum – β1/2
+t−1(xt) falls
+dips to change ϕt in that region. At t = 14, MF-
+below γ and we query at mt = 2. Notice that once we do this (at t = 11), ϕ(2)
+GP-UCB has identiﬁed the maximum x(cid:63) with just 4 queries to f (2). In the last ﬁgure, at t = 50, the algorithm decides to explore at
+a point far away from the optimum. However, this query occurs in the ﬁrst ﬁdelity since we have not sufﬁciently constrained f (1)(xt)
+in this region. The key idea is that it is not necessary to query such regions at the second ﬁdelity as the ﬁrst ﬁdelity alone is enough
+to conclude that it is suboptimal. Herein lies the crux of our method. The region shaded in cyan in the last ﬁgure is the good set
+Xg = {x; f (2)(x(cid:63)) − f (1)(x) ≤ ζ (1)} discussed in Section 4. Our analysis predicts that most second ﬁdelity queries in MF-GP-UCB
+will be conﬁned to this set with high probability and the simulation corroborates this claim. In addition, observe that in a large portion
+of X , ϕt is given by ϕ(1)
+
+except in a small neighborhood around x(cid:63), where it is given by ϕ(2)
+
+.
+
+t σ(1)
+
+t
+
+t
+
+t σ(1)
+
+t
+
+t σ(1)
+
+x⋆xtt=6ϕ(1)tϕ(2)tϕtf(1)f(2)x⋆xtt=8f(1)f(2)β1/2tσ(1)t−1(x)γmt=1γmt=1x⋆xtt=10f(1)f(2)x⋆xtt=11f(1)f(2)γmt=2γmt=2x⋆xtt=14f(1)f(2)x⋆xtt=50f(1)f(2)γmt=2γmt=1Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+B. Some Details on MF-GP-UCB
+An Extended Simulation
+
+In Figure 7 we provide an extended version of the simulation of Fig. 3 for a 2 ﬁdelity example. Read the caption under the
+simulation for more details.
+
+More Implementation Details
+Data dependent prior: In our experiments, following recommendations in Bull (2011) and Brochu et al. (2010) all GP
+methods were initialised with uniform random queries using an initialisation capital Λ0. For single ﬁdelity methods, we
+used it at the M th ﬁdelity, whereas for MF-GP-UCB we used Λ0/2 at ﬁdelity 1 and Λ0/2 at ﬁdelity 2. After initialising the
+kernel in this manner, we update the kernel every 25 iterations of the method by maximising the GP marginal likelihood.
+Choice of βt: βt, as speciﬁed in Theorems 4, 13 has unknown constants and tends to be too conservative in practice.
+Following Kandasamy et al. (2015) we use βt = 0.2d log(2t) which captures the dominant dependencies on d and t.
+Initial ζ, γ: We set both ζ, γ to 1% of the range of initial queries and update them as explained in the main text.
+Maximising ϕt: To determine xt we maximised ϕt using DiRect (Jones et al., 1993). For other GP methods, the EI, PI,
+GP-UCB acquisition functions were also maximised using DiRect.
+MF-GP-UCB was fairly robust to the above choices except when Λ0 was set too low in which case, all GP methods
+performed poorly on some experiments.
+
+C. Theoretical Analysis
+In this section we present our main theoretical results. While it is self contained, the reader will beneﬁt from ﬁrst reading
+the more intuitive discussion in Section 4. The goal in this section is to bound R(Λ) for MF-GP-UCB . Recall,
+
+R(Λ) = Λf(cid:63) −
+
+λ(mt)qt −(cid:18)Λ −
+
+N(cid:88)t=1
+
+N(cid:88)t=1
+
+λ(mt)(cid:19)(−B) = (cid:18)Λ −
+
+N(cid:88)t=1
+
+λ(mt)(cid:19)(f(cid:63) + B)
+(cid:125)
+(cid:123)(cid:122)
+
+˜r(Λ)
+
++
+
+λ(mt)rt
+
+,
+
+N(cid:88)t=1
+(cid:124)
+
+˜R(Λ)
+
+(cid:123)(cid:122)
+
+(cid:125)
+
+(cid:124)
+
+where N is the random number of plays within capital Λ and qt, rt are the instantaneous reward and regret as deﬁned in (2).
+The ﬁrst term ˜r(Λ) is the residual quantity. It is an artefact of the fact that after the (N + 1)th query, the spent capital would
+have exceeded Λ. It can be bounded by ˜r(Λ) ≤ 2Bλ(M ) which is typically small. Our analysis will mostly be dealing with
+the latter term ˜R(Λ) for which we will ﬁrst bound the quantity ˜Rn =(cid:80)n
+t=1 λ(mt)rt after n time steps in terms of n. Then,
+we will bound the random number of plays N within principal Λ. While N ≤ (cid:98)Λ/λ(1)(cid:99) is a trivial bound, this will be too
+loose for our purpose. In fact, we will show that after a sufﬁciently large number of time steps n, with high probability
+the number of plays at ﬁdelities lower than M will be sublinear in n. Hence N ∈ O(nΛ) where nΛ = (cid:98)Λ/λ(M )(cid:99) is the
+number of plays by any algorithm that operates only at the highest ﬁdelity.
+Our strategy to bound ˜Rn will be to identify a (possibly disconnected) measurable region of the space Z which contains
+x(cid:63) and has high value for the payoff function f (M )(x). Z will be determined by the approximations provided via the lower
+ﬁdelity evaluations. Denoting Z = X\Z, we decompose ˜Rn as follows,
+(cid:16)f(cid:63) − f (M )(xt)(cid:17)
+(cid:125)
+(cid:123)(cid:122)
+
+(cid:16)f(cid:63) − f (M )(xt)(cid:17)
+(cid:125)
+(cid:123)(cid:122)
+˜Rn,1 is the capital spent on the lower ﬁdelity queries for which we receive no reward. ˜Rn,2 is the regret due to ﬁdelity M
+queries in Z and ˜Rn,3 is due to ﬁdelity M queries outside Z. To control ˜Rn,1 we will ﬁrst bound T (m)
+(X ) for m < M.
+This will typically be small containing only polylog(n)/poly(γ) and o(n) terms. The last two terms can be controlled
+using the MIGs Ψn of Z,Z respectively (Deﬁnition 1). As we will see, ˜Rn,2 will be the dominant term in n in our ﬁnal
+M (Z) will be sublinear in n and hence ˜Rn,3
+expression since most of the ﬁdelity M queries will be conﬁned to Z. T (n)
+
++ λ(M ) (cid:88)t:mt=M
+
++ λ(M ) (cid:88)t:mt=M
+
+M−1(cid:88)m=1
+(cid:124)
+
+˜Rn ≤ 2B
+
+˜Rn,1
+
+(cid:123)(cid:122)
+
+λ(m)T (m)
+
+n
+
+(X )
+
+xt∈Z
+
+xt∈Z
+
+.
+
+(5)
+
+(cid:125)
+
+(cid:124)
+
+(cid:124)
+
+˜Rn,2
+
+˜Rn,3
+
+n
+
+Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+Figure 8. Illustration of the partition X (m)’s for a M = 4
+ﬁdelity problem. The sets J (m)
+are indicated next to their
+boundaries. X (1),X (2),X (3),X (4) are shown in green,
+blue, yellow and red respectively. An illustration for the sets
+H(m)’s would look similar.
+
+0
+
+will be of low order. When the lower ﬁdelities allow us to eliminate a large region of the space, vol(Z) (cid:28) vol(Z) and
+consequently the maximum information gain of Z will be much smaller than that of Z, Ψn(Z) (cid:28) Ψn(Z). As we will see,
+this results in much better regret for MF-GP-UCB in comparison to GP-UCB.
+For the analysis, we will need the following regularity conditions on the kernel. It is satisﬁed for four times differentiable
+kernels such as the SE and Mat´ern kernels with smoothness parameter ν > 2 (Ghosal & Roy, 2006).
+Assumption 8. Let f ∼ GP(0, κ), where κ : [0, r]d × [0, r]d → R is a stationary kernel. The partial derivatives of f
+satisﬁes the following high probability bound. There exists constants a, b > 0 such that, for all J > 0,
+
+∀ i ∈ {1, . . . , d}, P(cid:18)sup
+x (cid:12)(cid:12)(cid:12)
+
+∂f (x)
+∂xi
+
+(cid:12)(cid:12)(cid:12) > J(cid:19) ≤ ae−(J/b)2
+
+.
+
+We will need this assumption even on discrete X – one interpretation is that the GP was sampled on [0, r]d but we are
+only operating on a discrete subset. For the proofs of both the discrete and compact cases, we will need to control the
+conditional variances for queries within a subset A ⊂ X . To that end, we provide the lemma below.
+Lemma 9. Let f ∼ GP(0, κ), f : X → R and each time we query at any x ∈ X we observe y = f (x) + , where
+ ∼ N (0, η2). Let A ⊂ X . Assume that we have queried f at n points, (xt)n
+t=1 of which s points are in A. Let σt−1 denote
+the posterior variance at time t, i.e. after t − 1 queries. Then,(cid:80)xt∈A σ2
+Proof Let As = {z1, z2, . . . , zs} be the queries inside A in the order they were queried. Now, assuming that we have
+only queried inside A at As, denote by ˜σt−1(·), the posterior standard deviation after t − 1 such queries. Then,
+(cid:88)t:xt∈A
+Queries outside A will only decrease the variance of the GP so we can upper bound the ﬁrst sum by the posterior variances
+of the GP with only the queries in A. The third step uses the inequality u2/v2 ≤ log(1 + u2)/ log(1 + v2) with u =
+˜σt−1(zt)/η and v = 1/η and the last step uses Lemma 6. The result follows from the fact that Ψs(A) maximises the
+mutual information among all subsets of size s.
+
+log(1+η−2) Ψs(A).
+
+σ2
+t−1(xt) ≤
+
+˜σ2
+t−1(zt) ≤
+
+t−1(zt)
+η2
+
+t−1(xt) ≤
+
+log(1 + η−2 ˜σ2
+
+log(1 + η−2)
+
+log(1 + η−2)
+
+t−1(zt))
+
+I(yAs; fAs )
+
+s(cid:88)t=1
+
+s(cid:88)t=1
+
+s(cid:88)t=1
+
+η2 ˜σ2
+
+≤
+
+≤
+
+2
+
+2
+
+C.1. Discrete X
+We ﬁrst analyse when X is a discrete subset of [0, r]d. Denote ∆(m)(x) = f(cid:63) − f (m)(x) − ζ (m) and J (m)
+m=1, (H(m))M
+X ; ∆(m)(x) ≤ η}. Let ρ > 1 be given. Central to our analysis will be two partitionings (X (m))M
+The latter depends on the parameter γ and the given ρ. Let X (1) = J
+ργ . Then deﬁne,
+M−1(cid:92)(cid:96)=1
+M−1(cid:92)(cid:96)=1
+
+0 (cid:33) for 2 ≤ m ≤ M − 1,
+J ((cid:96))
+ργ(cid:33) for 2 ≤ m ≤ M − 1,
+J ((cid:96))
+
+0 ∩(cid:32)m−1(cid:92)(cid:96)=1
+ργ ∩(cid:32)m−1(cid:92)(cid:96)=1
+
+0 , H(1) = J
+
+X (m) = J
+
+H(m) = J
+
+X (M ) =
+
+H(M ) =
+
+J ((cid:96))
+0 .
+
+J ((cid:96))
+ργ .
+
+(m)
+
+(m)
+
+(1)
+
+(1)
+
+η
+
+= {x ∈
+m=1 of X .
+
+(6)
+
+We have illustrated these sets in ﬁgure 8. The partitioning {X (m)}M
+m=1 is entirely problem dependent and is fundamental
+to the problem. Intuitively, X (m) is the set of points in X that can be safely excluded from queries beyond the mth ﬁdelity
+
+Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+(cid:96)=m+1 H((cid:96)) and the sets “below” H(m) as
+
+(cid:98)
+H(m) = (cid:83)m−1
+
+since they are sufﬁciently far away from f(cid:63). We are interested in settings where |X (m)| (cid:29) |X (m−1)| but λ(m) (cid:28) λ(m−1).
+For instance consider an M = 2 problem in optimal policy search in robotics, where the ﬁrst ﬁdelity is a simulator and the
+second ﬁdelity is the real world experiment. Hence λ(1) (cid:28) λ(2). The simulator can be used to exclude several bad policies
+and we can use the expensive real world experiments on a promising set of candidates X (2) as informed by the simulations.
+Our analysis of MF-GP-UCB will use slightly inﬂated regions H(m) instead of X (m). The parameter γ causes us to
+explore at a slightly larger region than X (m) at the mth ﬁdelity. X (m) is the smallest such set that can be excluded from
+(cid:98)
+> m ﬁdelity queries by letting γ → 0. In addition to the above, we will also ﬁnd it useful to deﬁne the sets “above” H(m)
+as (cid:98)H(m) = (cid:83)M
+(cid:96)=1 H((cid:96)). Intuitively, H(m) is the set of points that
+MF-GP-UCB will query at the mth ﬁdelity but exclude from higher ﬁdelities due to information from ﬁdelity m.
+H(m)
+is the set of points that can be excluded from queries at ﬁdelities m and beyond due to information from lower ﬁdelities.
+(cid:98)H(m) are points that need to be queried at ﬁdelities higher than m. In the 2 ﬁdelity setting described in Section 4, the bad
+set Xb is X (1) and the good set Xg is X (2). Similarly, (cid:101)Xb,ρ is H(1) and (cid:101)Xg,ρ is H(2).
+We now state our main theorem for the discrete case.
+Theorem 10. Let X be a discrete subset of [0, r]d.
+Let f (m) ∼ GP(0, κ) for all m. Assume that f (m)’s
+satisfy assumptions A2, A3 and κ satisfy Assumption 8. Pick δ ∈ (0, 1) and run MF-GP-UCB with βt =
+(cid:17). Then, for all α ∈ (0, 1), and ρ = max(2, 1 +(cid:112)1/2 + 1/α) and sufﬁciently large Λ we have
+2 log(cid:16) M|X|π2t2
+(X )(cid:17), with high probability. Here nΛ = (cid:98)Λ/λ(M )(cid:99) is
+R(Λ) ∈ O(cid:16) λ(M )(cid:112)nΛβnΛ ΨnΛ (H(M )) + λ(M )(cid:113)nα
+the number of plays by an algorithm that only plays at the highest ﬁdelity.
+Precisely, there exists Λ0 such that for all Λ ≥ Λ0 with probability > 1 − δ we have,
+γ2 β2nΛ + 1(cid:19)
+λ(m) (cid:88)x∈H(m)(cid:26) 5η2
+
+(cid:98)
+H(m)|(2nΛ)α + |(cid:98)H(m)|(cid:18) η2
+
+∆(m)(x)2 β2nΛ + 1(cid:27) + |
++ λ(M )(cid:113)2C1nΛβ2nΛ Ψ2nΛ (H(M )) + λ(M )(cid:113)2|X|C1nα
+
+R(Λ) ≤ 2Bλ(M ) + 2B
+
+Λβ2nΛ Ψ2|X|nα
+
+M−1(cid:88)m=1
+
+ΛβnΛ Ψnα
+
+(X ) ,
+
+3δ
+
+Λ
+
+Λ
+
+where C1 = 8/ log(1 + η2). Recall that the sets H(m) depend on ρ.
+Synopsis: Before we provide the proof,
+theorem.
+
+From Theorem 4 we can infer that
+
+let us interpret
+
+the terms above in order to distill
+the regret for GP-UCB which plays only at
+
+the gist of the
+the highest ﬁ-
+the regret for MF-GP-UCB is
+
+Λ
+
+ΛΨnα
+
+Ignoring the common terms and constants,
+
+delity is O(cid:16)λ(M )(cid:112)nΛβnΛ ΨnΛ (X )(cid:17).
+λ(M )(cid:112)nΛΨnΛ (H(M )) + λ(M )(cid:113)nα
+(X ), ∀ α > 0 and that for GP-UCB is λ(M )(cid:112)nΛΨnΛ (X ) for GP-UCB. In
+the lower ﬁdelities provide a good approximation for f (M ), MF-GP-UCB
+the cases where vol(H(M )) (cid:28) vol(X ), i.e.
+signiﬁcantly outperforms GP-UCB whose exploration complexity Ψ for X is coupled with nΛ. In contrast, the coupling
+with nΛ for MF-GP-UCB is with the much smaller region H(M ) and the MIG Ψn for X is only sublinear in nΛ. This
+directly captures our intuitions behind using the lower ﬁdelities: to eliminate the bad regions of X and use the high ﬁdelity
+evaluations only to explore at the promising regions. The price we have to pay though is that we spend part of our capital
+on lower ﬁdelity evaluations. But these terms are either logarithmic or sublinear in nΛ. In addition, these evaluations are
+cheaper than ﬁdelity M evaluations so these terms are of low order.
+Proof of Theorem 10. First we consider MF-GP-UCB after n steps regardless of which ﬁdelities it has queried at and
+obtain a bound on ˜Rn. Then we will bound the number of plays N within capital Λ. We will need the following two
+lemmas for our analysis. Lemma 11 is used to establish that ϕt(x) upper bounds f (M )(x). Lemma 12 bounds T (m)
+(x) for
+different x, m which we will use to control ˜Rn,1 and ˜Rn,3. The proofs are given in Sections C.1.1 and C.1.2.
+
+n
+
+Lemma 11. Pick δ ∈ (0, 1) and choose βt = 2 log(cid:16) M|X|π2t2
+all x ∈ X and for all m ∈ {1, . . . , M}, we have |f (m)(x) − µ(m)
+Lemma 12. Pick δ ∈ (0, 1) and set βt = 2 log(cid:16) M|X|π2t2
+
+(cid:17). Then, with probability at least 1 − δ/2, for all t ≥ 1, for
+t−1(x)| ≤ β1/2
+(cid:17). Let ρ ≥ 2. Further assume ϕt(x(cid:63)) ≥ f(cid:63). Consider any
+
+t−1(x).
+
+t σ(m)
+
+3δ
+
+3δ
+
+Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+T (1)
+n (x)
+T (2)
+n (x)
+...
+T (m)
+n
+...
+T (M )
+n
+
+(x)
+
+(x)
+
+H(1)
+
+5η2
+
+∆(m)(x)2 βn + 1
+
+H(2)
+η2
+γ2 βn + 1
+5η2
+
+∆(m)(x)2 βn + 1
+
+nα
+
+nα
+
+H(m)
+η2
+γ2 βn + 1
+η2
+γ2 βn + 1
+
+5η2
+
+∆(m)(x)2 βn + 1
+
+. . .
+. . .
+
+. . .
+
+H(M )\{x(cid:63)}
+η2
+γ2 βn + 1
+η2
+γ2 βn + 1
+
+η2
+γ2 βn + 1
+
+. . .
+. . .
+
+. . .
+
+nα
+
+5η2
+
+∆(m)(x)2 βn + 1
+
+Table 1. Bounds on the number of queries for each x ∈ H(m) (columns) at each ﬁdelity (rows). The bound for T (M )
+for all arms except the optimal arm x(cid:63) (note ∆(M )(x(cid:63)) = 0 ).
+
+n
+
+(x) in H(M ) holds
+
+x ∈ H(m)\{x(cid:63)} for m < M. We then have the following bounds on the number of queries at any given time step n,
+
+P(cid:18)T (m)
+
+n
+
+(x) > (cid:24)5(cid:16)
+
+T ((cid:96))
+n (x) ≤
+
+η
+
+∆(m)(x)(cid:17)2
+P(cid:16)T (>m)
+
+βn(cid:25)(cid:19) ≤
+(x) > u(cid:17) ≤
+
+n
+
+for (cid:96) < m,
+
+1
+
+1
+
+η2
+γ2 βn + 1,
+3δ
+|X|n2 ,
+2π2
+3δ
+|X|u2(ρ−1)2−1 .
+2π2
+(x) > (cid:24)5(cid:16)
+
+First whenever ϕt(x(cid:63)) ≥ f(cid:63), by using the union bound on the second result of Lemma 12, we have
+∆(m)(x)(cid:17)2
+
+P(cid:18) ∀ n ≥ 1, ∀ m ∈ {1, . . . , M}, ∀ x ∈ H(m)\{x(cid:63)}, T (m)
+
+η
+
+n
+
+βn(cid:25)(cid:19) ≤
+
+Here we have used(cid:80) n−2 = π2/6 and that the last two quantiﬁers just enumerates over all x ∈ X\{x(cid:63)}. In the third
+result of Lemma 12 we use u = nα and ρ = 1 +(cid:112)1/2 + 1/α as given in the theorem. Then, u2(ρ−1)2−1 = n2. Applying
+
+the union bound once again we have,
+
+δ
+4
+
+.
+
+P(cid:16) ∀ n ≥ 1, ∀ m ∈ {1, . . . , M}, ∀ x ∈ H(m), T (>m)
+
+n
+
+(x) > nα(cid:17) ≤
+
+δ
+4
+
+The condition for Lemma 12 holds with probability > 1 − δ/2 (by Lemma 11), and the above bounds hold together with
+probability > 1 − δ. We have tabulated the bounds in Table 1 and will use it to bound ˜Rn. Consider T (m)
+(x) for any
+m < M. From the table we can read off the following bound,
+
+n
+
+T (m)
+n
+
+(X ) ≤ |
+
+(cid:98)
+H(m)|nα + |(cid:98)H(m)|(cid:18) η2
+
+γ2
+
+log(n) + 1(cid:19) + (cid:88)x∈H(m)
+
+5η2
+
+∆(m)(x)2 βn + 1
+
+By summing the above over 1, . . . , M − 1 we can bound ˜Rn,1. Now we use Lemma 11 to control the instantaneous regret.
+
+f(cid:63) − f (M )(xt) ≤ ϕt(x(cid:63)) − (µ(M )
+t−1 (xt)
+
+≤ 2β1/2
+
+t σ(M )
+
+t−1 (xt) − β1/2
+
+t σ(M )
+
+t−1 (xt)) ≤ ϕt(xt) − (µ(M )
+
+t−1 (xt) − β1/2
+
+t σ(M )
+
+t−1 (xt))
+
+ϕ(m)
+t
+we have used that xt was the maximiser of ϕt(x) and that ϕ(M )
+and Z = H
+
+(x) is an upper bound for f (M )(x) by Lemma 11 and the assumption A2, and hence so is the minimum ϕt(x). Above
+(x) ≥ ϕt(x). To control ˜Rn,2, ˜Rn,3 we will use Z = H(M )
+i yields,
+
+(cid:98)
+H(M ) and invoke Lemma 9. Applying Jensen’s inequality in the form(cid:0)(cid:80)s
+˜R2
+n,3 ≤ T (m)
+
+i=1 ai(cid:1)2
+t−1(xt))2
+
+≤ s(cid:80)s
+
+≤ T (m)
+
+4βt(σ(m)
+
+i=1 a2
+
+(M )
+
+=
+
+n
+
+n
+
+t
+
+(cid:16)f(cid:63) − f (M )(xt)(cid:17)2
+
+(Z) (cid:88)t:mt=M
+
+xt∈Z
+
+(Z) (cid:88)t:mt=M
+
+xt∈Z
+(Z)βnΨ
+
+≤ C1T (m)
+
+n
+
+T (m)
+n (Z)
+
+(Z)
+
+(7)
+
+(8)
+
+Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+where C1 = 8/ log(1+η−2). Once again, using Table 1 we can bound T (M )
+
+n
+
+(
+
+have ˜Rn,3 ≤(cid:112)|X|αC1nαβnΨ(|X|n)α (X ). Bounding ˜Rn,2 follows essentially a similar procedure. Since T (m)
+n trivially, we have ˜Rn,2 ≤(cid:112)C1nβnΨn(X ).
+The expressions we now have for ˜Rn,1, ˜Rn,2, ˜Rn,3 match the expressions given in the theorem by replacing 2nΛ with n.
+Next we will show that for sufﬁciently large Λ, N ≤ 2nΛ which will complete the proof. For this we ﬁrst observe,
+
+n
+
+H(M )) ≤ |
+
+(cid:98)
+
+(cid:98)
+H(M )|nα ≤ |X|nα. Therefore we
+(H(m)) ≤
+
+T (m)
+n
+
+(x) ≤
+
+T (>m)
+n
+
+(x) ≤ |X|nα.
+
+(9)
+
+M−2(cid:88)m=1 (cid:88)x∈H(m)
+|(cid:98)H(m)|(cid:18) η2
+
+M−1(cid:88)m=1 (cid:88)x∈(cid:98)H(m)
+
+T (m)
+n
+
+(x) =
+
+M−1(cid:88)m=1
+
+m−1(cid:88)(cid:96)=1 (cid:88)x∈H((cid:96))
+M−1(cid:88)m=1 (cid:88)x∈H(m)(cid:32) 5η2
+
+Therefore, the following upper bounds the number of queries at ﬁdelities less than M after n time steps,
+
+∆(m)(x)2 βn + 1(cid:33) +
+
+|X|nα +
+
+M−1(cid:88)m=1
+Note that since βn ∈ O(log(n)) this bound is sublinear in n. Say we have queried an n0 number of times such that
+for all n ≥ n0, the above is less than n/2. For all such n, T (M )
+(X ) > n/2 and therefore the expended budget after
+n rounds Λ(n) satisﬁes Λ(n) ≥ λ(M )n/2. Since our bounds hold with probability > 1 − δ for all n we can invert the
+above inequality to bound the number of random plays N after some capital Λ; N ≤ 2Λ/λ(M ) = 2nΛ. We only need
+to make sure that N ≥ n0 which can be guaranteed if Λ ≥ Λ0 := λ(M )(n0 + 1) since N ≥ (cid:98)Λ/λ(M )(cid:99). Therefore
+R(Λ) ≤ ˜r(Λ) + ˜R2nΛ,1 + ˜R2nΛ,2 + ˜R2nΛ,3. The theorem follows with the ﬁnal detail ˜r(Λ) ≤ 2Bλ(M ).
+C.1.1. PROOF OF LEMMA 11
+
+γ2 βn + 1(cid:19) .
+
+n
+
+This is a straightforward argument using Gaussian concentration and the union bound but we present it here to point out a
+subtle conditioning argument with multiple ﬁdelities. First consider any given m, t, x.
+
+P(cid:16)|f (m)(x) − µ(m)
+
+t−1(x)| > β1/2
+
+t σ(m)
+
+t−1(x)(cid:17) = E(cid:104)E(cid:104)|f (m)(x) − µ(m)
+Z∼N (0,1)(cid:16)|Z| > β1/2
+
+= E(cid:104)P
+
+t−1(x)| > β1/2
+t (cid:17)(cid:105) ≤ exp(cid:16) βt
+
+t−1(x)(cid:12)(cid:12)(cid:12) D(m)
+t−1(cid:105)(cid:105)
+2(cid:17) =
+M|X|π2t2 .
+
+t σ(m)
+
+3δ
+
+In the ﬁrst step we have conditioned w.r.t D(m)
+t−1 which allows us to use Lemma 5. The posterior conditioned on all queries
+will not be a Gaussian due to the ζ (m) constraints. We will be using this conditioning argument repeatedly in our analysis.
+The statement follows via a union bound over all m ∈ {1, . . . , M}, x ∈ X and all t and noting that(cid:80)t t−2 = π2/6.
+C.1.2. PROOF OF LEMMA 12
+First consider any (cid:96) < m. Assume that we have already queried η2βn/γ2 + 1 times at any t ≤ n. Since the Gaussian
+variance after s observations is η2/s and that queries elsewhere will only decrease the conditional variance we have,
+t−1(x, x) ≤ η2
+κ((cid:96))
+t−1(x) < γ and by the design of our algorithm we will not
+play at the (cid:96)th ﬁdelity at time t for all t until n. This establishes the ﬁrst result.
+
+t−1(x) < β1/2
+
+. Therefore, β1/2
+
+t σ((cid:96))
+
+n σ((cid:96))
+
+< γ2
+βn
+
+t−1(x)
+
+T ((cid:96))
+
+To bound T (m)
+
+n
+
+(x) we ﬁrst observe,
+
+1(cid:8)T (m)
+
+n
+
+(x) > u(cid:9) ≤ 1(cid:8)∃t : u + 1 ≤ t ≤ n : ϕt(x) was maximum ∧ β1/2
+t−1 (x) ≥ u(cid:9)
+t−1 (x) ≥ u(cid:9)
+≤ 1(cid:8)∃t : u + 1 ≤ t ≤ n : ϕt(x) > ϕt(x(cid:63)) ∧ T (m)
+t−1 (x) ≥ u(cid:9).
+≤ 1(cid:8)∃t : u + 1 ≤ t ≤ n : ϕ(m)
+(x) > f(cid:63) ∧ T (m)
+
+t−1(x) ≥ γ ∧ T (m)
+
+β1/2
+t σ(m)
+
+t σ((cid:96))
+
+t
+
+t−1(x) < γ, ∀ (cid:96) < m ∧
+
+The ﬁrst line just enumerates the conditions in our algorithm for it to have played x at time t at ﬁdelity m. In the second
+step we have relaxed some of those conditions, noting in particular that if ϕt(·) was maximised at x then it must be
+larger than ϕt(x(cid:63)). The last step uses the fact that ϕ(m)
+(x) ≥ ϕt(x) and the assumption on ϕt(x(cid:63)). Consider the event
+
+t
+
+(10)
+
+Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+2
+
+t
+
+t
+
+t σ(m)
+
+t σ(m)
+
+{ϕ(m)
+
+(x) > f(cid:63) ∧ T (m)
+P(cid:16)ϕ(m)
+
+t−1 (x) ≥ u}. We will choose u = (cid:100)5η2βn/∆(m)(x)
+
+(cid:101) and bound its probability via,
+t−1 (x) ≥ u(cid:17)
+t−1 (x) > u(cid:19)
+
+t−1(x) ∧ T (m)
+
+(x) > f(cid:63) ∧ T (m)
+= P(cid:18)µ(m)
+≤ P(cid:16)µ(m)
+≤ P
+
+t−1 (x) ≥ u(cid:17) = P(cid:16)µ(m)
+t−1(x) + ζ (m) > f(cid:63) ∧ T (m)
+t−1(x) + β1/2
+−β1/2
+t−1(x) − f (m)(x) > f(cid:63) − f (m)(x) − ζ (m)
+(cid:125)
+(cid:123)(cid:122)
+t−1(x)(cid:17)
+t−1(x) − f (m)(x) > (√5 − 1)β1/2
+exp(cid:18)−
+n (cid:17) ≤
+Z∼N (0,1)(cid:16)Z >
+Above in the third step we have used, if u ≥ 5η2βn/∆(m)(x)
+t−1(x) and that βn ≥ βt.
+t−1, the ﬁfth step uses (√5 − 1)2 > 3/2 and the last step uses
+The fourth step uses Lemma 5 after conditioning on D(m)
+(x) > u) ≤(cid:80)n
+3δ/|X|π2 < 1. Now use the union bound on (10), P(T (m)
+t−1 (x) ≥ u). The
+second inequality of the theorem follows by noting that there are at most n terms in the summation.
+Finally, for the third inequality we observe
+
+M|X|π2(cid:19) 3
+2(cid:18) 3δ
+2, then ∆(m)(x) ≥ √5β1/2
+
+(cid:124)
+(√5 − 1)2
+
+(x) > f(cid:63) ∧ T (m)
+
+βn(cid:19) =
+
+|X|π2 n−3
+
+n−3 ≤
+
+n σ(m)
+
+P(ϕ(m)
+
+n σ(m)
+
+∆(m)(x)
+
+β1/2
+
+t=u+1
+
+1
+2
+
+3
+4
+
+1
+2
+
+3δ
+
+2
+
+1
+
+n
+
+t
+
+2
+
+(11)
+
+P(T (>m)
+
+n
+
+(x) > u) ≤ P(cid:0)∃t : u + 1 ≤ t ≤ n ; ϕ(m)
+
+t
+
+(x) > f(cid:63) ∧ β1/2
+
+t σ(m)
+
+t−1(x) < γ(cid:1).
+
+As before, we have used that if x is to be queried at time t, then ϕt(x) should be at least larger than ϕt(x(cid:63)) which is larger
+than f(cid:63) due to the assumption in the theorem. The second condition is necessary to ensure that the switching procedure
+proceeds beyond the mth ﬁdelity. It is also necessary to have β1/2
+t−1(x) < γ for (cid:96) < m, but we have relaxed them. We
+ﬁrst bound the probability of the event {ϕ(m)
+(x) > f(cid:63) ∧ β1/2
+t−1(x) < γ}.
+t−1(x) < γ(cid:1)
+P(cid:0)ϕ(m)
+t−1(x) − f (m)(x) > ∆(m)(x) − β1/2
+t−1(x) ∧ β1/2
+t−1(x) < γ(cid:1)
+t−1(x) ∧ β1/2
+Z∼N (0,1)(cid:16)Z > (ρ − 1)β1/2
+t (cid:17)
+t−1(x)(cid:1) ≤ P
+|X|π2 t−2(ρ−1)2
+
+t−1(x) < γ(cid:1) = P(cid:0)µ(m)
+(x) > f(cid:63) ∧ β1/2
+≤ P(cid:0)µ(m)
+t−1(x) − f (m)(x) > ργ − β1/2
+≤ P(cid:0)µ(m)
+t−1(x) − f (m)(x) > (ρ − 1)β1/2
+2(cid:18) 3δ
+exp(cid:18)−
+M|X|π2(cid:19)(ρ−1)2
+
+t σ(m)
+t σ(m)
+
+βt(cid:19) =
+
+t σ((cid:96))
+t σ(m)
+
+(ρ − 1)2
+
+t−2(ρ−1)2
+
+t σ(m)
+
+t σ(m)
+
+t σ(m)
+
+t σ(m)
+
+≤
+
+≤
+
+1
+2
+
+1
+2
+
+3δ
+
+2
+
+1
+
+t
+
+t
+
+Here, the second step uses that for all x ∈ H(m), ∆(m)(x) > ργ. The third step uses the second condition and the last step
+uses that ρ ≥ 2. Using the union bound on (11) and bounding the sum by an integral gives us,
+1
+2
+
+P(T (>m)
+
+t−2(ρ−1)2
+
+(x) > u) ≤
+
+dt ≤
+
+u2(ρ−1)2−1 .
+
+≤
+
+1
+2
+
+1
+2
+
+3δ
+
+3δ
+
+1
+
+n
+
+|X|π2 t−2(ρ−1)2
+
+|X|π2(cid:90) ∞
+
+u
+
+3δ
+|X|π2
+
+n(cid:88)t=u+1
+
+Some Remarks
+
+n
+
+(x) is η2
+
+1. Since the switching criterion of MF-GP-UCB (step 2 in Algorithm 1) makes sure that we do not query often at a lower
+
+(cid:98)
+(cid:98)
+ﬁdelity, an easy upper bound for T (m)
+γ2 βn + 1. While we have used this to bound the number of plays in (cid:98)H(m)
+we have used different techniques for the points in H(m),
+H(m). The main reason is to avoid the γ−2 dependence on
+(cid:98)
+H(m)| (cid:29) |H(m)| (cid:29) |(cid:98)H(m)|. In particular, we can
+these arms, especially since we are interested in settings where |
+control the number of plays at the mth ﬁdelity for any x ∈ H(m) using the difference ∆(m)(x). For arms that are far
+H(m), its
+away from the optimum this provides a tighter bound. Even though the dependence is polynomial in n for
+best to avoid the γ−2 dependence since we would like to keep γ as small as possible so that H(m) approaches X (m).
+2. A polylog(nΛ) rate can also be shown for the discrete case, similar to Theorem 1 in Dani et al. (2008), but it will have
+
+worse dependence on Ψ. We stick to the above form which is comparable to the results of Srinivas et al. (2010).
+
+Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+τ
+
+τ
+
+τ
+
+η
+
+(1)
+
+(m)
+
+(12)
+
+τ = J
+
+H(M )
+τ =
+
+H(m)
+τ = J
+
+J ((cid:96))
+max(τ,ργ).
+
+as (cid:98)H(m)
+
+max(τ,ργ). Then deﬁne,
+
+max(τ,ργ) ∩(cid:32)m−1(cid:92)(cid:96)=1
+
+be as deﬁned in the discrete case. The ﬁrst partitioning, {X (m)}M
+
+(cid:98)
+as
+Hτ
+(cid:54)= ∅ ∧ x /∈
+τ,n . Here, B2(x, ) is an L2 ball of radius  centred at x. The sets {H(m)
+τ,n }M
+m=1
+. In addition to the above, denote the ε
+
+and the sets below H(m)
+2d ) ∩ H(m)
+
+C.2. Compact and Convex X
+We now analyse the case when X is a compact and convex subset of [0, r]d. For this, similar to the discrete case we will
+deﬁne two partitionings of the space X . Let J (m)
+m=1 is
+problem dependent and is exactly as deﬁned before. The second {H(m)
+m=1 is deﬁned for the γ used in the algorithm and
+}M
+for any given ρ, τ > 0. We make the dependence on τ explicit and write H(1)
+max(τ,ργ)(cid:33) for 2 ≤ m ≤ M − 1,
+J ((cid:96))
+(cid:96)=m+1 H((cid:96))
+
+M−1(cid:92)(cid:96)=1
+= (cid:83)M
+In addition, as before deﬁne the sets above H(m)
+τ,n = {x ∈ X : B2(x, r√d/n
+(cid:83)m−1
+(cid:96)=1 H((cid:96))
+τ . Finally, for any given α > 0 we will also deﬁne H(m)
+(cid:98)H(m)} to be an n-dependence inﬂation of H(m)
+depend on ρ, γ, τ, n and α. Notice that for any α > 0, as n → ∞, H(m)
+covering number of a set A ⊂ X in the (cid:107) · (cid:107)2 metric by Ωε(A). Our main theorem is as follows.
+Theorem 13. Let X ⊂ [0, r]d be compact and convex. Let f (m) ∼ GP(0, κ) ∀ m, and satisfy assumptions A2, A3. Let κ
+satisfy Assumption 8 with some constants a, b. Pick δ ∈ (0, 1) and run MF-GP-UCB with
+2δ (cid:19) + 4d log(t) + max(cid:26) 0 , 2d log(cid:18)brd log(cid:18) 6M ad
+For all α ∈ (0, 1), τ > 0, ρ > ρ0 = max{2, 1 +(cid:112)(1 + 2/α)/(1 + d)} and sufﬁciently large Λ, we have R(Λ) ∈
+τ,nΛ ) + diam((cid:98)H(m)
+O(cid:18)(cid:80)M
+(cid:98)
+Precisely, there exists Λ0 such that for all Λ ≥ Λ0, with probability > 1 − δ we have,
+R(Λ) ≤ 2Bλ(M ) + λ(M )(cid:20)(cid:113)2C1M nα
+H(M )) + (cid:113)2C1nΛΨ2nΛ (H(M )
+τ (cid:18)(cid:113)2C1nΛβ2nΛ Ψ2nΛ (H(m)
+λ(m)(cid:20) (m − 1)(2nα
+
+δ (cid:19)(cid:19)(cid:27) .
+(cid:19). Here, nΛ = (cid:98)Λ/λ(M )(cid:99) as before.
+
+βt = 2 log(cid:18) M π2t2
+m=1 λ(m)(cid:113)nΛβnΛΨnΛ (H(m)
+
+τ,n → H(m)
+
+6 (cid:21)
+
+ΛΨ2M nα
+
+)dpolylog(nΛ)
+
+τ,nΛ ) +
+
+(m) =
+
++ 2B
+
+poly(γ)
+
+π2
+
+(
+
+τ
+
+τ
+
+τ
+
+τ
+
+τ
+
+Λ
+
+α
+
+M−1(cid:88)m=1
+
+where C1 = 8/ log(1 + η2). For the SE kernel εn =
+For the Mat´ern kernel εn =
+dependent constants. As Λ → ∞, nΛ → ∞ and hence H(m)
+Synopsis: Ignoring the common terms, constants and nα
+
+8CM atβn
+
+γ2
+
+τ
+
+1
+
+π2
+
+Λ) +
+
+τ,nΛ ) +
+
+γ√8CSE βn
+
+and therefore Ωεn ((cid:98)H(m)) ∈ O(cid:16) diam((cid:98)H(m))d(log(n))d
+
+6 (cid:19) + Ωεn ((cid:98)H(m)
+
+γ2 βn + 1(cid:19)(cid:21) ,
+)(cid:18) 2η2
+, and therefore Ωεn ((cid:98)H(m)) ∈ O(cid:16) diam((cid:98)H(m))d(log(n))d/2
+(cid:17).
+(cid:17). CSE, CM at are kernel
+τ,nΛ → H(m)
+Λ terms, the regret for GP-UCB is λ(M )(cid:112)nΛΨnΛ(X ) whereas for
+) (cid:28) ··· (cid:28) vol(H(1)
+ΛΨnα
+
+for all m ∈ {1, . . . , M} and α ∈ (0, 1).
+
+γ2d
+
+γd
+
+τ
+
+τ,n ). In problems where vol(H(M )
+
+MF-GP-UCB it is(cid:80)m λ(m)(cid:113)nΛΨnΛ (H(m)
+τ,n ) (cid:28) vol(H(M−1)
+τ,n) =
+vol(X ), MF-GP-UCB achieves better regret than GP-UCBsince λ(m) (cid:28) λ(m+1). The λ(m)(cid:113)nα
+τ,n ) terms can
+be made arbitrarily small by picking large enough ρ, provided H(m)
+τ,n is still small relative to X . On the other hand the
+)polylog(nΛ)/poly(γ) terms could be big if γ is too small. MF-GP-UCB requires that γ will be chosen large
+diam((cid:98)H(m)
+enough so that the above term remains small relative to(cid:113)nΛβnΛΨnΛ (H(m)
+) which is not too restrictive since we expect
+(cid:98)H(m)
+. While this bound illustrates the trade-off on the choice of γ – for small γ, the
+1/poly(γ) term increases but the set sizes H(m) decreases – it does not suggest a way to choose γ in practice since there
+are several problem dependent terms. Our heuristics for setting γ seemed to work well in practice (see Section 5).
+
+to be much smaller than H(m)
+
+(H(m)
+
+τ,n
+
+τ
+
+τ
+
+τ
+
+τ
+
+Λ
+
+Proof of Theorem 13. Once again, we will study MF-GP-UCB after n time steps regardless of the queried ﬁdelities and
+bound ˜Rn. Then we will bound the number of plays N within capital Λ. For the analysis, at time n we will consider
+
+Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+τ
+
+τ
+
+τ
+
+n }m−1
+
+Figure 9. Illustration of the sets {F ((cid:96))
+The grid represents a r
+
+gion is (cid:98)H(m)
+(cid:98)H(m)
+) is H(m)
+(cid:83)m−1
+inﬂating H(m)
+(cid:96)=1 F ((cid:96))
+(cid:98)H(m)
+are entirely outside H(m)
+
+(cid:96)=1 with respect to H(m)
+√
+.
+d/nα/2d covering of X . The yellow re-
+. The area enclosed by the solid red line (excluding
+. H(m)
+√
+τ,n , shown by a dashed red line, is obtained by
+by r
+d/nα/2d. The grey shaded region represents
+n contains the cells which
+τ,n is such that
+τ,n → H(m)
+.
+
+n . By our deﬁnition,(cid:83)m−1
+τ,n ∪ (cid:83)m−1
+
+. However, the inﬂation H(m)
+n = X . As n → ∞, H(m)
+
+(cid:96)=1 F ((cid:96))
+
+∪ H(m)
+
+(cid:96)=1 F ((cid:96))
+
+τ
+
+τ
+
+τ
+
+τ
+
+τ
+
+2n
+
+α
+2d
+
+-covering of the space X of size n
+
+a r√d
+2 . For instance, if X = [0, r]d a sufﬁcient discretisation would be an equally
+spaced grid having nα/2d points per side. Let {ai,n}n
+i=1 be the cells in the
+covering, i.e. Ai,n is the set of points which are closest to ai,n in the covering. Next we deﬁne another partitioning of the
+space similar in spirit to (12) using this partitioning. First let F (1)
+
+i=1 be the points in the covering, Fn = {Ai,n}n
+
+n = {Ai,n ∈ Fn : Ai,n ⊂ J (1)
+
+max(τ,ργ)}. Next,
+
+α
+2
+
+α
+2
+
+α
+
+Note that F (m)
+
+illustrated(cid:83)m−1
+
+(m)
+
+F ((cid:96))
+
+F (m)
+
+n (cid:41)
+
+max(τ,ργ) ∧ Ai,n /∈
+
+n =(cid:40) Ai,n ∈ Fn : Ai,n ⊂ J
+n ⊂ Fn. We deﬁne the following disjoint subsets {F (m)
+(cid:96)=1 F ((cid:96))
+
+m−1(cid:91)(cid:96)=1
+m=1 of X via F (m)
+Ai,n. We have
+n }M−1
+in Figure 9. By noting that H(1)
+n with respect to H(m)
+τ,n = H(1) we make the following observation,
+m−1(cid:88)(cid:96)=1
+
+for 2 ≤ m ≤ M − 1.
+n =(cid:83)Ai,n∈F (m)
+((cid:98)H(m)).
+
+τ,n ) + T (m)
+
+n ) + T (m)
+
+(X ) ≤
+
+(H(m)
+
+(F ((cid:96))
+
+T (m)
+n
+
+T (m)
+n
+
+(13)
+
+(14)
+
+n
+
+n
+
+τ
+
+n
+
+(cid:96)=1 F ((cid:96))
+
+τ,n ∪ (cid:98)H(m) ⊂(cid:83)m−1
+
+n (See Fig. 9). To control ˜Rn we will bound control each of these
+
+This follows by noting that H(m)
+terms individually. First we focus on (cid:98)H(m) for which we use the following lemma. The proof is given in Section C.2.1.
+Lemma 14. Let f ∼ GP(0, κ), f : X → R and we observe y = f (x) +  where  ∼ N (0, η2). Let A ⊂ X such that its
+L2 diameter diam(A) ≤ D. Say we have n queries (xt)n
+t=1 of which s points are in A. Then the posterior variance of the
+GP, κ(cid:48)(x, x) at any x ∈ A satisﬁes
+κ(cid:48)(x, x) ≤(cid:40) CSED2 + η2
+
+if κ is the SE kernel,
+if κ is the Mat´ern kernel,
+
+CM atD + η2
+
+s
+
+s
+
+for appropriate constants CSE, CM at.
+
+First consider the SE kernel. At time t consider any εn =
+inside any Bi of this covering at time n will be at most 2η2
+times inside Bi at time t ≤ n. By Lemma 14 the maximum variance in Ai can be bounded by
+
+covering (Bi)εn
+
+γ√8CSE βn
+
+i=1 of (cid:98)H(m). The number of queries
+
+γ2 βn + 1. To see this, assume we have already queried 2η2/γ2 + 1
+
+n σ(m)
+
+Therefore, β1/2
+
+t σ(m)
+
+t−1(x) ≤ β1/2
+
+ﬁdelity queries is bounded by Ωεn ((cid:98)H(m))(cid:16) 2η2
+
+. Next, we bound T (m)
+
+(H(m)
+
+8CM atβn
+
+γ2
+
+n
+
+η2
+T (m)
+t
+
+γ2
+βn
+
+κ(m)
+t−1(x, x) ≤ CSE(2εn)2 +
+max
+x∈Ai
+t−1(x) < γ and we will not query inside Ai until time n. Therefore, the number of mth
+γ2 βn + 1(cid:17). The proof for the Mat´ern kernel follows similarly using εn =
+
+τ,n ) for which we will use the following Lemma. The proof is given in Section C.2.2.
+
+(Ai)
+
+<
+
+.
+
+Lemma 15. For βt as given in Theorem 13, we have the following with probability > 1 − 5δ/6.
+
+∀ m ∈ {1, . . . , M}, ∀ t ≥ 1, ∆(m)(xt) = f(cid:63) − f (m)(xt) ≤ 2βtσ(m)
+
+t−1(xt) + 1/t2.
+
+H(m)⌧H(m)⌧H(m)⌧,nH(m)⌧,nm 1[`=1F(`)nm 1[`=1F(`)nbH(m)⌧bH(m)⌧rpdn↵/2drpdn↵/2d∆(m)(xt) for m < M. Lemma 15 gives us ˜R(m)
+
+n
+
+≤
+
+(H(m)
+
+τ,n )Ψ
+
+T (m)
+n (H(m)
+τ,n )
+
+(H(m)
+τ,n ).
+
+(15)
+
+Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+n
+
+τ,n
+
+2β1/2
+
+xt∈H(m)
+
+First, we will analyse the quantity ˜R(m)
+
+n (cid:80) σ(m)
+t−1(xt) + π2/6. Then, using Lemma 9 and Jensen’s inequality we have,
+(cid:18) ˜R(m)
+t−1(cid:1)2(xt) ≤ C1βt T (m)
+(H(m)
+
+= (cid:80) t:mt=m
+6 (cid:19)2
+τ,n ) (cid:88)t:mt=m
+τ,n(cid:0)σ(m)
+(H(m)
+n ≤(cid:113)C1nβnΨn(H(m)
+
+τ,n ) + π2/6 since trivially T (m)
+
+≤ 4βt T (m)
+
+xt∈H(m)
+
+n −
+
+π2
+
+n
+
+n
+
+n
+
+n
+
+τ,n ) < 1
+
+(H(m)
+
+τ,n we have T (m)
+
+We therefore have, ˜R(m)
+for x ∈ H(m)
+Remark 16. Since Ψn(·) is typically sublinear in n, it is natural to ask if we can recursively apply this to obtain a tighter
+bound on T (m)
+τ,n ). For instance, since Ψn(·) is polylog(n) for the SE kernel (Srinivas et al. (2010), Theorem 5) by
+τ 3/2(cid:113)C1n1/2polylog(n)βnΨτ−3/2n1/2polylog(n)(H(m)
+τ,n )(cid:17).
+repeating the argument above once we get, T (m)
+However, while this improves the dependence on n it worsens the dependence on τ. In fact, using a discretisation argument
+similar to that in Lemma 17 and the variance bound in Lemma 14, a polylog(n)/poly(τ ) bound can be shown, with the
+poly(τ ) term being τ d+2 for the SE kernel and τ 2d+2 for the Mat´ern kernel.
+
+τ(cid:16)(cid:113)C1nβnΨn(H(m)
+τ,n ) ∈ O(cid:16) 1
+(H(m)
+
+τ,n ) + π2/6(cid:17).
+
+τ,n ) < n. However, since ∆(m)(x) > τ
+
+(H(m)
+
+n
+
+n
+
+Finally, to control the ﬁrst term in (14), we will bound T (>m)
+proof is given in Section C.2.3.
+
+n
+
+(F (m)
+
+n
+
+). To that end we provide the following Lemma. The
+
+Lemma 17. Consider any Ai,n ∈ F (m)
+Theorem 13, Then for all u ≥ max{3, (2(ρ − ρ0)η)−2/3} we have,
+(Ai,n) > u) ≤
+
+where F (m)
+
+P(T (>m)
+
+n
+
+n
+
+n
+
+δ
+π2 ·
+
+1
+
+u1+4/α
+
+is as deﬁned in (13) for any α ∈ (0, 1). Let ρ, βt be as given in
+
+We will use the above result with u = nα/2. Applying the union bound we have,
+
+n
+
+n
+
+n
+
+n
+
+n
+
+n
+
+n
+
+n
+
+n
+
+n
+
+n
+
+|
+
+1
+
+1
+
+=
+
+≤
+
+δ
+π2
+
+δ
+π2
+
+δ
+π2
+
+1
+n2
+
+n2+α/2
+
+(F (m)
+
+) > |F (m)
+
+|nα/2(cid:17)
+
+n2+α/2 ≤ |Fn|
+
+M(cid:88)m=1
+|F (m)
+
+P(cid:16)T (>m)
+
+M(cid:88)m=1 (cid:88)Ai,n∈F (m)
+
+P(cid:16)∀ m ∈ {1, . . . , M}, T (>m)
+P(cid:16)T (>m)
+
+|nα/2(cid:17) ≤
+(F (m)
+) > |F (m)
+(Ai,n) > nα/2(cid:17) ≤
+M(cid:88)m=1
+(F (m)
+Applying the union bound once again, we have T (>m)
+) ≤ nα for all m and all n ≥ max{3, (2(ρ − ρ0)η)2/3}2/α
+with probability > 1 − δ/6. Henceforth, all statements we make will make use of the results in Lemmas 14, 15 and 17 and
+will hold with probability > 1 − δ.
+First using equation (14) and noting T (m)
+
+(F ((cid:96))
+n ) ≤ T (>(cid:96))
+(F ((cid:96))
+τ (cid:18)(cid:113)C1nβnΨn(H(m)
+
+(X ) for m < M.
+γ2 βn + 1(cid:19) .
+6 (cid:19) + Ωεn ((cid:98)H(m))(cid:18) 2η2
+(cid:98)
+Using this bound we can control ˜Rn,1 in (5). To bound ˜Rn,2 and ˜Rn,3 we set Z = H(M )
+τ,nΛ and use Lemma 15 noting
+τ,n ) ≤ n, we have ˜Rn,2 ≤
+that when mt = M, rt = ∆(M )(xt). Using similar calculations to (15) and as T (M )
+(H(m)
+(cid:113)C1nβnΨn(H(m)
+(cid:98)
+τ,n ⊂(cid:83)M−1
+(cid:96)=1 F (m)
+H(M ), we have,
+t2 ≤ (cid:113)C1M nαβnΨM nα (
+H(M )) + (cid:88)xt∈Z
+˜Rn,3 = (cid:88)t:mt=M
+1
+t2 .
+
+τ,n ) +(cid:80)xt∈Z
+xt∈Z (cid:0)f(cid:63) − f (M )(xt)(cid:1) ≤ (cid:88)t:mt=M
+(cid:83)M−1
+(cid:96)=1 F (m)
+
+1/t2. Next, using Lemma 17 and observing Z = H(M )
+
+t−1(xt) + (cid:88)xt∈Z
+
+(X ) ≤ (m − 1)nα +
+
+n ) for (cid:96) < m we bound T (m)
+
+t σ(m)
+
+n ⊂
+
+τ,n ) +
+
+2β1/2
+
+T (m)
+n
+
+xt∈
+
+π2
+
+1
+
+1
+
+n
+
+n
+
+n
+
+n
+
+n
+
+Plugging these bounds back into (5), we obtain a bound on the regret similar to the one given in the theorem except with n
+replaced by 2nΛ. The last step in the proof will be to show that for sufﬁciently large Λ, N ≤ 2nΛ which will complete the
+
+Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+proof. For this we turn back to our bounds for T (m)
+following term upper bounds the number of queries at ﬁdelities less than M,
+
+(X ), m < M. Using a similar reasoning to (9), we can show that the
+
+n
+
+(M − 1)nα +
+
+M−1(cid:88)m=1
+
+1
+
+τ (cid:18)(cid:113)2C1nΛβ2nΛ Ψ2nΛ (H(m)
+
+τ,nΛ ) +
+
+π2
+
+6 (cid:19) +
+
+M−1(cid:88)m=1
+
+Ωεn ((cid:98)H(m))(cid:18) 2η2
+
+γ2 βn + 1(cid:19) .
+
+Assume n0 is large enough so that n0 ≥ max{3, (2(ρ − ρ0)η)−2/3}2/α and for all n ≥ n0, n/2 is larger than the above
+upper bound. We can ﬁnd such an n0 since the bound is o(n). Therefore, for all n ≥ n0, T (M )
+(X ) > n/2. Following a
+similar argument to the discrete case, N ≤ 2Λ/λ(M ) with probability > 1 − δ if Λ ≥ Λ0 = λ(M )(n0 + 1). The theorem
+follows with the observation N ≥ nΛ =⇒ H(m)
+C.2.1. PROOF OF LEMMA 14
+Since the posterior variance only decreases with more observations, we can upper bound κ(cid:48)(x, x) for any x ∈ A by
+considering its posterior variance with only the s observations in A. Next the maximum variance within A occurs if we
+pick 2 points x1, x2 that are distance D apart and have all observations at x1; then x2 has the highest posterior variance.
+Therefore, we will bound κ(cid:48)(x, x) for any x ∈ A with κ(x2, x2) in the above scenario. Let κ0 = κ(x, x) and κ(x, x(cid:48)) =
+κ0φ((cid:107)x − x(cid:48)(cid:107)2), where φ(·) ≤ 1 depends on the kernel. Denote the gram matrix in the scenario described above by
+∆ = κ011(cid:62) + η2I. Then using the Sherman-Morrison formula, the posterior variance (1) can be bounded via,
+
+τ,nΛ ) ≤ Ψ2nΛ (H(m)
+τ,nΛ ).
+
+τ,nΛ =⇒ ΨN (H(m)
+
+τ,N ) ≤ ΨN (H(m)
+
+τ,N ⊂ H(m)
+
+n
+
+κ(cid:48)(x, x) ≤ κ(cid:48)(x2, x2) = κ(x2, x2) − [κ(x1, x2)1](cid:62) ∆−1 [κ(x1, x2)1] = κ0 − κ2
+
+= κ0 − κ0φ2(D)1(cid:62)
+
+= κ0 − κ0φ2(D)
+
+η2
+κ0
+
+κ0
+
+11(cid:62)
+
+1 + κ0
+
+η2 s  1 = κ0 − κ0φ2(D)
+η2 I −(cid:16) κ0
+η2(cid:17)2
+s (cid:19)
+κ0s (cid:18)κ0 − κ0φ2(D) +
+
+1 + η2
+
+η2
+
+=
+
+1
+
+1
+
+κ0
+
+0φ2(D)1(cid:62)(cid:2)κ011(cid:62) + η2I(cid:3)−1
+η2 s 
+η2(cid:17)2
+η2 s −(cid:16) κ0
+
+1 + κ0
+
+s2
+
+s
++ s
+η2
+s
+
+.
+
+≤ κ0(1 − φ2(D)) +
+
+For the SE kernel φ2(D) = exp(cid:16)−D2
+2h2 (cid:17)2
+h2 . Plugging this into the bound above retrieves the
+ﬁrst result with CSE = κ0/h2. For the Mat´ern kernel we use a Lipschtiz constant LM at of φ. Then 1 − φ2(D) =
+(1 − φ(D))(1 + φ(D)) ≤ 2(φ(0) − φ(D)) ≤ 2LM atD. We get the second result with CM at = 2κ0LM at. Since the SE
+kernel decays fast, we get a stronger result on its posterior variance which translates to a better bound in our theorems.
+
+h2 (cid:17) ≤ 1 − D2
+
+= exp(cid:16)−D2
+
+C.2.2. PROOF OF LEMMA 15
+
+The ﬁrst part of the proof mimics the arguments in Lemmas 5.6, 5.7 of Srinivas et al. (2010). By assumption 8 and the
+union bound we can show,
+
+P(cid:18)∀ m ∈ {1, . . . , M}, ∀ i ∈ {1, . . . , d}, ∀x ∈ X ,
+
+∂f (m)(x)
+
+∂xi
+
+(cid:12)(cid:12)(cid:12)
+
+(cid:12)(cid:12)(cid:12) < b log(cid:18) 6M ad
+
+δ (cid:19)(cid:19) ≥ 1 −
+
+δ
+6
+
+.
+
+Now we construct a discretisation Ft of X of size (νt)d such that we have for all x ∈ X , (cid:107)x− [x]t(cid:107)1 ≤ rd/νt. Here [x]t is
+the closest point to x in the discretisation. (Note that this is different from the discretisation appearing in Theorem 13 even
+though we have used the same notation). By choosing νt = t2brd(cid:112)6M ad/δ and using the above we have
+for all f (m)’s with probability > 1 − δ/6.
+Noting that βt ≥ 2 log(M|Ft|π2t2/2δ) for the given choice of νt we have the following with probability > 1 − δ/3.
+
+|f (m)(x) − f (m)([x]t)| ≤ b log(6M ad/δ)(cid:107)x − [x]t(cid:107)1 ≤ 1/t2
+
+∀ x ∈ X ,
+
+(16)
+
+∀ t ≥ 1, ∀ m ∈ {1, . . . , M}, ∀ a ∈ Ft,
+
+|f (m)(a) − µ(m)
+
+t−1(a)| ≤ β1/2
+
+t σ(m)
+
+t−1(a).
+
+(17)
+
+Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+The proof mimics that of Lemma 11 using the same conditioning argument. However, instead of a ﬁxed set over all t,
+we change the set at which we have conﬁdence based on the discretisation. Similarly we can show that with probability
+> 1 − δ/3 we also have conﬁdence on the decisions xt at all time steps. Precisely,
+
+∀ t ≥ 1, ∀ m ∈ {1, . . . , M},
+
+|f (m)(xt) − µ(m)
+
+t−1(xt)| ≤ β1/2
+
+t σ(m)
+
+t−1(xt).
+
+Using (16),(17) and (18) the following statements hold with probability > 1 − 5δ/6. First we can upper bound f(cid:63) by,
+
+f(cid:63) ≤ f (m)(x(cid:63)) + ζ (m) ≤ f (m)([x(cid:63)]t) + ζ (m) +
+
+1
+
+t2 ≤ ϕ(m)
+
+t
+
+([x(cid:63)]t) +
+
+1
+t2 .
+
+(18)
+
+(19)
+
+Since the above holds for all m, we have f(cid:63) ≤ ϕt([x(cid:63)]t)+1/t2. Now, using similar calculations as (7) we bound ∆(m)(xt).
+
+∆(m)(xt) = f(cid:63) − f (m)(xt) − ζ (m) ≤ ϕt([x(cid:63)]t) +
+
+1
+t2 − f (m)(xt) − ζ (m) ≤ ϕt(xt) − f (m)(xt) − ζ (m) +
+
+1
+t2
+
+≤ ϕ(m)
+
+t
+
+(xt) − µ(M )
+
+t−1 (xt) + β1/2
+
+t σ(M )
+
+t−1 (xt) − ζ (m) +
+
+t2 ≤ 2β1/2
+
+t σ(M )
+
+t−1 (xt) +
+
+1
+
+1
+t2 .
+
+C.2.3. PROOF OF LEMMA 17
+First, we will invoke the same discretisation used in the proof of Lemma 15 via which we have ϕt([x(cid:63)]t) ≥ f(cid:63) − 1/t2
+(19). (Therefore, Lemma 17 holds only with probability > 1 − δ/6, but this event has already been accounted for in
+Lemma 15.) Let bi,n,t = argmaxx∈Ai,n ϕt(x) be the maximiser of the upper conﬁdence bound in Ai,n at time t. Now
+using the relaxation xt ∈ Ai,n =⇒ ϕt(bi,n,t) > ϕt([x(cid:63)]t) =⇒ ϕ(m)
+
+t
+
+(bi,n,t) > f(cid:63) − 1/t2 ∧ β1/2
+
+(bi,n,t) > f(cid:63) − 1/t2 and proceeding,
+t−1(bi,n,t) < γ(cid:1)
+
+t−1(bi,n,t) − 1/t2 ∧ β1/2
+
+t σ(m)
+
+t σ(m)
+
+(20)
+
+t−1(bi,n,t) < γ(cid:1)
+
+P(T (>m)
+
+n
+
+t
+
+t σ(m)
+
+(Ai,n) > u) ≤ P(cid:0)∃t : u + 1 ≤ t ≤ n, ϕ(m)
+n(cid:88)t=u+1
+P(cid:0)µ(m)
+t−1(bi,n,t) − f (m)(bi,n,t) > ∆(m)(bi,n,t) − β1/2
+n(cid:88)t=u+1
+t−1(bi,n,t) − 1/t2(cid:1)
+P(cid:0)µ(m)
+t−1(bi,n,t) − f (m)(bi,n,t) > (ρ − 1)β1/2
+exp(cid:18) (ρ0 − 1)2
+βt(cid:19)
+Z∼N (0,1)(cid:16)Z > (ρ0 − 1)β1/2
+n(cid:88)t=u+1
+n(cid:88)t=u+1
+2(cid:18) δ
+M π2(cid:19)(ρ0−1)2
+M π2 u−(ρ0−1)2(2+2d)+1 ≤
+
+t (cid:17) ≤
+t−(ρ0−1)2(2+2d) ≤
+
+t σ(m)
+
+1
+2
+
+P
+
+1
+
+2
+
+δ
+
+n(cid:88)t=u+1
+
+≤
+
+≤
+
+≤
+
+≤
+
+δ
+π2
+
+1
+
+u1+4/α .
+
+t σ(m)
+
+In the second step we have rearranged the terms and used the deﬁnition of ∆(m)(x). In the third step, as Ai,n ⊂ J
+∆(m)(bi,n,t) > ργ > ρβ1/2
+ρ0)η)−2/3}, M π2/2δ > 1 and σ(m)
+
+max(τ,ργ),
+t−1(bi,n,t). In the fourth step we have used the following facts, t > u ≥ max{3, (2(ρ −
+t−1(bi,n,t) > η/√t to conclude,
+=⇒ (ρ − ρ0) ·(cid:115)2 log(cid:18) M π2t2
+2δ (cid:19) ·
+
+η(cid:112)4 log(t)
+
+=⇒ (ρ − ρ0)β1/2
+
+t−1(bi,n,t) >
+
+(ρ − ρ0)
+
+t σ(m)
+
+>
+
+1
+t2
+
+η
+√t
+
+1
+t2 .
+
+√t
+
+1
+t2
+
+>
+
+(m)
+
+In the seventh step of (20) we have bound the sum by an integral and used ρ0 ≥ 2 twice. Finally, the last step follows by
+ρ0 ≥ 1 +(cid:112)(1 + 2/α)/(1 + d) and noting M ≥ 1.
+
+D. Addendum to Experiments
+D.1. Description of Synthetic Experiments
+
+The following are the descriptions of the synthetic functions used. The ﬁrst three functions and their approximations were
+taken from (Xiong et al., 2013).
+
+Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+Currin exponential function: The domain is X = [0, 1]2. The second and ﬁrst ﬁdelity functions are,
+
+f (2)(x) =(cid:18)1 − exp(cid:18) −1
+
+100x3
+
+2x2(cid:19)(cid:19)(cid:18) 2300x3
+
+1 + 1900x2
+1 + 500x2
+1
+4
+f (2)(x1 − 0.05, x2 + 0.05) +
+
+f (2)(x1 + 0.05, x2 + 0.05) +
+
+1
+4
+
+f (1)(x) =
+
+1
+4
+
+1 + 2092x1 + 60
+
+1 + 4x1 + 20 (cid:19) ,
+
+f (2)(x1 + 0.05, max(0, x2 − 0.05))+
+1
+4
+
+f (2)(x1 − 0.05, max(0, x2 − 0.05)).
+
+Park function: The domain is X = [0, 1]4. The second and ﬁrst ﬁdelity functions are,
+
+f (2)(x) =
+
+x1
+
+2 (cid:18)(cid:114)1 + (x2 + x2
+
+3)
+
+x4
+x2
+
+1 − 1(cid:19) + (x1 + 3x4) exp(1 + sin(x3)),
+
+f (1)(x) =(cid:18)1 +
+
+sin(x1)
+
+10 (cid:19) f (2)(x) − 2x2
+
+1 + x2
+
+2 + x2
+
+3 + 0.5.
+
+Borehole function: The second and ﬁrst ﬁdelity functions are,
+
+f (2)(x) =
+
+2πx3(x4 − x6)
+
+2x7x3
+
+log(x2/x1)x2
+
+1x8
+
+log(x2/x1)(cid:16)1 +
+
++ x3
+
+x5(cid:17) ,
+
+f (1)(x) =
+
+log(x2/x1)(cid:16)1.5 +
+
+5x3(x4 − x6)
+
+2x7x3
+
+log(x2/x1)x2
+
+1x8
+
++ x3
+
+x5(cid:17) .
+
+The domain of the function is [0.05, 0.15; 100, 50K; 63.07K, 115.6K; 990, 1110; 63.1, 116; 700, 820; 1120, 1680; 9855, 12045]
+but we ﬁrst linear transform the variables to lie in [0, 1]8.
+
+3
+10
+0.1 10
+3
+10
+0.1 10
+
+A =
+
+i=1 αi exp(cid:16)−(cid:80)3
+
+Hartmann-3D function: The M th ﬁdelity function is f (M )(x) =(cid:80)4
+R4×3 are ﬁxed matrices given below and α = [1.0, 1.2, 3.0, 3.2]. For the lower ﬁdelities we use the same form except
+change α to α(m) = α + (M − m)δ where δ = [0.01,−0.01,−0.1, 0.1] and M = 3. The domain is X = [0, 1]3.
+ , P = 10−4 ×
+ , P = 10−4 ×
+
+j=1 Aij(xj − Pij)2(cid:17) where A, P ∈
+
+
+Hartmann-6D function: The 6-D Hartmann takes the same form as above except A, P ∈ R4×6 are as given below. We
+use the same modiﬁcation to obtain the lower ﬁdelities using M = 4.
+
+8
+3.5 1.7
+14
+0.1
+8
+17
+10
+8
+0.1 14
+10
+
+A =
+
+1170
+4387
+8732
+5743
+
+2673
+7470
+5547
+8828
+
+8283
+1004
+3047
+1091
+
+124
+3736
+2883
+5743
+
+5886
+9991
+6650
+381
+
+1696
+4135
+1451
+8828
+
+1312
+2329
+2348
+4047
+
+5569
+8307
+3522
+8732
+
+3689
+4699
+1091
+381
+
+17
+17
+1.7
+0.05
+
+3
+10
+3.5
+8
+
+30
+35
+30
+35
+
+
+
+10
+0.05
+
+3
+17
+
+D.2. More Results on Synthetic Experiments
+
+Figure 10 shows the simple regret S(Λ) for the synthetic functions not presented in the main text.
+It is natural to ask how MF-GP-UCB performs with bad approximations at lower ﬁdelities. We found that our imple-
+mentation with the heuristics suggested in Section 5 to be quite robust. We demonstrate this using the Currin exponential
+function, but using the negative of f (2) as the ﬁrst ﬁdelity approximation, i.e. f (1)(x) = −f (2)(x). Figure 11 illustrates
+f (1), f (2) and gives the simple regret S(Λ). Understandably, it loses to the single ﬁdelity methods since the ﬁrst ﬁdelity
+queries are wasted and it spends some time at the second ﬁdelity recovering from the bad approximation. However, it
+eventually is able to achieve low regret.
+Finally, we present results on the cumulative regret for the synthetic functions in Figure 12.
+
+Multi-ﬁdelity Gaussian Process Bandit Optimisation
+
+Figure 10. The simple regret S(Λ) against the spent capitcal Λ on the synthetic functions. The title states the function, its dimensionality,
+the number of ﬁdelities and the costs we used for each ﬁdelity in the experiment. All curves barring DiRect (which is a deterministic),
+were produced by averaging over 20 experiments. The error bars indicate one standard error.
+
+Figure 11. (a) illustrates the functions used in the Bad Currin Exponential experiment where we took f (1) = −f (2) and (b) shows the
+simple regret for this experiment. See caption under Fig. 10 for more details.
+
+(a)
+
+(b)
+
+Figure 12. The cumulative regret R(Λ) against the spent capitcal Λ on the synthetic functions. The title states the function, its di-
+mensionality, the number of ﬁdelities and the costs we used for each ﬁdelity in the experiment. All curves barring DiRect (which is a
+deterministic), were produced by averaging over 20 experiments. The error bars indicate one standard error.
+
+200400600800100010−610−410−2100ΛS(Λ)CurrinExp-2D,M=2,Costs=[1;10]  MF-GP-UCBGP-UCBEIPIRANDDiRect200400600800100010−210−1100101Park-4D,M=2,Costs=[1;10]ΛS(Λ)246810x 10410−1100Hartmann-6D,M=4,Costs=[1;10;100;1000]ΛS(Λ)00.20.40.60.8100.20.40.60.81−15−10−5051015200400600800100010−210−1100BadCurrinExp-2D,M=2,Costs=[1;10]ΛS(Λ)2004006008001000100101ΛR(Λ)/ΛCurrinExp-2D,M=2,Costs=[1;10]  MF-GP-UCBGP-UCBEIPIRANDDiRect2004006008001000101Park-4D,M=2,Costs=[1;10]ΛR(Λ)/Λ2004006008001000102BoreHole-8D,M=2,Costs=[1;10]ΛR(Λ)/Λ20004000600080001000010−210−1100Hartmann-3D,M=3,Costs=[1;10;100]ΛR(Λ)/Λ246810x 10410−1100Hartmann-6D,M=4,Costs=[1;10;100;1000]ΛR(Λ)/Λ2004006008001000100101BadCurrinExp-2D,M=2,Costs=[1;10]ΛR(Λ)/Λ

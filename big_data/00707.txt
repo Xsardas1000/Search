@@ -1,0 +1,1221 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+3
+1
+
+ 
+ 
+]
+
+R
+C
+.
+s
+c
+[
+ 
+ 
+
+2
+v
+7
+0
+7
+0
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+A Security Analysis and Revised Security Extension for the
+
+Precision Time Protocol
+
+Eyal Itkin and Avishai Wool
+
+eyalitki@post.tau.ac.il, yash@eng.tau.ac.il
+
+Tel Aviv University, Israel
+
+March 15, 2016
+
+Abstract
+
+The Precision Time Protocol (PTP) aims to provide highly accurate and synchronized clocks.
+Its deﬁning standard, IEEE 1588, has a security section (“Annex K”) which relies on symmetric-
+key secrecy. In this paper we present a detailed threat analysis of the PTP standard, in which we
+highlight the security properties that should be addressed by any security extension. During this
+analysis we identify a sequence of new attacks and non-cryptographic network-based defenses
+that mitigate them. We then suggest to replace Annex K’s symmetric cryptography by an
+eﬃcient elliptic-curve Public-Key signatures. We implemented all our attacks to demonstrate
+their eﬀectiveness, and also implemented and evaluated both the network and cryptographic
+defenses. Our results show that the proposed schemes are extremely practical, and much more
+secure than previous suggestions.
+
+1 Introduction
+
+1.1 PTP Overview
+
+IEEE 1588 is a standard deﬁning the Precision Time Protocol (PTP), [12]. An initial version of the
+standard was published at 2002, and a second version was later published in 2008. PTP is aimed
+speciﬁcally at measurement, control and ﬁnancial applications, applications that have an increasing
+need for highly accurate and synchronized clocks. The protocol was built to address the speciﬁc
+requirements of these types of applications:
+
+1. Spatially localized - A factory computer network for instance
+
+2. Microsecond to sub-microsecond accuracy and precision
+
+3. Administration free - plug-and-play distributed algorithm
+
+4. Accessible for both high-end devices (servers) and low-cost, low-end devices (basic controllers)
+
+In contrast to the centralized Network Time Protocol (NTP) [13], that only reaches an accuracy
+level of several milliseconds, the PTP standard deﬁnes a distributed network of clocks, called PTP
+
+1
+
+nodes, that dynamically builds a master-slave hierarchy, which collectively achieves the desired
+accuracy. However, PTP has some similarities to NTP: both protocols allow each node to calculate
+the unique network delay between itself and the central clock. This central clock is called the Grand
+Master.
+
+One of the main novelties of PTP is the fact that the design has provisions for the use of
+hardware timestamping, as explained in [32]. From the need to reach very high accuracy and
+precision, rose the need to bypass the jitter, or noise, induced by the message passing through the
+network stack in the OS. This is done using PTP-aware network interface cards (NICs), that are
+able to timestamp the message in the lowest hardware levels, just before the message is sent to the
+underlying physical layer. Note that hardware timestamping breaks most cryptographic primitives
+unless special steps are taken.
+
+1.2 Related Work
+
+Since the publication of Annex K, there were several calls for improvements and even calls to adopt
+a brand new security extension for the protocol. Most of the papers regarding the security of the
+protocol where published by the members of the IEEE 1588 security subcommittee, as summarized
+in [19]. In 2011, Mizrahi [18] suggested to make use of the known IPSec solution, and to base the
+security Type-Length-Value (TLV) extension header on it. Later on, in 2012, after the results of
+[21], Kirrmann suggested a modiﬁed Annex K. His main changes were to remove the redundant 3
+way-handshake, to update the Message Authentication Code (MAC) that is used in the Integrity
+Check Value (ICV) calculation and to use IPSec for the key distribution scheme. A proposal by
+Ellegaard [7], speaks about hop-by-hop security based on the MACsec. These proposals speak only
+about the means to establish a secure transport channel between the 2 PTP nodes, regardless of
+the nodes’ role in the protocol, or the protocol’s behavior.
+
+A proposal by Fries [10], speaks mainly on the key distribution scheme, and suggests to use
+a standard cryptographic algorithms for the ICV calculation. Sibold/Dickerson [29] [6] suggest
+using TESLA [24] for the Security Association (SA) and to check the applications of Network Time
+Security (NTS), a standard that is currently underway. While NTS presents a new asymmetric
+approach, master X509 certiﬁcates, the main use of it is for the bootstrapping of TESLA.
+
+As we can see, the papers mainly address the key distribution problem, that is not part of the
+original Annex K, or suggest new ways to establish a secure channel between the PTP nodes. We
+argue that one of the main design ﬂaws in Annex K is its inability to handle an insider threat, as
+will be shown in the next sections, and the related works do not address this issue.
+
+Nevertheless, in [19] there is a suggestion for a new methodology, unlike [17], based on a “divide
+and conquer” technique. In an internal paper of the security subcommittee, [26], they present a
+“four pronged approach” which suggests 4 level of security:
+
+• Prong A - End-to-End strong source authentication, based on a TLV for the PTP standard.
+• Prong B - hop-by-hop security mechanism, external to PTP.
+• Prong C - Architectual guidance deﬁning the redundant communication links, to handle
+
+selective delay attacks.
+
+2
+
+• Prong D - Monitoring and management guidance.
+
+We chose to follow the “four pronged approach”, and present a fully functioning Prong A
+
+security extension for IEEE 1588.
+
+1.3 Contributions
+
+In this paper we present a detailed threat analysis of the PTP standard, in which we highlight the
+security properties that should be addressed by any security extension. We identiﬁed a sequence
+of new attacks that can be mounted against PTP, depending on the attacker’s strength: from out-
+of-band network attacker to corrupt insiders. We then identiﬁed network defenses that mitigate
+some of the attacks: binding the clock-IDs to the network addresses, and expanded use of message
+sequence numbers to prevent spooﬁng and introduce session-like semantics into the protocol. While
+the basic version of these defenses is fully compatible with the PTP message format, we suggest a
+small modiﬁcation - to use 2 reserved bytes and extend the sequence ID to 32 bits - which greatly
+improves the protocol’s resilience to attack.
+
+We then suggest to replace Annex K’s symmetric cryptography by an eﬃcient elliptic-curve
+Public-Key signature scheme. The proposed EdDSA signatures are only 64 bytes long, and only
+need to be attached to some of the grandmaster messages. We implemented all our attacks to
+demonstrate their eﬀectiveness, and also implemented and evaluated both the network and crypto-
+graphic defenses. Our results show that the proposed schemes are extremely practical, and much
+more secure than previous suggestions.
+
+Organization In the next section we introduce the main aspects of PTP. Section 3 presents the
+adversaries that play a role in our threat analysis, while section 4 presents all the relevant attack
+scenarios and completes the threat analysis.
+In Section 5 there are full details of our proposed
+security extension. We then show experimental results of our defense mechanism, and compare it
+to the state of the art security proposals. We conclude with Section 6.
+
+2 Preliminaries
+
+The protocol consists of two main layers, and an additional management layer:
+
+1. Grandmaster election - the Best Master Clock (BMC) algorithm
+
+2. Time oriented messages - Sending timestamps and measuring network delay
+
+The ﬁrst layer is a distributed leader election algorithm that is being constantly calculated
+by all of the master-candidate PTP nodes. Each candidate node sends an ANNOUNCE message in
+which it declares its management priority, its time source, etc., and the best clock is elected as the
+“grandmaster” clock. The leader election algorithm is called “Best Master Clock” algorithm. The
+elected master clock then multicasts its accurate timestamp to all of the slave nodes, using the 2nd
+layer of the protocol.
+
+The 2nd layer of the protocol consists of the following messages:
+
+3
+
+Figure 1: PTP 2-step message ﬂow. Note the 4 timestamps t1, t2, t3, t4: the FOLLOW_UP and
+DELAY_RESP messages carry t1 and t4 to the slave.
+
+1. SYNC - The master’s timestamp, broadcast to all PTP nodes every #seconds
+
+2. DELAY_REQ - A call from a slave to measure the delay with the master
+
+3. DELAY_RESP - An answer from the master with its receive timestamp
+
+As can be seen in Figure 1, the master periodically sends SYNC messages with its timestamp
+(t1), and the slave receives them (t2). In addition, once in a while the slave measures its delay
+from the master by sending a DELAY_REQ (t3), and the master replies with DELAY_RESP including
+its receive timestamp (t4). Using these 4 time points, the slave can calculate the delay between the
+master and itself:
+
+delay =
+
+(t2 − t1) + (t4 − t3)
+
+2
+
+And the oﬀset in clock rates between the two clocks:
+
+of f set =
+
+(t2 − t1) − (t4 − t3)
+
+2
+
+(1)
+
+(2)
+
+Clocks that agree on their delay, or latency, are called synchronized, and clocks that agree on
+their clock rates are called syntonized. Deducing the oﬀset in clock rates is done by slave during
+the protocol. This will be used for multiplying the slave’s clock ticks as a compensation for the
+oﬀset in clock rates.
+
+4
+
+2.1 2-Step sync
+
+Hardware timestamping mechanism breaks support for most cryptographic primitives since encryp-
+tion or signatures applied by a higher level in the software stack must happen before the message
+is sent. E.g., if the NIC hardware modiﬁes a signed message in transit - the receiver will be unable
+to verify the signature. Therefore, the standard deﬁnes a notion of 2-step communication. In such
+cases, the SYNC message is just a placeholder for the t1 time point. A PTP-aware NIC recognizes
+the SYNC message, calculates t1 and stores it locally. Then the software layers query the NIC, obtain
+t1, and embed its value in the body of the FOLLOW_UP message that will immediately follow, see
+Figure 1. This solution enables cryptographic operations to be done on the timestamp that is now
+known to the grandmaster’s software stack.
+
+2.2 PTP Annex K
+
+IEEE standard 1588 deﬁnes an experimental security extension in its Annex K. The goals of the
+security protocol are: providing group source authentication, message integrity, and prevention of
+replay attacks. According to these goals the protocol was designed to consist mainly of two parts:
+
+1. A Challenge-Response mechanism used to aﬃrm the trust relations between PTP nodes
+
+2. An HMAC [11] based integrity protection code, using a shared symmetric key, using anti-
+
+replay counters
+
+The Annex K security protocol consists of the following steps. First, each legitimate PTP
+node in the network starts with a preshared symmetric key, (the key distribution scheme is out of
+the scope of Annex K). Second, the communication itself is done between unidirectional Security
+Associations (SA). Each SA consists of source port + network address, destination, key, random
+lifetime (freshness) and a replay counter. Third, when a node sends messages to an untrusted
+destination node, it ﬁrst performs a 3-way handshake in which both sides authenticate to each
+other using the preshared key. After the challenge-response message transfer ﬁnishes, both nodes
+have established trust relationships and have matching SAs. Fourth, every message sent over
+to a given SA has an authentication Type-Length-Value (TLV) extension header, that contains
+an Integrity Check Value (ICV) that is calculated over all of the message, including anti-replay
+counters. Fifth, after a predetermined amount of time the SA becomes “old” and the nodes needs
+to “freshen” the trust relations. This step ensures that the replay counters won’t roll over.
+
+An important note is that the Annex’s goals are only deﬁned against non-PTP computers on
+the network. By its symmetric nature, using “group source authentication”, the security protocol
+has no eﬀective way to diﬀerentiate between PTP clocks: any PTP slave can easily masquarade
+as the grandmaster. The protocol only deﬁnes means to build a cryptographicaly secure unicast
+channel between 2 PTP nodes, and does not address any attempt of fraud over the established
+channel.
+
+Although the second version of the standard was published in 2008, Annex K was never really
+adopted by the industry, as was mentioned in [8], and it has quite a few drawbacks, as speciﬁed
+in [19]. Due to its deployment status, the initial experimental status and the public debates about
+
+5
+
+its eﬃciency and eﬀectiveness, Annex K does not seem like a promising security extension for the
+PTP standard.
+
+2.3 Testing Environment
+
+In our work we used DeterProject’s infrastructure, [2] and [14], in order to experiment and test
+our results. The experimentation was done on the open source linux PTP daemon, PTPd [27]. We
+implemented our proposed security extension on top of the daemon’s 2.3.1.1 version, in addition to
+the creation of a python scapy layer supporting the PTP protocol, including our extension.
+
+3 Precision Time Protocol Threat Analysis: Adversaries
+
+In this section we discuss the diﬀerent adversaries that can harm the protocol. The adversaries are
+listed in an increasing order of strength, from the weakest Out-of-Band applicative adversary to
+the most powerful hostile grandmaster clock adversary. We separate the attackers into 2 categories:
+Outsiders and Insiders.
+
+3.1 Out-of-Band Applicative adversary
+
+The Out-of-Band (OOB) Applicative adversary is located out of the path of the protocol’s unicast
+messages. The adversary can only see the public multicast protocol messages: ANNOUNCE and SYNC.
+This weak adversary can only forge fake PTP layers of messages, and it is not capable of faking
+lower-level networking layers, such as UDP/Ethernet.
+
+Although this is the weakest available adversary, it is worth mentioning that any attack that
+it performs will most likely not be intercepted by any IDS/IPS deployed on the network, unless it
+has PTP-aware capabilities.
+
+3.2 Out-of-Band Network adversary
+
+The Out-of-Band (OOB) Network adversary is a stronger version of the previous adversary. This
+adversary now has the capability to also forge fake network layers, i.e., spoof IP and Ethernet
+headers. Note that this is still a very weak adversary since Layer 2 and Layer 3 spooﬁng is quite
+trivial to preform.
+
+3.3 In-Band adversary
+
+The In-Band (IB) adversary is located in the path of all of the protocol’s messages, both unicast
+and multicast. This Man-In-The-Middle (MITM) position between the targeted PTP slave node
+and its associated master gives the attacker full control over the communication channel: dropping
+messages, inserting fake messages and changing ﬁelds of passing messages.
+
+An adversary can gain such a strong position, for instance, by:
+
+6
+
+1. Deploying low-level network attacks, such as ARP-poisoning or DNS-poisoning, in order to
+
+“bend” the traﬃc toward itself
+
+2. Targeting a middle box to gain control over a switch, router or public hotspot
+
+This is the strongest attacker that is not a legitimate part of the PTP network.
+
+3.4 Hostile PTP Insider clock
+
+The Hostile PTP Insider clock adversary is a legitimate PTP slave node on the network, that is
+controlled by a hostile adversary. This clock has poor clock parameters, thus it can’t win the BMC
+leader election in a legitimate way.
+
+An adversary can gain such a position more easily than can be suspected: PTP aims to accu-
+rately synchronize the time between a large number of computers and machines in a local com-
+munication network. Hence, every such computer is a legitimate PTP node, and now a possible
+entrance point to the logical PTP network. As a result, gaining access to the PTP network can be
+done by an insider threat in the original network, or by an adversary that launches a dedicated,
+non-PTP, attack on one of the network participants. This is the weakest insider attacker.
+
+3.5 Hostile PTP Management node
+
+The Hostile PTP management node adversary is a legitimate PTP management node on the net-
+work, that is controlled by a hostile adversary. Such an adversary holds all the protocol’s manage-
+ment capabilities, resulting in a very powerful adversary. In this work we won’t address the threats
+resulting from such a strong adversary. We suggest to deploy standard security and monitoring
+tools to ensure the legitimacy of the management node in the network.
+
+3.6 Hostile PTP Grandmaster node
+
+The Hostile PTP grandmaster node adversary is a legitimate PTP clock node on the network, that
+is controlled by a hostile adversary. In contrast to the Hostile PTP Insider clock, this adversary
+now controls the clock with the best PTP parameters in the network, meaning that the clock
+can legitimately win the BMC leader election. Such an adversary holds all of the protocol’s time
+distribution capabilities, resulting in an all powerful adversary.
+In this work we won’t address
+the threats resulting from such a strong adversary. We suggest to deploy security-hardened PTP
+middle boxes, in addition to deploying external monitoring tools, in order to ensure the legitimacy
+of the grandmaster PTP node in the network.
+
+4 Attack Scenarios and Mitigations
+
+In the following subsections we discuss the results of our analysis. The analysis describes a con-
+tinuous arms race between the system’s adversaries and our suggested mitigations against those
+attacks.
+
+7
+
+The Precision Time Protocol consists of 3 main protocol layers:
+
+1. Management Layer
+
+2. Event messages - Time oriented Messages
+
+3. Best Master Clock Algorithm - grandmaster leader election
+
+In the following subsections we introduce the 3 main arms races between the protocol’s adver-
+saries and the proposed defense mitigations. Each arms race corresponds to a diﬀerent protocol
+layer, thus covering all of the protocol’s main layers.
+
+4.1 Event Messages Attacks
+
+The IEEE 1588 standard separates the messages into two main groups:
+
+1. Event Messages, i.e., time oriented messages, such as SYNC
+
+2. General Messages, i.e., management orient messages, such as ANNOUNCE
+
+In this subsection we focus on the attack scenarios that target the time synchronization of the
+PTP nodes. These types of attacks have received the majority of security-aware attention so far,
+as in [31] and [23], because of the dominant role of these messages in the overall protocol. In the
+following arms race we discuss our suggested defense mitigations, and show the experimental results
+of their deployment.
+
+4.1.1 Delay Spooﬁng Attack Scenario
+
+Attack Forge DELAY_RESPONSE messages on behalf of the grandmaster, thus damaging the delay
+measurements of the target node. Can be performed by the OOB Applicative adversary, or any
+other stronger adversary.
+
+Note that a DELAY_RESPONSE message has a sequenceId ﬁeld - so the OOB adversary needs to
+spoof messages with a matching DELAY_REQUEST sequenceId ﬁeld. Hence, ﬁrst he needs to bend
+the unicast DELAY_REQUEST towards himself. This can be done by replaying the grandmaster’s
+multicast messages, SYNC or ANNOUNCE, using its own network address. Such a replay results in the
+attacker’s address being registered at the slave as the matching network identity of the master. In
+the PTPd implementation this can easily be done using the master’s ANNOUNCE messages.
+
+Mitigation The most basic mitigation for this attack is to add thresholds on the legal message
+delay ratio, as suggested in [20]:
+
+• Maximum time drift per second (default: 0.5 msec/s )
+• Upper limit on network delay measures (default: not checked)
+
+8
+
+Figure 2: Hostile DELAY_RESPONSE messages gradually shifting the target’s time away from its mas-
+ter. Using the default PTPd thresholds we see that the adversary can create a 26 msec discrepancy
+after 1 min and 90 packets sent.
+
+Figure 3: Applicative Sync Spooﬁng: Between times 0:21 and 0:37 the adversary is sending hostile
+SYNC messages, with timestamps of +30 seconds.
+
+As can be seen in Figure 2, these techniques are already implemented in PTPd, resulting in
+extended attack eﬀorts to create even a small time change at the target. With these countermeasures
+the adversary’s ability to control the target’s time is limited and demands a large eﬀort, both in
+time and in message count.
+
+4.1.2 Applicative Sync Spooﬁng Attack Scenario
+
+Attack The same weak adversary can mount a much more eﬀective attack just as easily - and
+this attack is not dedicated against PTPd. Instead of targeting the DELAY_RESPONSE, the OOB
+Applicative adversary will send spoofed SYNC messages with hostile timestamps on behalf of the
+grandmaster, to a chosen target node. The targeted node will adopt these hostile timestamps
+and will recalibrate itself according to the speciﬁed attacker’s time values. Note that SYNC is
+uni-directional, thus the attacker does not need to “bend” any traﬃc toward itself.
+
+9
+
+Figure 4: Duplicate Masters: OOB Applicative adversary sending hostile SYNC messages, with
+timestamps of +800 msec, converge the target to an average of +400 millis.
+
+Figure 3 shows what happens when the attacker sends bogus SYNC messages; the slave accepts
+the false timestamps and sets its clock to the attacker’s chosen time. Once every 5 sec the legitimate
+grandmaster’s messages reset the slave back to the true time. Note that the +30 sec value is
+illustrative; we successfully set the clock 20 years back.
+
+Using thresholds on the messages, such as maximal change before reset, as done in the PTPd
+implementation, makes this attack slightly less eﬀective. As can be seen in Figure 3, the PTPd’s
+basic threshold is 1 second, and so when the true grandmaster sends his SYNC messages the large
+delta causes the slave node to reset back into the original time.
+
+When the attacker chooses to use smaller time diﬀerences, below the PTPd’s 1 second threshold,
+we get a diﬀerent behavior. As we can see in Figure 4, we can observe similar results to [23], in
+which the target’s time converges to the average between the real master and the adversary’s hostile
+time (that was higher by 800 msec).
+
+As was shown in [8], deployment issues can easily cause similar “attack-like” behavior, since
+
+the PTP slave has no sense of the legitimacy of the incoming SYNC messages.
+
+Mitigations The major design ﬂaw that enables the Sync Spooﬁng attack is the fact that there
+is no binding between the PTP entity (the clock ID) and the underlying network ID. If such a
+binding were used, than the slave node would have been able to overcome the attacks using the
+following checks, ordered by the attack scenarios:
+
+1. Sending messages to the master’s network address as derived from its clock ID
+
+2. Checking for a match between the PTP Clock ID and the network ID and discarding mis-
+
+matching messages
+
+Instead of using a IEEE EUI-64 assigned clock IDs, we suggest a logistically simpler solution that
+maintains the original goal - network unique identities. We suggest to deterministically construct
+the PTP clock IDs from the underlying network IDs, as can be shown in Figure 5. Note the use of
+the constant 0xFFFE in the middle of the clock ID, as speciﬁed in the IEEE 1588 standard, thus
+we maintain backward compatibility.
+
+10
+
+Figure 5: Construction of the clock ID from the underlying network address
+
+Figure 6: Applicative Sync Spooﬁng Mitigation: Binding between network ID and Clock ID,
+completely blocks the attack.
+
+An alternative approach makes use of the fact that only the master’s binding should be publicly
+known. This is because the master always sends multicasts or replies to messages of the sending
+slave, and needs no a priori knowledge of the slaves’ network address. The idea is to add the
+master’s network address to its ANNOUNCE message, now resulting in his network address being
+publicly known to all listening PTP slave nodes. In our experimentation we chose to implement
+the 1st solution. Figure 6 shows the results when using the new defense mechanism against the
+same attack shown in Figure 3: The defense fully blocks the attack scenario from Section 4.1.2.
+
+4.1.3 Network Sync Spooﬁng Attack Scenario
+
+Attack While binding the Clock ID to the network ID does oﬀer a defense against the weakest
+attacker, a slightly stronger attacker (OOB Network Adversary) can still deploy the Sync Spooﬁng
+Attack of Section 4.1.2: all it needs to do is spoof the underlying network addresses. Figure 7 shows
+a Sync Spooﬁng attack using IP spooﬁng towards the master.
+
+Mitigations The adversary is making use of the fact that the messages from the master to the
+slave are treated independently and without any session semantics. Although the PTP header
+deﬁnes the sequenceId ﬁeld, it is only used for distinguishing the messages from one another.
+More explicitly, the standard does not deﬁne the following issues regarding a sequenceId ﬁeld:
+
+1. What is the initial value of the sequence ID of a given message?
+
+11
+
+Figure 7: Network Sync Spooﬁng: The adversary is sending hostile SYNC messages, with timestamps
+of +30 seconds. The slave check the binding between the clock ID and the network ID - but those
+are spoofed by the attacker.
+
+2. Is there a connection between two consecutive messages’ sequence IDs?
+
+The resulting eﬀect is that the receiving node can not check the validity of the sequenceId ﬁeld
+
+of the received message.
+
+We suggest to extend the standard and make use of the sequenceId ﬁeld for adding session
+
+semantics between the master node and the slave node:
+
+1. Master originating messages, SYNC and ANNOUNCE, will start with a pseudo-random sequence
+
+ID counter (to prevent session hijacking), each message type will have a separate counter
+
+2. A message’s sequence ID will be incremented by 1 for each sent message
+
+3. The slave node will validate a received message’s sequence ID, and check that it matches a
+predeﬁned range of available ids, compensating for a possible network errors. The range of
+counter values acceptable to the slave is called the Window.
+
+In addition, the suggested extension can be used to strengthen the delay/response mechanism
+
+of the protocol:
+
+4. Each REQUEST_<X> message from the slave to the master will have a pseudo-random sequence
+
+ID, acting as a challenge to the master
+
+It is worth mentioning that while these session semantics strengthen the connection between
+the master node and the slave node, the SYNC messages are still sent in multicast and so are, by
+deﬁnition, publicly accessible to the OOB attacker. This can be solved by maintaining a separate
+sequenceId for each slave node, as speciﬁed by the standard, and sending the SYNC messages in uni-
+cast. The unicast registration and transmission mechanism is already deﬁned in the standard, and
+was originally designed for Annex K’s deployment. Due to its heavy costs, the transition to unicast
+
+12
+
+Figure 8: Network Sync Spooﬁng Mitigation: Using the unknown 16-bit sequenceId values as a
+session binding completely blocks the attack: we can see that all the attack packets are dropped.
+
+transmission should be applied only in network scenarios in which there is no separation between
+broadcast messages and multicast messages, such as PTP over Ethernet. In our implementation
+we used PTP over UDP and did not use the unicast transmission.
+
+Applying these defense mechanisms forces the OOB attacker to send his spoofed messages with
+a correctly guessed 16-bit secret, thus signiﬁcantly lowering his success rate, as can be seen in
+Figure 8.
+
+4.1.4 Blind Window Snatching Attack Scenario
+
+Attack 16-bit sequence number only oﬀers limited protection. The attacker can use two ideas
+to give him an advantage: (a) he can transmit much faster than the real grandmaster, and (b) he
+can use the defender’s Window against him, by incrementing the counter by a whole window with
+each packet. Using these ideas, the OOB Network adversary can deploy a blind window snatching
+attack, after which he will be able to deploy the attack from Section 4.1.3. The blind window
+snatching attack makes use of the PTP window behavior: after a valid message is received, the
+window automatically advances to start from the message’s sequenceId + 1. This is due to the
+fact that the protocol messages are time oriented and so, unlike the TCP window, if for example
+the slave receives a message with a sequenceId of 5 instead of 4, there is no need to wait for the
+“old” message with the lower sequenceId 4, as it is no longer interesting. Listing 1 shows code
+implementing the attack.
+
+What this attack does is snatch the window from the true master. At some point the attacker’s
+packet will hit the legitimate window, and increment it - so all subsequent legitimate packets
+fall outside the new window and are discarded. As can be seen in Figure 9, once the adversary
+“catches” the target’s session window (at time 1:36), all the master’s messages fall outside the
+window, resulting in logged message drops.
+
+This means that the total message complexity of the blind window snatching attack on a target
+
+13
+
+Listing 1: Python code for the blind window snatching attack
+
+##
+# M - A pre-formatted SYNC message
+# W - The size of the window
+# R - The full ID range [0, 65535]
+##
+
+def blind_window_snatch(M, R, W):
+
+# Initialized to the top of the first window
+seqId = W - 1
+# Split the range R to window (W) sized subranges
+for i in range(R / W - 1):
+
+# send the upper most sequenceId in the given subrange
+sendmsg(M, i * W + seqId)
+
+# The window has wrapped-around and 0 is now that start of it
+seqId = 0
+
+with sequenceId from range R, a window size of w, and an original attack with message complexity
+of K is:
+
+#messages =
+
+|R|
+w
+
++ K
+
+(3)
+
+This is a major improvement compared to the naive attack in which the original attack (K
+
+messages) is preformed for every possible window:
+
+#messages =
+
+|R|
+w
+
+· K
+
+(4)
+
+An added bonus of this attack is that the adversary now completely “owns” the session window,
+winning him a quiet environment without interference caused by the master’s messages, as they all
+fall outside the window.
+
+There is a small chance that the window will wrap-around during the attack, resulting in the
+attack failing to catch the window. This can easily be handled by performing the window snatching
+procedure twice: the high send rate of the adversary prevents the wrap-around from happening
+during the second window snatching. The updated message complexity will now be:
+
+#messages = 2 · |R|
+
+w
+
++ K
+
+(5)
+
+In case that the attack was successful on the ﬁrst attempt, the second repetition only shifts the
+
+already controlled window.
+
+14
+
+Figure 9: Phase I: performing a blind window snatching attack on window of size 50. Sending
+packets at a rate of 10 pps, the attack goes through 65536/50 (≈ 1300) packets in slightly more
+than 2 minutes. Phase II: Sync Spooﬁng.
+
+Mitigation The blind window snatching attack depends on the rather small 16-bit range R
+caused by the 2 byte size of sequenceId. We suggest to overcome this limitation by enlarging
+the sequenceId ﬁeld using 2 of the reserved bytes (out of the 5.5 currently reserved bytes in the
+message’s header). By using a 4 byte sized sequenceId ﬁeld, even if the blind window snatching
+attack will send 1000 messages per second and the window will be of size 16, it will still take the
+adversary more than 3 days per snatch.
+
+In Table 1 we show a possible updated header’s structure. By storing the 2 MSB in the reserved
+bytes, and using a reserved ﬂag from the flagField, to mark the 4 byte support, one can gradually
+deploy the upgraded version while maintaining backward compatibility to the current 2 byte ﬁeld.
+This will result in a node’s keeping an additional boolean variable in his parentDS. This variable will
+store the master’s version compatibility, and will be used for checking consistency between master
+messages, as there is no reason that the master’s compatibility will change during the session. Note
+that the reserved bit from the flagField can be replaced using the existing SECURITY bit, ment
+originally for Annex K.
+
+4.1.5 Inband Sync Spooﬁng Scenario
+
+Attack The In-Band adversary can also perform the Sync Spooﬁng attack described in Section
+4.1.3. The diﬀerence is that the adversary has a MITM position that enables him to sniﬀ the session
+“secrets”, therefore the defenses of Section 4.1.3 and 4.1.4 are ineﬀective.
+
+Mitigation Because the adversary is In-Band, the only way to withhold secrets from him is by
+using a cryptographic solution. Annex K suggests using a symmetric key approach, which would
+in fact defend against an In-Band outsider attack. However, we suggest to utilize a Public-Key
+cryptographic solution, that can defend against much stronger (Insider) attacks as well.
+
+15
+
+Table 1: Using reserve bytes for the extended sequence ID with value: 0x11223344
+
+4.1.6 PTP Insider Threat
+
+Attack Assuming Annex K is activated with its symmetric-key defenses, a hostile PTP node can
+pretend to be the master node and initiate the 3-way handshake against the target slave. By using
+the legitimate symmetric key, the handshake will complete successfully resulting in the slave being
+fooled to think that the adversary is the legitimate master node. From now on, the adversary will
+use the derived symmetric key to send hostile SYNC messages to his target.
+
+Mitigation This attack scenario addresses a major ﬂaw in the standard’s Annex K: there is no
+way to diﬀerentiate between the slave nodes and the master nodes. This leads to an inherent
+vulnerability when addressing an insider threat. Variants of the described attack will work against
+any other non-role based defense scheme deployed in the network, including the use of standard
+solutions such as IPsec or MACsec as was suggested in [21].
+
+We suggest a diﬀerent approach, that will focus on a role-based solution that will prevent a
+slave node from masquerading as the master node. The proposed solution is to replace Annex K in
+favor of Public-Key based cryptography. By equipping each of the master-capable PTP nodes with
+a unique private/public key pair, we enable the elected master node to use the ANNOUNCE message
+to publicly declare his public key. From now on, the master node will sign its SYNC messages, and
+the slave nodes will be able to use the master’s public key to verify the legitimacy of the received
+timestamps. We provide more details, and a performance evaluation of the suggested solution in
+Section 5.
+
+4.2 BMC Attacks
+
+The IEEE 1588 standard speciﬁes the BMC algorithm as a leader election that elects the network’s
+grandmaster clock in a distributed fashion. The chosen grandmaster clock is responsible for the
+synchronization of the PTP slave nodes. This powerful vantage point makes the BMC algorithm a
+desired target for an adversary.
+
+16
+
+Figure 10: Rogue Master: An outsider adversary sends ANNOUNCE messages to nominate himself to
+be the grandmaster.
+
+In this section we focus on the attack scenarios that target the BMC algorithm itself.
+
+4.2.1 Outsider Rogue Master Attack Scenario
+
+Attack The weakest possible adversary, an OOB applicative adversary, can propose himself as a
+grandmaster candidate by sending fake ANNOUNCE messages declaring him to be the best clock in
+the network. This can easily be done by faking to be a truly magniﬁcent clock: Using the minimal
+value for the Priority1 and Priority2 ﬁelds; declaring that the clock’s source as ATOMIC_CLOCK;
+etc.
+
+We implemented this attack and tested it. As can be seen in Figure 10, even after the adversary
+stops his attack (at time 0:44), the network will continue on according to his hostile time: this is
+because the original grandmaster will now dictate the adversary’s hostile timestamp to everyone
+on the network.
+
+Mitigation In a similar way to the problem shown in Figure 3, the problem is that there is no
+separation between the Outsider identities in the physical network and the Insider identities in
+the PTP network. This can be addressed by the use of Annex K, or by our own Public-Key-based
+solution.
+
+4.2.2 Insider Rogue Master Attack Scenario
+
+Attack If a hostile PTP node proposes himself as a grandmaster candidate by sending fake
+ANNOUNCE messages declaring him to be the best clock in the network - Annex K, and any Symmetric-
+Key solution, will fall short of defending against an insider threat. This is due to the fact that the
+insiders have the secret keys and can appear as a convincing grandsmaster.
+
+17
+
+Mitigation The solution here is the same as for the PTP insider threat (4.1.6): use public key
+cryptography.
+
+We implemented such a tailor made public-key cryptographic solution and observed that it
+
+works without problems, unlike the unsuccessful use of ordinary VPN based solutions ([4]).
+
+4.3 Management Layer Attacks
+
+The IEEE 1588 standard [12] deﬁnes a PTP speciﬁc management format. The format enables the
+management node to query PTP nodes’ dataset ﬁelds, using GET_<X> messages, and update them,
+using SET_<X> messages. For example, using the SET_CLOCK_ACCURACY message, the management
+node can update a speciﬁc node’s accuracy ﬁeld, an action that can change the result of the next
+BMC algorithm. Although the protocol deﬁnes extensive management capabilities, it does not
+specify any authentication mechanism to be used when identifying the management node. Further,
+note that management messages are uni-directional and do not require a response.
+
+4.3.1 Applicative Proxy Grandmaster Attack Scenario
+
+Attack Even the weakest adversary, the OOB Applicative adversary, can send fake management
+messages to upgrade a speciﬁed PTP node’s dataset. As a result of its dataset improvement, the
+targeted node will win the BMC leader election and will be declared the network’s grandmaster.
+After being elected, the adversary will send SET_TIME messages to directly control the target’s time,
+thus taking full control of the time and structure of the whole PTP network.
+
+Mitigation The above attack takes advantage of the fact that the 2008 standard version holds no
+authenticated mechanisms between the management node and the “ordinary” nodes. The straight-
+forward defense mechanism that can be deployed is a white-list of IPs, or other network address
+matching the network’s underlayers, from which management messages should be sent.
+
+4.3.2 Network Proxy Grandmaster Attack Scenario
+
+Attack A whitelist or blacklist mitigation is still easily defeated; The OOB Network adversary,
+or any other stronger adversary, will deploy the previous attack while also spooﬁng the network
+layers of the messages so to match with the management’s white-list of addresses.
+
+Mitigation There are 3 possible solutions to assure the management message’s authenticity:
+
+1. Adding a session binding between the management node and the ordinary nodes
+
+2. Adding a cryptographic authentication to the management messages
+
+3. Deprecating the management protocol, in favor of more standard and secure management
+
+and control protocol
+
+18
+
+Although the ﬁrst 2 solutions can be deployed, each with its pros and cons, we agree with
+[22] and recommend to pick the 3rd option. The management messages can easily be replaced by
+a standard SNMP implementation that natively supports authentication without needed changes
+[30]. SNMP maintains the Set and Get basic operations of the original management protocol, and
+can be implemented using PTP speciﬁc MIB structures. The main advantage of this proposed
+countermeasure is explained in [22] from a deployment’s point of view.
+
+5 Proposed Security Extension
+
+Up to this point we have shown the continuous arms race between the adversary and out proposed
+defenses. In this section we describe the full details of our cryptographic defense mechanism, its
+analysis compared to the original Annex K and to state of the arts security proposals, and its
+remaining gaps.
+
+5.1 Prerequisites and Scope
+
+Our defense scheme assumes the existence of several prerequisites, which are:
+
+1. The existence of a management entity
+
+2. A predeﬁned public veriﬁcation key, distributed to all PTP nodes
+
+3. Master certiﬁcates signed by the management entity
+
+The ﬁrst assumption can easily be solved in a real deployment of the protocol since there will
+be an administrator to set up the system. Nevertheless, the assumption is only needed for the sake
+of the rest assumptions, thus making the management task relatively easy.
+
+The second assumption is the strongest assumption that we demand, and still it can be solved
+using ordinary management tools in the computer network. The PTP’s deployment is meant
+to accurately distribute the time between an already deﬁned, and probably managed, computer
+network. Therefore, we only reduce the problem of Public-Key distribution for the PTP protocol,
+to the already existing problem of Public-Key distribution for the entire computer network.
+
+The third assumption can be solved in a straightforward manner by the management entity
+
+that can choose between 2 rather simple solutions:
+
+1. Presupplying the certiﬁcates when conﬁguring the PTP middleboxes
+
+2. Acting as a distribution server that distributes existing certiﬁcates on demand
+
+In this paper we focus solely on the PTP header format and the following PTP messages: SYNC,
+FOLLOW_UP, DELAY_REQUEST, DELAY_RESPONSE and ANNOUNCE. The solution can easily be extended
+to the rest of the messages.
+
+In addition, for simplicity’s sake, the explanation below makes an assumption that the clock IDs
+are generated in accordance with the underlying network addresses, as speciﬁed in Section 4.1.2.
+Otherwise, the ANNOUNCE message should have included an additional ﬁeld declaring the node’s
+network address, and the slave would need to store in his master’s dataset this additional ﬁeld.
+
+19
+
+5.2 Cryptographic Design Choices
+
+As was suggested in [31], we have implemented and demonstrated our cryptographic solutions. In
+our implementation we chose an Edwards-Curve (Ed) based public key scheme, and more speciﬁ-
+cally, the EdDSA signing scheme [25]. Our choice is based on 4 main arguments:
+
+1. Only the authenticity is important, and so we need only a signing/veriﬁcation scheme
+
+2. Ed schemes make use of relatively short keys
+
+3. Ed schemes make use of relatively short signatures
+
+4. Ed schemes are designed to be faster than other digital signatures schemes
+
+While the ﬁrst argument does not speciﬁcally point to Ed based solutions, the rest of the
+
+arguments had an important role in our choice.
+
+When the size of the ANNOUNCE message (the largest PTP message) is merely 64 bytes, the
+signature that is being used should try to match it in size. In our implementation over the open-
+sourced PTPd, we integrated an Ed25519 scheme [3], based on the WolfCrypt library [33]. Using
+this scheme the size of a signature is 64 bytes, and the size of the public key is 32 bytes, thus
+maintaining the rather small size of the original messages.
+
+5.3 PTP Header Format
+
+Since easing the deployment process was one of our design goals, we made every eﬀort to keep
+the protocol’s original header format. The only extensions we suggest to the header format were
+already discussed in Section 4.1.4:
+
+1. Using 2 reserved bytes for the enlarged 4 byte sequenceId
+
+2. Using 1 reserved bit, from the bit ﬂag, marking the use of the defense scheme
+
+While the enlarged sequenceId enables session-like semantics between the master and the
+slave, it also acts as a cryptographic aid: an eﬀective anti-replay counter. By making the slave
+check the window validity of this ﬁeld, and by incrementing it slowly through the large 32 bit
+range, the adversary’s ability to replay a recorded signed message is practically non-existent. In
+case the master sends 20 SYNC messages per second, the identiﬁer’s wrap-around will occur after
+approximately 7 years.
+
+The second use of the enlarged sequenceId ﬁeld, as was brieﬂy described in Section 4.1.3, is
+as a challenge-response ﬁeld for the delay/response messages. Meaning that before the slave sends
+a DELAY_REQUEST message, it randomly picks a sequenceId, therefore generating a challenge to
+the waiting adversary. While the master node simply needs to reply with the same sequenceId,
+an OOB adversary will need to guess the challenge. In addition, in case these messages were to
+be signed too, even the In-Band adversary would need to store a large amount of recorded signed
+DELAY_RESPONSE messages for him to even try to eﬀect the delay measurements (the adversary can
+utilize the Birthday Paradox to reduce his storage costs).
+
+20
+
+Table 2: Adding the certiﬁcate to the announce message: public key + signature
+
+5.4 Announce message Format
+
+The original design of the IEEE 1588 standard, allows ﬂexibility in the structure of the ANNOUNCE
+message. This allows us to use the ANNOUNCE as a message that wraps together all of the node’s
+speciﬁcations, including the distribution of cryptographic certiﬁcates throughout the PTP network.
+
+The required change to the message’s structure is only the addition of two extension ﬁelds, as
+
+can be seen in Table 2.
+
+The ﬁrst ﬁeld is the master’s public key, to be stored and used by slave nodes. In our imple-
+
+mentation this ﬁeld had the size of 32 bytes.
+
+The second ﬁeld is the management’s signature over all of the ANNOUNCE ﬁelds, including the
+public key. In our implementation this ﬁeld had the size of 64 bytes. This results in an ANNOUNCE
+message of size 160 bytes, instead of the original 64 bytes.
+
+Technical Note #1: The signature covers only the ANNOUNCE message’s body, without the
+PTP header. In addition, some of the message’s ﬁelds are not needed for the BMC algorithm and so
+they are ﬁlled with 0 when the certiﬁcate is created. These ﬁelds are: originTimestamp, reserved
+and stepsRemoved.
+
+Technical Note #2: During the BMC algorithm, after a slave validates a master candidate’s
+certiﬁcate once, it needs only to compare its ﬁelds and signature with every newly received ANNOUNCE
+message from the same node. Only in case the certiﬁcate parameters change is there a need to
+actually perform a cryptographic veriﬁcation check on it again. This means that the expectation
+of the overhead cost in signing and verifying these messages is practically zero: The management
+node needs to sign the certiﬁcate once, the master node only needs to copy it from its conﬁguration,
+and the slave node needs only check it once per BMC-elected master.
+
+21
+
+Table 3: Adding the signature to the follow up message
+
+5.5 Sync message Format
+
+The SYNC message stayed unchanged in our scheme, due to the fact that we mandate the FOLLOW_UP
+message to allow hardware-based timestamping. The SYNC message only acts as a time bookmark
+for the following message that holds the actual timestamp and signature. This protocol enabled
+feature, makes the addition of software based security layer possible. Meaning that the CPU needs
+to query the network adapter for the sent SYNC exact timestamp, and from there on it is free to do
+as it likes when building the matching FOLLOW_UP message.
+
+5.6 Follow Up message Format
+
+The FOLLOW_UP message was only extended with the signature at its end. As we can see in Table
+3, the FOLLOW_UP message size grew in our implementation from 44 bytes to 108 bytes. Note that
+the signature is calculated over the entire PTP message: header and payload.
+
+5.7 Delay request and response
+
+In our implementation we chose to keep the DELAY_REQUEST and DELAY_RESPONSE message un-
+touched, i.e., not to sign the DELAY_RESPONSE message. This was done because unlike the ANNOUNCE
+and SYNC that are sent in multicast, these message are sent in unicast, resulting in an overhead on
+the master proportional to the number of slaves in the network. Nevertheless, in the basic PTPd
+rate of 1 request message per second, the cryptographic overhead is pretty minor even with 100
+PTP slave nodes. However, adding a signature to the DELAY_RESPONSE message will cause the
+master to preform a cryptographic calculation after each DELAY_REQUEST message he receives. This
+can easily enable an adversary to prefrom a Denial-Of-Service (DoS) attack on the master.
+
+An additional argument against the signing of these messages, is the rather low beneﬁt one can
+gain from it. The sequenceId changes practically closed all attacks from OOB adversaries, while
+even the gap remaining can easily be handled by deploying several sanity thresholds on the received
+timestamps, as suggested in [20], [1] and [15]. For example, although the message includes a 10
+byte timestamp, for any sane deployment the timed delay probably won’t exceed 1 hour.
+
+5.8 Performance
+
+During our experimentation we discovered that the additional performance incurred from adding
+the cryptographic layer was very small. Our experiments were done using the DeterLab project
+
+22
+
+environment, on which we used computers with specs of: 4 X Intel(R) Xeon (R) CPU X3210
+@ 2.13Ghz, 4096 Bytes cache. According to our measurements, the average cost of signing the
+FOLLOW_UP 44 bytes message was only 0.41 msec. The cost of verifying that message by the slave
+was only 0.17 msec. This means that even at a high rate of 128 messages per second, suitable for
+the telecom proﬁle, the cryptographic work done by the CPU is negligible compared to the rest of
+the CPU needed calculations. These positive results show that no special hardware is needed for
+the cryptographic layer, as was suggested in [21] and implemented in [9], due to the lightweight
+bandwidth of the PTP protocol.
+
+5.9 Comparison to Annex K and State of the Art
+
+There is almost no connection between our security proposal to the original Annex K. The appendix
+uses a symmetric cryptographic solution to establish unicast trust relationships between two PTP
+nodes. This means that the appendix can not handle an Insider threat, and is speciﬁcally vulnerable
+to the attacks described in 4.1.6 and 4.2.2.
+In addition, the appendix requires a pretty strong
+starting point of a preshared symmetric key, and has a signiﬁcant communication overhead due to
+the 3-way handshake.
+
+Our solution overcomes these problems due to its asymmetric nature: we suggest only a one
+way trust relation: slaves authenticate the master. Together with authenticated BMC algorithm,
+this enables a lightweight multicast solution, that is speciﬁcally tailored to the PTP protocol.
+
+Recalling the 4-Pronged approach of [26] we see that our security extension has all of the needed
+
+qualities, but it achieves them in a diﬀerent way than what was proposed before:
+• Message integrity - asymmetric signature (EdDSA) originating in the master
+• Anti-Replay - using the protocol’s existing sequenceId ﬁeld, after enlargement to 4 bytes
+• Security association - binding the network identity to the clock ID, and using the clock ID as
+
+the security ID
+
+• Key Distribution - predeﬁned management public key, and predeﬁned master-candidates cer-
+
+tiﬁcates (including the public keys)
+
+In addition, we achieved additional security goals, goals that were yet to be addressed:
+• Node Authorization - signed ANNOUNCE certiﬁcates for the BMC algorithm
+• Challenge Response - using the protocol’s existing sequenceId ﬁeld, as a challenge response
+
+for the delay/resp messages
+
+And last, we suggest to deploy a standard and secure management protocol (e.g. SNMP), as
+a replacement to the PTP speciﬁc management. This protocol will be the Prong D layer of the
+IEEE 1588 standard.
+
+23
+
+5.10 Remaining Gaps
+
+After ensuring the correctness of the BMC algorithm, the authenticity of the management func-
+tionality and the validity of the protocol’s timestamps, there are still some remaining gaps. These
+remaining gaps are against an In-Band adversary, or against the 2 all powerful insider adversaries
+we mentioned at the beginning: The In-Band adversary can simply add a wanted delay to the orig-
+inal message’s network path. This attack will result in the same eﬀect as encoding the same delay
+into the message’s timestamp ﬁeld, while no cryptographic solution will be able to protect against
+the described attack scenario. Suggested mitigations against such attack involve the deployment
+of multiple network paths, as in [16], [28] and [5], or using the threshold defense mechanism.
+
+6 Conclusions and Future Work
+
+In our work we have shown a detailed threat analysis of the Precise Time Protocol, including several
+new attacks and mitigations. In the analysis we demonstrated the main security vulnerabilities of
+the protocol: naive BMC leader election, master timestamps without veriﬁcations, and lack of
+management authentication. Although the protocol deﬁnes the security Annex K, this appendix
+falls short of solving all of the protocol’s security issues. The appendix makes use of a pre-shared
+symmetric key, and deﬁnes a three-way handshake to build a trust relation between the master and
+the slave node. The appendix’s design does not handle threats resulting from an Insider threat,
+including attacks aimed against the important BMC grandmaster election.
+
+We suggest to deprecate the rather complicated security extension, in favor of our proposed
+PTP-speciﬁc defense scheme. Instead of moving towards a more complex symmetric-key crypto-
+graphic solution, we propose a public-key-based security solution specially tailored to the PTP
+protocol. In our solution we take advantage of the already deﬁned ANNOUNCE message along with
+the sequenceId ﬁeld, and present an asymmetric cryptographic solution with very light message
+overhead. Our solution is based on the basic diﬀerence between the 2 protocol roles: grandmaster
+and ordinary slave, a diﬀerence yet to be addressed by prior state of the art proposals.
+
+We implemented all our attacks and cryptographic solutions and found that the modiﬁed pro-
+tocol has excellent, practical performance on standard of-the-shelf computers. We believe that
+these additional security countermeasures will help to provide a complete security extension to the
+protocol, thus making the IEEE 1588 standard a more secure and robust network solution.
+
+Acknowledgements: We thank D.J. Bernstein and Tanja Lange for suggesting the use of
+
+EdDSA and the Ed25519 curve in our implementation.
+
+24
+
+References
+
+[1] M. Anyaegbu, Cheng-Xiang Wang, and W. Berrie. A sample-mode packet delay variation ﬁlter
+for IEEE 1588 synchronization. In IEEE Symposium on Precision Clock Synchronization for
+Measurement Control and Communication (ISPCS), pages 1–6, Nov 2012.
+
+[2] Terry Benzel. The science of cyber security experimentation: the DETER project. In Proceed-
+ings of the 27th Annual Computer Security Applications Conference, pages 137–148. ACM,
+2011.
+
+[3] Daniel J Bernstein, Niels Duif, Tanja Lange, Peter Schwabe, and Bo-Yin Yang. High-speed
+
+high-security signatures. Journal of Cryptographic Engineering, 2(2):77–89, 2012.
+
+[4] David T Chen. Secure 1588 in HeNB / Femtocell application. In Time & Sync in Telecoms,
+
+ITSF 2013, 2013.
+
+[5] M. Dalmas, H. Rachadel, G. Silvano, and C. Dutra. Improving PTP robustness to the Byzan-
+tine failure. In IEEE Symposium on Precision Clock Synchronization for Measurement, Con-
+trol, and Communication (ISPCS), pages 111–114, Oct 2015.
+
+[6] B. Dickerson. Observations on secure PTP, 2014. P1588 Working Group, https://ieee-sa.
+
+centraldesktop.com/1588/file/30928204/.
+
+[7] L. Ellegaard. PTP security using MACsec, 2014. P1588 Working Group, https://ieee-sa.
+
+centraldesktop.com/1588/file/33390811/.
+
+[8] P. V. Estrela and L. Bonebakker. Challenges deploying PTPv2 in a global ﬁnancial com-
+pany. In IEEE Symposium on Precision Clock Synchronization for Measurement Control and
+Communication (ISPCS), pages 1–6, Sept 2012.
+
+[9] H. Flatt, J. Jasperneite, and F. Schewe. An FPGA based cut-through switch optimized for
+one-step PTP and real-time ethernet. In IEEE Symposium on Precision Clock Synchronization
+for Measurement Control and Communication (ISPCS), pages 7–12, Sept 2013.
+
+[10] S. Fries. Proposal for IEEE 1588v3 security: Deﬁnition of a security TLV, 2014. P1588 Working
+
+Group, https://ieee-sa.centraldesktop.com/1588/file/31645125/.
+
+[11] Hugo Krawczyk, Ran Canetti, and Mihir Bellare. HMAC: Keyed-hashing for message authen-
+
+tication, 1997. Internet Engineering Task Force (IETF), RFC 2104.
+
+[12] K Lee, John C Eidson, Hans Weibel, and Dirk Mohl. IEEE 1588-standard for a precision clock
+synchronization protocol for networked measurement and control systems. In IEEE, volume
+1588, 2008.
+
+[13] D.L. Mills. Network Time Protocol (NTP). RFC 958, 1985.
+
+[14] J. Mirkovic, T. V. Benzel, T. Faber, R. Braden, J. T. Wroclawski, and S. Schwab. The
+DETER project: Advancing the science of cyber security experimentation and test. In IEEE
+International Conference on Technologies for Homeland Security (HST), pages 1–7, Nov 2010.
+
+25
+
+[15] T. Mizrahi. A game theoretic analysis of delay attacks against time synchronization proto-
+cols. In IEEE Symposium on Precision Clock Synchronization for Measurement Control and
+Communication (ISPCS), pages 1–6, Sept 2012.
+
+[16] T. Mizrahi. Slave diversity: Using multiple paths to improve the accuracy of clock synchro-
+nization protocols. In IEEE Symposium on Precision Clock Synchronization for Measurement
+Control and Communication (ISPCS), pages 1–6, Sept 2012.
+
+[17] T. Mizrahi. Security Requirements of Time Protocols in Packet Switched Networks. RFC
+
+7384, 2014.
+
+[18] Tal Mizrahi. Time synchronization security using IPsec and MACsec. In IEEE Symposium
+on Precision Clock Synchronization for Measurement Control and Communication (ISPCS),
+pages 38–43. IEEE, 2011.
+
+[19] N. Moreira, J. Lazaro, J. Jimenez, M. Idirin, and A. Astarloa. Security mechanisms to protect
+IEEE 1588 synchronization: State of the art and trends. In IEEE Symposium on Precision
+Clock Synchronization for Measurement, Control, and Communication (ISPCS), pages 115–
+120, Oct 2015.
+
+[20] T. Murakami, Y. Horiuchi, and K. Nishimura. A packet ﬁltering mechanism with a packet
+delay distribution estimation function for IEEE 1588 time synchronization in a congested
+network. In IEEE Symposium on Precision Clock Synchronization for Measurement Control
+and Communication (ISPCS), pages 114–119, Sept 2011.
+
+[21] Cagri Onal and Hubert Kirrmann. Security improvements for IEEE 1588 Annex K: Imple-
+mentation and comparison of authentication codes. In IEEE Symposium on Precision Clock
+Synchronization for Measurement Control and Communication (ISPCS), pages 1–6. IEEE,
+2012.
+
+[22] W. Owczarek. Deploying PTP as an enterprise service: Issues, challenges and design consid-
+erations. In IEEE Symposium on Precision Clock Synchronization for Measurement Control
+and Communication (ISPCS), pages 77–82, Sept 2013.
+
+[23] Yusuf Pathan, Abhijeet Dalvi, Arun Pillai, and Dhairyasheel Patil. Analysis of selective packet
+delay attack on IEEE 1588 Precision Time Protocol, 2014. U. Colorado ITP project, www.
+colorado.edu/itp/node/388.
+
+[24] Adrian Perrig, Dawn Song, Ran Canetti, JD Tygar, and Bob Briscoe. Timed eﬃcient stream
+loss-tolerant authentication (TESLA): Multicast source authentication transform introduction.
+RFC 4082, 2005.
+
+[25] Lukas Prokop. EdDSA notes. http://lukas-prokop.at/proj/eddsa/.
+
+[26] Subcommittee S: Security SC standing document v5, 2015. P1588 Working Group, https:
+
+//ieee-sa.centraldesktop.com/1588/file/39406935/.
+
+[27] PTPd github. https://github.com/ptpd/ptpd.
+
+26
+
+[28] A. Shpiner, Y. Revah, and T. Mizrahi. Multi-path time protocols. In IEEE Symposium on
+Precision Clock Synchronization for Measurement Control and Communication (ISPCS), pages
+1–6, Sept 2013.
+
+[29] D. Sibold. Status of network time security (NTS): Applicability for PTP, 2015. P1588 Working
+
+Group, https://ieee-sa.centraldesktop.com/1588/file/37027677/.
+
+[30] W. Stallings. SNMPv3: A security enhancement for SNMP. IEEE Communications Surveys,
+
+1(1):2–17, 1998.
+
+[31] Jeanette Tsang and Konstantin Beznosov. A security analysis of the precise time protocol
+
+(short paper). In Information and Communications Security, pages 50–59. Springer, 2006.
+
+[32] Hans Weibel. Technology update on IEEE 1588: The second edition of the high precision clock
+
+synchronization protocol. Embedded World, 2009.
+
+[33] WolfCrypt. https://www.wolfssl.com/wolfSSL/Products-wolfcrypt.html.
+
+27
+
+

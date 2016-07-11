@@ -1,0 +1,1054 @@
+Personalized Advertisement Recommendation: A Ranking Approach to Address
+
+the Ubiquitous Click Sparsity Problem
+
+Sougata Chaudhuri
+Department of Statistics
+
+University of Michigan, Ann Arbor
+
+Georgios Theocharous
+
+Adobe Big Data Experience Lab
+
+Mohammad Ghavamzadeh
+
+Adobe Big Data Experience Lab
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+6
+
+ 
+
+ 
+ 
+]
+
+G
+L
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+0
+7
+8
+1
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Abstract
+
+We study the problem of personalized advertise-
+ment recommendation (PAR), which consist of a
+user visiting a system (website) and the system
+displaying one of K ads to the user. The system
+uses an internal ad recommendation policy to map
+the user’s proﬁle (context) to one of the ads. The
+user either clicks or ignores the ad and correspond-
+ingly, the system updates its recommendation pol-
+icy. PAR problem is usually tackled by scalable
+contextual bandit algorithms, where the policies
+are generally based on classiﬁers. A practical prob-
+lem in PAR is extreme click sparsity, due to very
+few users actually clicking on ads. We systemati-
+cally study the drawback of using contextual ban-
+dit algorithms based on classiﬁer-based policies, in
+face of extreme click sparsity. We then suggest an
+alternate policy, based on rankers, learnt by op-
+timizing the Area Under the Curve (AUC) rank-
+ing loss, which can signiﬁcantly alleviate the prob-
+lem of click sparsity. We conduct extensive experi-
+ments on public datasets, as well as three industry
+proprietary datasets, to illustrate the improvement
+in click-through-rate (CTR) obtained by using the
+ranker-based policy over classiﬁer-based policies.
+
+Introduction
+Personalized advertisement recommendation (PAR) system is
+intrinsic to many major tech companies like Google, Yahoo,
+Facebook and others. The particular PAR setting we study
+here consists of a policy that displays one of the K pos-
+sible ads/offers, when a user visits the system. The user’s
+proﬁle is represented as a context vector, consisting of rele-
+vant information like demographics, geo-location, frequency
+of visits, etc. Depending on whether user clicks on the ad,
+the system gets a reward of value 1, which in practice trans-
+lates to dollar revenue. The policy is (continuously) updated
+from historical data, which consist of tuples of the form
+{user context, displayed ad, reward}. We will, in this paper,
+concern ourselves with PAR systems that are geared towards
+maximizing total number of clicks.
+
+The plethora of papers written on the PAR problem makes
+it impossible to provide an exhaustive list. Interested read-
+
+ers may refer to a recent paper by a team of researchers in
+Google [McMahan and others, 2013] and references therein.
+While the techniques in different papers differ in their de-
+tails, the majority of them can be be analyzed under the um-
+brella framework of contextual bandits [Langford and Zhang,
+2008]. The term bandit refers to the fact that the system only
+gets to see the user’s feedback on the ad that was displayed,
+and not on any other ad. Bandit information leads to difﬁculty
+in estimating the expected reward of a new or a relatively un-
+explored ad (the cold start problem). Thus, contextual ban-
+dit algorithms, during prediction, usually balance between ex-
+ploitation and exploration. Exploitation consists of predicting
+according to the current recommendation policy, which usu-
+ally selects the ad with the maximum estimated reward, and
+exploration consists of systematically choosing some other ad
+to display, to gather more information about it.
+
+Most contextual bandit algorithms aim to learn a policy
+that is essentially some form of multi-class classiﬁer. For ex-
+ample, one important class of contextual bandit algorithms
+learn a classiﬁer per ad from the batch of data [Richardson,
+Dominowska, and Ragno, 2007; McMahan and others, 2013;
+He and others, 2014] and convert it into a policy, that dis-
+plays the ad with the highest classiﬁer score to the user
+(exploitation). Some exploration techniques, like explicit -
+greedy [Koh and Gupta, 2014; Theocharous, Thomas, and
+Ghavamzadeh, 2015] or implicit Bayesian type sampling
+from the posterior distribution maintained on classiﬁer pa-
+rameters [Chapelle and Li, 2011] are sometimes combined
+with this exploitation strategy. Other, more theoretically so-
+phisticated online bandit algorithms, essentially learn a cost-
+sensitive multi-class classiﬁer by updating after every round
+of user-system interaction [Dudik et al., 2011; Agarwal et al.,
+2014].
+
+Despite the fact that PAR has always been mentioned as
+one of the main applications of CB algorithms, there has not
+been much investigation into the practical issues raised in us-
+ing classiﬁer-based policies for PAR. The potential difﬁculty
+in using such policies in PAR stems from the problem of click
+sparsity, i.e., very few users actually ever click on online ads
+and this lack of positive feedback makes it difﬁcult to learn
+good classiﬁers. Our main objective here is to study this im-
+portant practical issue and we list our contributions:
+
+• We detail the framework of contextual bandit algorithms
+and discuss the problem associated with click sparsity.
+
+• We suggest a simple ranker-based policy to overcome
+the click sparsity problem. The rankers are learnt by
+optimizing the Area Under Curve (AUC) ranking loss
+via stochastic gradient descent (SGD) [Shamir and
+Zhang, 2013], leading to a highly scalable algorithm.
+The rankers are then combined to create a recommen-
+dation policy.
+
+• We conduct extensive experiments to illustrate the im-
+provement provided by our suggested method over both
+linear and ensemble classiﬁer-based policies for the
+PAR problem. Our ﬁrst set of experiments compare de-
+terministic policies on publicly available classiﬁcation
+datasets, that are converted to bandit datasets follow-
+ing standard techniques. Our second set of experiments
+compare stochastic policies on three proprietary bandit
+datasets, for which we employ a high conﬁdence ofﬂine
+contextual bandit evaluation technique.
+
+Contextual Bandit (CB) Approach to PAR
+The main contextual bandit algorithms can be largely di-
+vided into two classes: those that make speciﬁc parametric
+assumption about the reward generation process and those
+that simply assume that context and rewards are generated
+i.i.d. from some distribution. The two major algorithms in
+the ﬁrst domain are LinUCB [Chu et al., 2011] and Thomp-
+son sampling [Agrawal and Goyal, 2013]. Both algorithms
+assume that the reward of each ad (arm) is a continuous lin-
+ear function of some unknown parameter, which is not a suit-
+able assumption for click-based binary reward in PAR. More-
+over, both algorithms assume that there is context information
+available for each ad, while we assume availability of only
+user context in our setting. Thus, from now on, we focus on
+the second class of the contextual bandit algorithms. We pro-
+vide a formal description of the framework of contextual ban-
+dits suited to the PAR setting, and then discuss the problem
+that arises due to click sparsity.
+Let X ⊆ Rd and [K] = {1, 2, . . . , K} denote the user
+context space and K different ads/arms. At each round, it is
+assumed that a pair (x, r) is drawn i.i.d. from some unknown
+joint distribution D over X × {0, 1}K. Here, x ∈ X and
+r ∈ {0, 1}K represent the user context vector and the full
+reward vector, i.e., the user’s true preference for all the ads
+(the full reward vector is unknown to the algorithm). Π is the
+space of policies such that for any π ∈ Π, π : X (cid:55)→ [K].
+Contextual bandit algorithms have the following steps:
+
+• At each round t, the context vector xt is revealed, i.e., a
+
+user visits the system.
+
+• The system selects ad at according to the current pol-
+icy πt ∈ Π (exploitation strategy). Optionally, an explo-
+ration strategy is sometimes added, creating a distribu-
+tion pt(·) over the ads and at is drawn from pt(·). Policy
+πt and distribution pt are sometimes used synonymously
+by considering πt to be a stochastic policy.
+• Reward rt,at is revealed and the new policy πt+1 ∈ Π is
+computed, using information {xt, at, rt,at}. We empha-
+size that the system does not get to know rt,a(cid:48), ∀ a(cid:48) (cid:54)= at.
+
+ward, i.e.,(cid:80)T
+be binary,(cid:80)T
+(cid:80)T
+
+Assuming the user-system interaction happens over T rounds,
+the objective of the system is to maximize its cumulative re-
+t=1 rt,at. Note that since rewards are assumed to
+t=1 rt,at is precisely the total number of clicks
+and
+is the overall CTR of the recommendation al-
+gorithm. Theoretically, performance of a bandit algorithm is
+analyzed via the concept of regret, i.e.,
+
+t=1 rt,at
+
+T
+
+T(cid:88)
+(cid:124)
+
+t=1
+
+rt,π∗(xt)
+
+(cid:123)(cid:122)
+(cid:80)T
+
+−
+
+(cid:125)
+
+T(cid:88)
+(cid:124) (cid:123)(cid:122) (cid:125)
+
+rt,at
+
+t=1
+
+Regret(T) =
+
+optimal policy’s cumulative reward
+
+algorithm’s cumulative reward
+
+where π∗ = argmax
+t=1 rt,π(xt). The desired property
+π∈Π
+of any contextual bandit algorithm is to have a sublinear (in
+T ) bound on Regret(T) (in expectation or high probability),
+i.e., Regret(T) ≤ o(T). This guarantees that, at least, the al-
+gorithm converges to the optimal policy π∗ asymptotically.
+
+Practical Issues with CB Policy Space
+Policy space Π considered for major contextual bandit algo-
+rithms are based on classiﬁers. They can be tuples of binary
+classiﬁers, with one classiﬁer per ad, or global cost-sensitive
+multi-class classiﬁer, depending on the nature of the bandit
+algorithm. Since clicks on the ads are rare and small improve-
+ment in click-through rate can lead to signiﬁcant reward, it is
+vital for the policy space to have good policies that can iden-
+tify the correct ads for the rare users who are highly likely
+to click on them. Extreme click sparsity makes it very prac-
+tically challenging to design a classiﬁer-based policy space,
+where policies can identify the correct ads for rare users. Cru-
+cially, contextual bandit algorithms are only concerned with
+converging as fast as possible to the best policy π∗ in the pol-
+icy space Π and do not take into account the nature of the
+policies. Hence, if the optimal policy in the policy space does
+a poor job in identifying correct ads, then the bandit algo-
+rithm will have very low cumulative reward, regardless of its
+sophistication. We discuss how click sparsity hinders in the
+design of different types of classiﬁer-based policies.
+Binary Classiﬁer Based Policies
+Contextual bandit algorithms are traditionally presented as
+online algorithms, with continuous update of policies. Usu-
+ally, in industrial PAR systems, it is highly impractical to up-
+date policies continuously, due to thousands of users visiting
+a system in a small time frame. Thus, policy update happens,
+i.e. new policy is learnt, after intervals of time, using the ban-
+dit data produced from the interaction between the current
+policy and users, collected in batch. It is convenient to learn
+a binary classiﬁer per ad in such a setting. To explain the pro-
+cess concisely, we note that the bandit data consists of tuples
+of the form {x, a, ra}. For each ad a, the users who had not
+clicked on the ad (ra=0) would be considered as negative ex-
+amples and the users who had clicked on the ad (ra=1) would
+be considered as positive examples, creating a binary training
+set for ad a. The K binary classiﬁers are converted into a rec-
+ommendation policy using a “one-vs-all” method [Rifkin and
+
+Klautau, 2004]. Thus, each policy in policy space Π can be
+considered to be a tuple of K binary classiﬁers.
+A number of research publications show that researchers con-
+sider binary linear classiﬁers, that are learnt by optimizing the
+logistic loss [Richardson, Dominowska, and Ragno, 2007],
+while ensemble classiﬁers, like random forests, are also be-
+coming popular [Koh and Gupta, 2014]. We note that the ma-
+jority of the papers that learn a logistic linear classiﬁer focus
+on feature selection [He and others, 2014], novel regulariza-
+tions to tackle high-dimensional context vectors [McMahan
+and others, 2013], or propose clever combinations of logistic
+classiﬁers [Agarwal et al., 2009].
+Click sparsity poses difﬁculty in design of accurate binary
+classiﬁers in the following way: for an ad a, there will be
+very few clicks on the ad as compared to the number of users
+who did not click on the ad. A binary classiﬁer learnt in such
+setting will almost always predict that its corresponding ad
+will not be clicked by a user, failing to identify the rare,
+but very important, users who are likely to click on the ad.
+This is colloquially referred to as “class imbalance problem”
+in binary classiﬁcation [Japkowicz and Stephen, 2002]. Due
+to the extreme nature of the imbalance problem, tricks like
+under-sampling of negative examples or oversampling of pos-
+itive examples [Chawla, Japkowicz, and Kotcz, 2004] are not
+very useful. More sophisticated techniques like cost-sensitive
+svms require prior knowledge about importance of each class,
+which is not generally available in the PAR setting.
+Note- Some of the referenced papers do not have explicit
+mention of CBs because the focus in those papers is on the
+issues related to classiﬁer learning process, involving type
+of regularization, overcoming curse of dimensionality, scal-
+ability etc. The important issue of extreme class imbalance
+has not received sufﬁcient attention (Sec 6.2, [He and oth-
+ers, 2014]). When the classiﬁers are used to predict ads, the
+technique is a particular CB algorithm (the exact exploration+
+exploitation mix is often not revealed).
+Cost Sensitive Multi-Class Classiﬁer Based Policies
+Another type of policy space consist of cost-sensitive multi-
+class classiﬁers [Langford and Zhang, 2008; Dudik et al.,
+2011; Agarwal et al., 2014]. They can be cost-sensitive multi-
+class svms [Cao, Zhao, and Zaiane, 2013], multi-class logistic
+classiﬁers or ﬁlter trees [Beygelzimer, Langford, and Raviku-
+mar, 2007]. Click sparsity poses slightly different kind of
+problem in practically designing a policy space of such clas-
+siﬁers.
+Cost sensitive multi-class classiﬁer works as follows: assume
+a context-reward vector pair (x,r) is generated as described in
+the PAR setting. The classiﬁer will try to select a class (ad)
+a such that the reward ra is maximum among all choices of
+ra(cid:48), ∀ a(cid:48) ∈ [K] (we consider reward maximizing classiﬁers,
+instead of cost minimizing classiﬁers). Unlike in traditional
+multi-class classiﬁcation, where one entry of r is 1 and all
+other entries are 0; in cost sensitive classiﬁcation, r can have
+any combination of 1 and 0. Now consider the reward vec-
+tors rts generated over T rounds. A poor quality classiﬁer
+πp, which fails to identify the correct ad for most users xt,
+∼ O(),
+will have very low average reward, i.e.,
+with  ∼ 0. From the model perspective, extreme click spar-
+
+t=1 rt,πp (xt)
+
+(cid:80)T
+
+T
+
+(cid:80)T
+
+t=1 rt,πg (xt)
+
+sity translates to almost all reward vectors rt being (cid:126)0. Thus,
+even a very good classiﬁer πg, which can identify the correct
+ad at for almost all users, will have very low average reward,
+∼ O(). From a practical perspective, it
+i.e.,
+is difﬁcult to distinguish between the performance of a good
+and poor classiﬁer, in face of extreme sparsity, and thus, cost
+sensitive multi-class classiﬁers are not ideal policies for con-
+textual bandits addressing the PAR problem.
+
+T
+
+AUC Optimized Ranker
+We propose a ranking-based alternative to learning a classi-
+ﬁer per ad, in the ofﬂine setting, that is capable of overcoming
+the click sparsity problem. We learn a ranker per ad by opti-
+mizing the Area Under the Curve (AUC) loss, and use a rank-
+ing score normalization technique to create a policy mapping
+context to ad. We note that AUC is a popular measure used
+to evaluate a classiﬁer on an imbalanced dataset. However,
+our objective is to explicitly use the loss to learn a ranker that
+overcomes the imbalance problem and then create a context
+to ad mapping policy.
+Ranker Learning Technique: For an ad a, let S+ = {x :
+ra = 1} and S− = {x : ra = 0} be the set of positive
+and negative instances, respectively. Let fw be a linear rank-
+ing function parameterized by w ∈ Rd, i.e., fw(x) = w · x
+(inner product). AUC-based loss (AUCL) is a ranking loss
+that is minimized when positive instances get higher scores
+than negative instances, i.e., the positive instances are ranked
+higher than the negatives when instances are sorted in de-
+scending order of their scores [Cortes and Mohri, 2004]. For-
+mally, we deﬁne empirical AUCL for function fw(·)
+1(fw(x+) − fw(x
+−
+
+(cid:88)
+
+(cid:88)
+
+AUCL =
+
+< 0).
+
+1
+
+|S+||S−|
+
+x+∈S+
+
+x−∈S−
+
+(cid:124)
+
+Direct optimization of AUCL is a NP-hard problem, since
+AUCL is sum of discontinuous indicator functions. To make
+the objective function computationally tractable, the indica-
+tor functions are replaced by a continuous, convex surrogate
+(cid:96)(t). Examples include hinge (cid:96)(t) = [1 − t]+ and logistic
+(cid:96)(t) = log(1 + exp(−t)) surrogates. Thus, the ﬁnal objective
+function to optimize is
+
+L(w) =
+
+1
+
+|S+||S−|
+
+(cid:96)(fw(x+) − fw(x
+−
+
+)
+).
+
+(1)
+
+(cid:88)
+
+(cid:88)
+
+x+∈S+
+
+x−∈S−
+
+(cid:124)
+
+(cid:123)(cid:122)
+
+t
+
+(cid:123)(cid:122)
+
+t
+
+(cid:125)
+
+)
+
+(cid:125)
+
+Note: Since AUCL is a ranking loss, the concept of class im-
+balance ceases to be a problem. Irrespective of the number of
+positive and negative instances in the training set, the position
+of a positive instance w.r.t to a negative instance in the ﬁnal
+ranked list is the only matter of concern in AUCL calculation.
+Optimization Procedure
+The objective function (1) is a convex function and can be ef-
+ﬁciently optimized by stochastic gradient descent (SGD) pro-
+cedure [Shamir and Zhang, 2013]. One computational issue
+associated with AUCL is that it pairs every positive and neg-
+ative instance, effectively squaring the training set size.The
+SGD procedure easily overcomes this computational issue.
+
+At every step of SGD, a positive and a negative instance are
+randomly selected from the training set, followed by a gradi-
+ent descent step. This makes the training procedure memory-
+efﬁcient and mimics full gradient descent optimization on the
+entire loss. We also note that the rankers for the ads can be
+trained in parallel and any regularizer like (cid:107)w(cid:107)1 and (cid:107)w(cid:107)2
+can be added to (1), to introduce sparsity or avoid overﬁtting.
+Lastly, powerful non-linear kernel ranking functions can be
+learnt in place of linear ranking functions, but at the cost of
+memory efﬁciency, and the rankers can even be learnt online,
+from streaming data [Zhao et al., 2011].
+
+Constructing Policy from Rankers
+Similar to learning a classiﬁer per ad, a separate ranking func-
+tion fwa (·) is learnt for each ad a from the bandit batch data.
+Then the following technique is used to convert the K sep-
+arate ranking functions into a recommendation policy. First,
+a threshold score sa is learnt for each action a ∈ [K] sepa-
+rately (see the details below), and then for a new user x, the
+combined policy π works as follows:
+
+π(x) = argmax
+a∈[K]
+
+(fwa (x) − sa).
+
+(2)
+
+Thus, π maps x to ad a with maximum “normalized score”.
+This normalization negates the inherent scoring bias that
+might exist for each ranking function. That is, a ranking func-
+tion for an action a ∈ [K] might learn to score all instances
+(both positive and negative) higher than a ranking function for
+an action b ∈ [K]. Therefore, for a new instance x, ranking
+function for a will always give a higher score than the ranking
+function for b, leading to possible incorrect predictions.
+Learning Threshold Score sa: After learning the ranking
+function fwa (·) from the training data, the threshold score
+sa is learnt by maximizing some classiﬁcation measure like
+precision, recall, or F-score on the same training set. That is,
+score of each (positive or negative) instance in the training
+set is calculated and the classiﬁcation measure corresponding
+to different thresholds are compared. The threshold that gives
+the maximum measure value is assigned to sa.
+
+Competing Policies and Evaluation Techniques
+To support our hypothesis that ranker based policies address
+the click-sparsity problem better than classiﬁer based poli-
+cies, we set up two sets of experiments. We a) compared de-
+terministic policies (only “exploitation”) on full information
+(classiﬁcation) datasets and b) compared stochastic policies
+(“exploitation + exploration”) on bandit datasets, with a spe-
+ciﬁc ofﬂine evaluation technique. Both of our experiments
+were designed for batch learning setting, with policies con-
+structed from separate classiﬁers/rankers per ad. The clas-
+siﬁers considered were linear and ensemble RandomFor-
+est classiﬁers and ranker considered was the AUC optimized
+ranker.
+
+Deterministic Policies: Policies from the trained clas-
+siﬁers were constructed using the “one-vs-all” technique,
+i.e., for a new user x, the ad with the maximum score accord-
+ing to the classiﬁers was predicted. For the policy constructed
+
+from rankers, the ad with the maximum shifted score accord-
+ing to the rankers was predicted, using Eq. 2. Deterministic
+policies are “exploit only” policies.
+
+Stochastic Policies: Stochastic policies were constructed
+from deterministic policies by adding an -greedy exploration
+technique on top. Brieﬂy, let one of the stochastic policies be
+denoted by πe and let  ∈ [0, 1]. For a context x in the test
+set, πe(a|x) = 1 − , if a was the offer with the maximum
+score according to the underlying deterministic policy, and
+πe(a|x) = 
+K−1, otherwise (K is the total number of offers).
+Thus, πe is a probability distribution over the offers. Stochas-
+tic policies are “exploit+ explore” policies.
+Evaluation on Full Information Classiﬁcation Data
+Benchmark bandit data are usually hard to obtain in pub-
+lic domains. So, we compared the deterministic policies on
+benchmark K-class classiﬁcation data, converted to K-class
+bandit data, using the technique in [Langford, Li, and Dudik,
+2011]. Brieﬂy, the standard conversion technique is as fol-
+lows: A K-class dataset is randomly split into training set
+Xtrain and test set Xtest (in our experiments, we used 70 − 30
+split). Only the labeled training set is converted into bandit
+data, as per procedure. Let {x, a} be an instance and the
+corresponding class in the training set. A class a(cid:48) ∈ [K] is
+selected uniformly at random. If a = a(cid:48), a reward of 1 is as-
+signed to x; otherwise, a reward of 0 is assigned. The new
+bandit instance is of the form {x, a(cid:48), 1} or {x, a(cid:48), 0}, and the
+true class a is hidden. The bandit data is then divided into K
+separate binary class training sets, as detailed in the section
+“Binary Classiﬁer based Policies”.
+Evaluation Technique: We compared the deterministic poli-
+cies by calculating the CTR of each policy. For a policy π,
+CTR on a test set of cardinality n is measured as:
+
+(cid:88)
+
+1
+n
+
+(x,a)∈test set
+
+1(π(x) = a)
+
+(3)
+
+Note that we can calculate the true CTR of a policy π because
+the correct class a for an instance x is known in the test set.
+Evaluation on Bandit Information Data
+Bandit datasets have both training and test sets in bandit form,
+and datasets we use are industry proprietary in nature.
+Evaluation Technique: We compared the stochastic policies
+on bandit datasets. Comparison of policies on bandit test set
+comes with the following unique challenge: for a stochas-
+tic policy π, the expected reward is ρ(π) = Ea∼π(·|x)ra =
+raπ(a|x), for a test context x (with the true CTR of π be-
+a
+ing average of expected reward over entire test set). Since the
+bandit form of test data does not give any information about
+rewards for offers which were not displayed, it is not possible
+to calculate the expected reward!
+
+(cid:80)
+
+We evaluated the policies using a particular ofﬂine con-
+textual bandit policy evaluation technique. There exist var-
+ious such evaluation techniques in the literature, with ade-
+quate discussion about the process [Li et al., 2011]. We used
+one of the importance weighted techniques as described in
+Theocharous et al. [2015]. The reason was that we could give
+
+high conﬁdence lower bound on the performance of the poli-
+cies. We provide the mathematical details of the technique.
+
+The bandit test data was logged from the interaction be-
+tween users and a fully random policy πu, over an interaction
+window. The random policy produced the following distribu-
+tion over offers: πu(a|x) = 1
+K , ∀ a ∈ [K]. For an instance
+{x, a(cid:48), ra(cid:48)} in the test set, the importance weighted reward of
+π(a(cid:48)|x)
+evaluation policy π is computed as ˆρ(π) = ra(cid:48)
+. The
+πu(a(cid:48)|x)
+importance weighted reward is an unbiased estimator of the
+true expected reward of π, i.e., Ea(cid:48)∼πu(·|x) ˆρ(π) = ρ(π).
+weighted CTR of π is deﬁned as
+
+Let the cardinality of the test set be n. The importance
+
+n(cid:88)
+
+i=1
+
+1
+n
+
+π(ai|xi)
+πu(ai|xi)
+
+rai
+
+(4)
+
+Since (x, r) are assumed to be generated i.i.d., the impor-
+tance weighted CTR is an unbiased estimator of the true
+CTR of π. Moreover, it is possible to construct a t-test
+based lower conﬁdence bound on the expected reward, using
+π(ai|xi)
+,
+the unbiased estimator, as follows: let Xi = rai
+πu(ai|xi)
+(Xi − ˆX)2. Then,
+
+Xi, and σ =
+
+n(cid:80)
+
+n(cid:80)
+
+(cid:115)
+
+1
+
+ˆX =
+
+n − 1
+ˆX = importance weighted CTR and
+
+i=1
+
+1
+n
+
+i=1
+
+data to bandit training data, and the average accuracy over
+the runs are reported. Figure 1 top and bottom show per-
+formance of various policies learnt without and with under-
+sampling during training, respectively. Under-sampling was
+done to make positive:negative ratio as 1:2 for every class
+(this basically means that Avg % positive was 33%). The ra-
+tio of 1:2 generally gave the best results.
+
+Observations: a) With heavy under-sampling, the perfor-
+mance of classiﬁer-based policies improve signiﬁcantly dur-
+ing training. Ranker-based policy is not affected, validat-
+ing that class imbalance does not affect ranking loss, b)
+The linear ranker-based policy performs uniformly better
+than the linear classiﬁer-based policy, with or without under-
+sampling. This shows that restricting to same class of func-
+tions (linear), rankers handles class-imbalance much better
+than classiﬁers c) The linear ranker-based policy does better
+than more complex RandomForest (RF) based policy, when
+no under-sampling is done during training, and is competitive
+when under-sampling is done, and d) Complex classiﬁers like
+RFs are relatively robust to moderate class imbalance. How-
+ever, as we will see in real datasets, when class imbalance
+is extreme, gain from using a ranker-based policy becomes
+prominent. Moreover, growing big forests may be infeasible
+due to memory constraints,
+
+ˆX − σ√
+n
+
+t1−δ,n−1
+
+(5)
+is a 1 − δ lower conﬁdence bound on the true CTR. Thus,
+during evaluation, we plotted the importance weighted CTR
+and lower conﬁdence bounds for the competing policies.
+
+Empirical Results
+We detail the parameters and results of our experiments.
+Linear Classiﬁers and Ranker: For each ad a, a linear clas-
+siﬁer was learnt by optimizing the logistic surrogate, while
+a linear ranker was learnt by optimizing the objective func-
+tion (1), with (cid:96)(·) being the logistic surrogate. Since we did
+not have the problem of sparse high-dimensional features in
+our datasets, we added an (cid:96)2 regularizer instead of (cid:96)1 regu-
+larizer. We applied SGD with1 million iterations; varied the
+parameter λ of the (cid:96)2 regularizer in the set {0.01, 0.1, 1, 10}
+and recorded the best result.
+Ensemble Classiﬁers: We learnt a RandomForest classiﬁer
+for each ad a. The RandomForests were composed of 200
+trees, both for computational feasibility and for the more the-
+oretical reason outlined in [Koh and Gupta, 2014].
+Comparison of Deterministic Policies
+Datasets: The multi-class datasets are detailed in Table 1.
+
+Evaluation: To compare the deterministic policies , we
+conducted two sets of experiments; one without under-
+sampling of negative classes during training (i.e., no class bal-
+ancing) and another with heavy under-sampling of negative
+classes (artiﬁcial class balancing). Training and testing were
+repeated 10 times for each dataset to account for the random-
+ness introduced during conversion of classiﬁcation training
+
+Figure 1: Comparison of classiﬁcation accuracy of various
+policies for different datasets, Top- without under-sampling
+and Bottom- with under-sampling. See Observations for
+details
+
+Comparison of Stochastic Policies
+Our next set of experiments were conducted on three different
+datasets that are property of a major technology company.
+
+Datasets: Two of the datasets were collected from cam-
+paigns run by two major banks and another from campaign
+
+Table 1: All datasets were obtained from UCI repository (https://archive.ics.uci.edu/ml/). Five different datasets were selected.
+In the table, size represents the number of examples in the complete dataset. Features indicate the dimension of the instances.
+Avg. % positive gives the number of positive instances per class, divided by the total number of instances for that class, in the
+bandit training set, averaged over all classes. The lower the value, the more is the imbalance per class during training.
+
+Size
+
+Features
+Classes
+
+Avg. % positive
+
+OptDigits
+
+5620
+64
+10
+10
+
+Isolet
+7797
+617
+26
+4
+
+Letter
+20000
+
+16
+26
+4
+
+PenDigits Movementlibras
+
+360
+91
+15
+7
+
+10992
+
+16
+10
+10
+
+Table 2: Information about the training sets
+
+Domain Offer
+
+Impressions
+
+Hotel
+
+Bank 1
+
+1
+2
+3
+4
+5
+
+1
+2
+3
+4
+5
+
+36164
+37944
+30871
+32765
+20719
+
+37750
+38254
+182191
+168789
+17291
+
+Avg. % Positive
+
+(Clicks/Impressions)
+
+8.1
+8.2
+7.8
+7.7
+5.5
+
+0.17
+0.40
+0.45
+0.30
+0.23
+
+text, a denotes the offer displayed, and ra ∈ {0, 1} denotes
+the reward received. We trained our competing policies on
+data collected from the targeted policy and testing was done
+on the data collected from the random policy. We focused on
+the top-5 offers by number of impressions in the training set.
+Table 2 provides information about the training sets collected
+from the hotel and one of the bank’s campaigns. The second
+bank’s campaign has similar training set as the ﬁrst one. As
+can be clearly observed, each offer in the bank’s campaign
+suffers from extreme click sparsity.
+
+Feature Selection: We used a feature selection strategy to
+select around 20% of the users’ features, as some of the fea-
+tures were of poor quality and led to difﬁculty in learning. We
+used the information gain criteria to select features [Cheng,
+Wang, and Bryant, 2012].
+
+Results: Figures 2(a), 2(b), and 2(c) show the results of our
+experiments. We used heavy under-sampling of negative ex-
+amples, at the ratio 1:1 for positive:negative examples per of-
+fer, while training the classiﬁers. During evaluation,  = 0.2
+was used as exploration parameter. Taking  < 0.2, meaning
+more exploitation, did not yield better results.
+
+Observations: a) The ranker-based policy generally per-
+formed better than the classiﬁer-based policies. b) For the
+bank campaigns, where the click sparsity problem is ex-
+tremely severe, it can be stated with high conﬁdence that the
+ranker-based policy performed signiﬁcantly better than clas-
+siﬁer based policies. This shows that the ranker-based policy
+can handle class imbalance better than the classiﬁer policies.
+
+(a) Hotel- moderate click sparsity
+
+(b) Bank 1- extreme click sparsity
+
+(c) Bank 2- extreme click sparsity
+
+Figure 2: Importance weighted CTR and lower conﬁdence
+bounds for policies. Ranking based approach gains 15-25 %
+in importance weighted CTR over RF based approach on
+data with extreme click sparsity. Classiﬁers were trained af-
+ter class balancing.
+
+run by a major hotel chain. When a user visited the cam-
+paign website, she was either assigned to a targeted policy or
+a purely random policy. The targeted policy was some speciﬁc
+ad serving policy, particular to the campaign. The data was
+collected in the form {x, a, ra}, where x denotes the user con-
+
+References
+[Agarwal et al., 2009] Agarwal, D.; Gabrilovich, E.; Hall,
+R.; Josifovski, V.; and Khanna, R. 2009. Translating rele-
+vance scores to probabilities for contextual advertising. In
+Proceedings of the 18th ACM conference on Information
+and knowledge management, 1899–1902. ACM.
+
+[Agarwal et al., 2014] Agarwal, A.; Hsu, D.; Kale, S.; Lang-
+ford, J.; Li, L.; and Schapire, R. 2014. Taming the monster:
+A fast and simple algorithm for contextual bandits. In Pro-
+ceedings of the 31st International Conference on Machine
+Learning, 1638–1646.
+
+[Agrawal and Goyal, 2013] Agrawal, S., and Goyal, N.
+2013. Thompson sampling for contextual bandits with lin-
+ear payoffs. In Proceedings of the 30th International Con-
+ference on Machine Learning, 127–135.
+
+[Beygelzimer, Langford, and Ravikumar, 2007]
+
+Beygelzimer, A.; Langford,
+J.; and Ravikumar, P.
+2007. Multiclass classiﬁcation with ﬁlter trees. Preprint,
+June 2.
+
+[Calders and Jaroszewicz, 2007] Calders,
+
+and
+Jaroszewicz, S.
+Efﬁcient AUC optimization
+for classiﬁcation. In Knowledge Discovery in Databases:
+PKDD 2007. Springer. 42–53.
+
+2007.
+
+T.,
+
+[Cao, Zhao, and Zaiane, 2013] Cao, P.; Zhao, D.; and Za-
+iane, O. 2013. An optimized cost-sensitive svm for imbal-
+anced data learning. In Advances in Knowledge Discovery
+and Data Mining. Springer. 280–292.
+
+[Chapelle and Li, 2011] Chapelle, O., and Li, L. 2011. An
+empirical evaluation of thompson sampling. In Advances
+in neural information processing systems, 2249–2257.
+
+[Chawla, Japkowicz, and Kotcz, 2004] Chawla, N.; Japkow-
+icz, N.; and Kotcz, A. 2004. Editorial: special issue on
+learning from imbalanced data sets. ACM Sigkdd Explo-
+rations Newsletter 6(1):1–6.
+
+[Cheng, Wang, and Bryant, 2012] Cheng, T.; Wang, Y.; and
+Bryant, S. 2012. FSelector: a ruby gem for feature selec-
+tion. Bioinformatics 28(21):2851–2852.
+
+[Chu et al., 2011] Chu, W.; Li, L.; Reyzin, L.; and Schapire,
+R. 2011. Contextual bandits with linear payoff functions.
+In International Conference on Artiﬁcial Intelligence and
+Statistics, 208–214.
+
+[Cortes and Mohri, 2004] Cortes, C., and Mohri, M. 2004.
+AUC optimization vs. error rate minimization. Advances
+in neural information processing systems 16(16):313–320.
+[Dudik et al., 2011] Dudik, M.; Hsu, D.; Kale, S.; Karam-
+patziakis, N.; Langford, J.; Reyzin, L.; and Zhang, T. 2011.
+Efﬁcient optimal learning for contextual bandits. Proceed-
+ings of the 27th Conference on Uncertainty in Artiﬁcial
+Intelligence, 2011.
+
+[He and others, 2014] He, X., et al. 2014. Practical lessons
+from predicting clicks on ads at facebook. In Proceedings
+of 20th ACM SIGKDD Conference on Knowledge Discov-
+ery and Data Mining, 1–9. ACM.
+
+[Japkowicz and Stephen, 2002] Japkowicz, N., and Stephen,
+S. 2002. The class imbalance problem: A systematic study.
+Intelligent data analysis 6(5):429–449.
+
+[Koh and Gupta, 2014] Koh, E., and Gupta, N. 2014. An
+empirical evaluation of ensemble decision trees to improve
+personalization on advertisement. In Proceedings of KDD
+14 Second Workshop on User Engagement Optimization.
+[Langford and Zhang, 2008] Langford, J., and Zhang, T.
+2008. The epoch-greedy algorithm for multi-armed ban-
+dits with side information. In Advances in neural informa-
+tion processing systems, 817–824.
+
+[Langford, Li, and Dudik, 2011] Langford, J.; Li, L.; and
+Dudik, M. 2011. Doubly robust policy evaluation and
+learning. In Proceedings of the 28th International Confer-
+ence on Machine Learning, 1097–1104.
+
+[Li et al., 2011] Li, L.; Chu, W.; Langford, J.; and Wang, X.
+2011. Unbiased ofﬂine evaluation of contextual-bandit-
+In Pro-
+based news article recommendation algorithms.
+ceedings of the fourth ACM international conference on
+Web search and data mining, 297–306. ACM.
+
+[McMahan and others, 2013] McMahan, H., et al. 2013. Ad
+click prediction: a view from the trenches. In Proceedings
+of the 19th ACM SIGKDD international conference on
+Knowledge discovery and data mining, 1222–1230. ACM.
+
+[Richardson, Dominowska, and Ragno, 2007] Richardson,
+
+M.; Dominowska, E.; and Ragno, R. 2007. Predicting
+clicks: estimating the click-through rate for new ads.
+In Proceedings of the 16th international conference on
+World Wide Web, 521–530. ACM.
+
+[Rifkin and Klautau, 2004] Rifkin, R., and Klautau, A. 2004.
+In defense of one-vs-all classiﬁcation. The Journal of Ma-
+chine Learning Research 5:101–141.
+
+[Shamir and Zhang, 2013] Shamir, O., and Zhang, T. 2013.
+Stochastic gradient descent for non-smooth optimization:
+Convergence results and optimal averaging schemes.
+In
+Proceedings of the 30th International Conference on Ma-
+chine Learning, 2013, 71–79.
+
+[Theocharous, Thomas, and Ghavamzadeh, 2015]
+
+Theocharous, G.; Thomas, P.; and Ghavamzadeh, M.
+2015. Ad recommendation systems for life-time value
+In Proceedings of the 24th International
+optimization.
+Conference on World Wide Web Companion, 1305–1310.
+[Thomas, Theocharous, and Ghavamzadeh, 2015] Thomas,
+P.; Theocharous, G.; and Ghavamzadeh, M. 2015. High
+In Proceedings of the
+conﬁdence off-policy evaluation.
+Twenty-Ninth Conference on Artiﬁcial Intelligence.
+
+[Zhao et al., 2011] Zhao, P.; Jin, R.; Yang, T.; and Hoi, S. C.
+In Proceedings of
+2011. Online auc maximization.
+the 28th International Conference on Machine Learning
+(ICML-11), 233–240.
+
+

@@ -1,0 +1,1186 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+3
+1
+
+ 
+ 
+]
+L
+M
+
+.
+t
+a
+t
+s
+[
+ 
+ 
+
+1
+v
+0
+8
+9
+3
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+On Learning High Dimensional Structured Single Index Models
+
+Nikhil Rao∗1, Ravi Sastry Ganti†2, Laura Balzano‡3, Rebecca Willett §2, and Robert Nowak¶2
+
+1Technicolor Research, Los Altos, USA
+2University of Wisconsin, Madison, USA
+3University of Michigan, Ann Arbor, USA
+
+March 15, 2016
+
+Abstract
+
+Single Index Models (SIMs) are simple yet ﬂexible semi-parametric models for classiﬁcation and regression,
+where response variables are modeled as a nonlinear, monotonic function of a linear combination of features. Es-
+timation in this context requires learning both the feature weights and the nonlinear function that relates features
+to observations. While methods have been described to learn SIMs in the low dimensional regime, a method that
+can efﬁciently learn SIMs in high dimensions, and under general structural assumptions, has not been forthcoming.
+In this paper, we propose computationally efﬁcient algorithms for SIM inference in high dimensions using atomic
+norm regularization. This general approach to imposing structure in high-dimensional modeling specializes to spar-
+sity, group sparsity, and low-rank assumptions among others. We also provide a scalable, stochastic version of the
+method. Experiments show that the method we propose enjoys superior predictive performance when compared to
+generalized linear models such as logistic regression, on several real-world datasets.
+
+1 Introduction
+
+High-dimensional machine learning is often tackled using generalized linear models, where a response variable Y ∈ R
+is related to a feature vector X ∈ Rd via
+(1)
+for some weight vector w⋆ ∈ Rd and some smooth function g⋆ called the transfer function. Typical examples of g⋆
+are the logit and the probit functions for classiﬁcation, and the linear function for regression. While classical work on
+generalized linear models (GLMs) assumes g⋆ is known, this function is often unknown in real-world datasets, and
+hence we need methods that can simultaneously learn both the transfer function and the weight vector w⋆.
+
+E[Y |X = x] = g⋆(w⊤
+
+⋆ x)
+
+The model in (1) with g⋆ unknown is called a Single Index Model (SIM) and is a powerful semi-parametric general-
+ization of a GLM. SIMs were ﬁrst introduced in th econometrics and statistics literature Horowitz and H¨ardle [1996],
+Ichimura [1993], Horowitz [2009], and have since become popular in statistical machine learning applications as well.
+Recently, computationally and statistically efﬁcient algorithms have been provided for learning SIMs Kalai and Sastry
+[2009], Kakade et al. [2011] in low-dimensional settings where the number of samples/observations n is much larger
+than the ambient dimension d. However, modern data analysis problems in machine learning, signal processing,
+
+∗nikhilrao86@gmail.com
+†gmravi2003@gmail.com
+‡girasole@umich.edu
+§rmwillett@wisc.edu
+¶nowak@ece.wisc.edu
+
+The ﬁrst two authors made equal contributions to the paper.
+
+1
+
+and computational biology involve high dimensional datasets, where the number of parameters far exceeds the num-
+In such data-poor regimes statistical inference is impossible unless one makes ad-
+ber of samples, i.e. n ≪ d.
+ditional structural assumptions on the data. Examples of such assumptions include sparsity, group sparsity, low-rank
+etc. [Hastie et al., 2015] and several of them can be explained via the framework of atomic norms Chandrasekaran et al.
+[2012].
+
+In this paper we consider the problem of learning SIMs, given labeled data, in the high-dimensional regime.
+We provide computationally efﬁcient algorithms for learning SIMs in high-dimensions, and validate our methods on
+several high dimensional datasets. Our contributions are as follows:
+
+1. We provide an efﬁcient algorithm called CSI (Calibrated Single Index) that can be used to learn SIMs in high
+dimensions. The algorithm uses a special calibrated loss function. It alternates between a projected gradient
+descent step to update parameters and a function learning procedure to learn the transfer function. Our algorithm
+can elegantly handle several common structural assumptions on high dimensional data.
+
+2. We also provide a stochastic mini-batch version of CSI to handle large datasets, and show that the method
+efﬁciently learns a SIM for large datasets and yields better results when compared to ℓ1 regularized stochastic
+optimization methods.
+
+3. We provide extensive experimental evidence that demonstrates the effectiveness of CSI in a variety of high
+
+dimensional machine learning scenarios.
+
+The rest of this paper is organized as follows: after surveying the related literature, we formally set up the problem
+we are interested in in Section 2. In Section 3, we introduce our algorithm Calibrated Single Index learning (CSI ) and
+provide details about implementation and computational considerations. In Section 4, we extend CSI to a stochastic
+setting. We compare CSI to several other methods on a variety of high dimensional structurally constrained problems
+in Section 5, before concluding the paper in Section 6.
+
+1.1 Related Work
+
+High dimensional parameter estimation for GLMs has been widely studied, both from a theoretical and algorithmic
+point of view [see Van de Geer, 2008, Negahban et al., 2012, Park and Hastie, 2007, and references therein]. Learning
+SIMs is a harder problem and was ﬁrst introduced in econometrics Ichimura [1993] and statistics Horowitz and H¨ardle
+[1996]. In Kalai and Sastry [2009] the authors studied algorithms to learn the SIM in the low-dimensional setting,
+under the assumption that g⋆ is Lipschitz, and monotonic, and proposed and analyzed the Isotron algorithm to learn
+SIMs. The isotron algorithm, uses perceptron type updates to learn w⋆, along with application of the Pool Adjacent
+Violator (PAV) algorithm to learn a monotonic function g⋆. Their algorithm was improved in Kakade et al. [2011]
+where the authors proposed a method that combined perceptron updates to learn w⋆ along with a Lipschitz PAV
+(LPAV) procedure to learn a monotonic, Lipschitz function g⋆. Both these algorithms rely on the perceptron algorithm
+to learn w⋆, which while being good for low-dimensional classiﬁcation problems, is not designed to handle additional
+structure in data which is very common in high-dimensions.
+
+Alquier and Biau Alquier and Biau [2013] consider learning high dimensional single index models. The authors
+provide estimators of g⋆, w⋆ using PAC-Bayesian analysis. However, the estimator relies on reversible jump MCMC,
+and is slow to converge even for moderately sized problems. Radchenko [2015] learns high dimensional single index
+models with sparsity assumptions on the weight vectors; their work and others cited therein use ℓ1 or other variable se-
+lection techniques. This work requires solving an optimization problem for a grid of regularization parameters, making
+it intractable for large problems. To the best of our knowledge, simple, practical algorithms with theoretical guarantees
+and good empirical performance for learning single index models in high dimensions are not available. Restricted ver-
+sions of the SIM estimation problem with (structured) sparsity constraints have been considered in Plan et al. [2014],
+Rao et al. [2016], where the authors are only interested in accurate parameter estimation and not prediction. Hence, in
+these works the proposed algorithms do not learn the transfer function. Ganti et al. [2015b] provide methods to learn
+SIM’s in the matrix factorization setting, but a method that has the ability to infer SIM structure in the general high
+dimensional regime has not been forthcoming. In [Ganti et al., 2015a] the authors proposed methods similar to the
+ones proposed here. However, they only consider the problem of learning SIM when the object to infer is a sparse
+
+2
+
+vector. In contrast, we are able to, via the notion of atomic norms, handle a wide variety of high dimensional structure.
+We ﬁnally comment that there is also related literature focused on how to query points in order to learn the SIM, such
+as Cohen et al. [2012].
+
+j=1 gj(β⊤
+
+The class of SIM belongs to a larger set of semi-parametric models called multiple index models [Hastie et al.,
+2005]. In multiple index models the output is modeled as E[y|x] = Pd
+j x), where the vectors β1, . . . , βk are
+unknown and the functions g1, . . . , gk are also unknown smooth functions. The unknown components are learned from
+data. Another popular class of semi-parametric models that are studied in the literature is a class of additive models
+called projection pursuit regression [Friedman and Stuetzle, 1981, Buja et al., 1989]. In these models the output is
+modeled as E[y|x] = Pd
+j=1 αjgj(xj ), where α1, . . . , αd are unknown real coefﬁcients and g1, . . . , gd are unknown
+smooth functions. Sparse extensions of additive models have also been studied in the literature Ravikumar et al.
+[2009]. An important feature that differentiates us from the above mentioned literature in semi-parametric statistics
+is the fact that we make more stringent conditions on the smoothness of the non-parametric function. Namely we
+assume that this function, g⋆ is monotonic and Lipschitz. The monotonicity and Lipschitz property allows us to use
+simple optimization based algorithms to estimate g⋆. In contrast such assumptions have not been explicitly used in
+most previous works on single-index models and projection pursuit regression.
+
+2 Structurally Constrained Problems in High Dimensions
+
+We now set up notations that we use in the sequel, and set up the problem we are interested to solve. Assume we
+are provided i.i.d. data {(x1, y1), . . . , (xn, yn)}, where the label Y is generated according to the model E[Y |X =
+⋆ x) for an unknown parameter vector w⋆ ∈ Rd n ≪ d and unknown 1-Lipschitz, monotonic function
+x] = g⋆(w⊤
+g⋆. The monotonicity assumption on g⋆ is not unreasonable. In GLMs the transfer function is monotonic. In neural
+networks the most common activation functions are ReLU, sigmoid, and the hyperbolic tangent functions, all of
+which are monotonic functions. Moreover, learning monotonic functions is an easier problem than learning general
+smooth functions, as this learning problem can be cast as a simple quadratic programming problem. This allows us
+to avoid using costlier non-parametric smoothing techniques such as local polynomial regression [Tsybakov, 2009].
+We additionally assume that y ∈ [−1, 1] 1. Let X ∈ Rn×d be a matrix with each row corresponding to an xi and let
+y ∈ Rn be the corresponding vector of observations. Note that in the case of the data being matrices, we can assume
+that they’ve been vectorized, so as to maintain notational simplicity.
+In the case where n ≪ d, the problem of recovering w⋆ from the measurements is ill-posed even when g⋆ is
+known. To overcome this, one usually makes additional structural assumptions on the parameters w⋆. Speciﬁcally, we
+assume that the parameters satisfy a notion of “structural simplicity”, which we will now elaborate on.
+
+Suppose we are given a set of atoms, A = {a ∈ Rd}, such that any w ∈ Rd can be written as w = Pa∈A caa.
+Although the number of atoms in A may be uncountably inﬁnite, the sum notation implies that any w can be expressed
+as a linear combination of a ﬁnite number of atoms2.
+Given a set of atoms A, and a vector w = Pa∈A caa, with ca ≥ 0, [Chandrasekaran et al., 2012] deﬁned the
+
+atomic norm of a vector w as the gauge function 3 of A:
+
+kwkA = infnX
+
+a
+
+ca w = X
+
+a
+
+caa, ca ≥ 0 ∀ a ∈ Ao
+
+(2)
+
+The atomic norm acts as a convex proxy to the minimum number of atoms needed to represent w. Indeed, a small
+atomic norm typically means that the number of atoms used in the representation is small. Consider the following non
+convex atomic cardinality function:
+
+kwkA,0 = infnX
+
+a
+
+1[ca > 0]
+
+: w = X
+
+a
+
+caa, ca ≥ 0
+∀ a ∈ Ao
+
+(3)
+
+1We can easily relax this to y ∈ [−M, M ].
+2This representation need not be unique.
+3The function is a norm when the set A is centrally symmetric, which is a trivial assumption we make in the remainder of this paper
+
+3
+
+1[·] denotes the indicator function. We say that a vector w is “structurally simple” with respect to an atomic set
+A if kwkA,0 in the above equation is small. The notion of structural simplicity plays a central role in several high
+dimensional machine learning and signal processing applications:
+
+1. Sparse regression and classiﬁcation problems are ubiquitous in several areas, such as neuroscience Ryali et al.
+[2010] and compressed sensing Donoho [2006]. The atoms in this case are merely the signed canonical basis
+vectors, and the atomic norm is the ℓ1 norm.
+
+2. The idea of group sparsity plays a central role in multitask learning Argyriou et al. [2008] and computational
+biology Jacob et al. [2009], among other applications. The atoms are low dimensional unit disks, and the atomic
+norm reduces to the group lasso penalty.
+
+3. Low rank matrix completion and recovery problems in collaborative ﬁltering applications Koren et al. [2009]
+and mutilabel learning Yu et al. [2014] employ the nuclear norm, which is the atomic norm when the atoms are
+unit rank matrices.
+
+4. Integer programming problems look to recover sign vectors Mangasarian and Recht [2011], whose convex hull
+
+yields the ℓ∞ norm ball.
+
+5. Collaborative ﬁltering with side information and kernelized matrix factorzation Zhou et al. [2012] programs can
+be modeled as an atomic norm minimization program Rao et al. [2015b], wherein the atoms can be modeled as
+unit rank matrices formed by considering the SVD of the corresponding kernel matrices.
+
+2.1 Problem Setup: Calibrated loss minimization
+
+Our goal in this paper will be to solve the following optimization problem:
+
+ˆg, ˆw := arg min
+
+g,w L(y, X, w, g) +
+
+λ
+2 kwk2
+
+2 s.t. kwkA,0 ≤ k
+
+(4)
+
+where A is a known atomic set, k is a positive integer, and L is a loss function that we elaborate on next. Notice that
+in the above formulation we added a squared ℓ2 norm penalty to make the objective function strongly convex. In the
+case when we are dealing with matrix problems we can use the Frobenius norm of w.
+
+Suppose g⋆ was known. Let Φ⋆ : R → R be a function such that Φ′
+
+increasing, Φ⋆ is convex, and we can learn ˆw by solving the following program:
+
+⋆ = g⋆. Since we assume g⋆ is monotonically
+
+n
+
+ˆw := arg min
+
+w
+
+1
+n
+
+X
+s.t. kwkA,0 ≤ k
+
+i=1
+
+Φ⋆(w⊤xi) − yiw⊤xi +
+
+λ
+2 kwk2
+
+(5)
+
+When the transfer function is linear, Φ⋆ is a quadratic function, and we obtain the standard least squares minimization
+program with an atomic constraint. When the transfer function is the logit function, (5) reduces to constrained logistic
+regression. Modulo the kwkA,0 penalty and the regularization terms, the above objective is a sample version of the
+following stochastic optimization problem:
+
+min
+
+w
+
+E[Φ⋆(w⊤x) − yw⊤x].
+
+(6)
+
+⋆ = g⋆, the optimal solution to the above problem corresponds to the Single Index Model that satisﬁes E[Y |X =
+If Φ′
+⋆ x). Hence the above calibrated loss function takes into account the transfer function g⋆ used in the
+x] = g⋆(w⊤
+SIM via Φ⋆ and automatically adapts to the SIM from which the data is generated. When g⋆ is unknown, we instead
+consider the following loss function in (4):
+
+L(y, X, w, g) :=
+
+1
+n
+
+n
+
+X
+
+i=1
+
+4
+
+Φ(w⊤xi) − yiw⊤xi
+
+(7)
+
+where we constrain Φ′ = g ∈ G, the set of monotonic, 1-Lipschitz functions. With this choice of L, our optimization
+problem becomes
+
+ˆg, ˆw = arg min
+g∈G,w
+
+1
+n
+
+n
+
+X
+
+i=1
+
+Φ(w⊤xi) − yiw⊤xi +
+
+λ
+2 kwk2
+
+2
+
+subject to kwkA,0 ≤ k, Φ′ = g
+
+(8)
+
+3 Algorithm
+
+Our algorithm to solve the optimizaion problem in Equation (8) is an iterative projected gradient descent procedure
+interleaved with function ﬁtting steps that learn a monotonic, Lipschitz function. We use the LPAV algorithm to learn
+a monotonic, Lipschitz function which we describe next.
+
+3.1 The LPAV
+
+An important sub-problem that shows up in our learning algorithms is the problem of learning Lipschitz, monotonic
+functions. More precisely, given data (p1, y1), . . . (pn, yn), where p1, . . . , pn ∈ R we are required to output the best
+univariate monotonic, 1-Lipschitz function ˆg that minimizes the squared error Pn
+i=1(g(pi) − yi)2. The LPAV ﬁrst
+solves the following optimization problem:
+
+ˆz = arg min
+
+z∈Rn kz − yk2
+
+2
+
+s.t. 0 ≤ zj − zi ≤ pj − pi if pi ≤ pj
+
+(9)
+
+We then deﬁne ˆg as follows: Let ˆg(pi) = ˆzi. To get ˆg everywhere else on the real line, perform linear interpolation as
+follows: Sort pi for all i and let p{i} be the ith entry after sorting. Then, for any ζ ∈ R, we have
+
+ˆg(ζ) =
+
+
+
+
+ˆz{1},
+ˆz{n},
+µˆz{i} + (1 − µ)ˆz{i+1}
+
+ζ ≤ p{1}
+ζ ≥ p{n}
+ζ = µp{i} + (1 − µ)p{i+1}
+
+(10)
+
+It is easy to see that ˆg is a Lipschitz, monotonic function and attains the smallest least squares error on the given data.
+Our algorithm CSI will invoke the LPAV algorithm in each iteration, with pi = w⊤xi, using an appropriate weight
+vector w.
+
+3.2 Calibrated Single Index
+
+Our algorithm called CSI, to solve (8), under general structural constraints is sketched in Algorithm (1).
+
+parameters λ ≥ 0, s > 0, atomic set A.
+
+Algorithm 1 CSI
+Require: Data: X = [x1, . . . , xn] ∈ Rn×d, Labels: y = [y1, . . . , yn]⊤, Iterations: T > 0, Step size: η > 0,
+1: Initialize w0 = P A
+2: for t=1,. . . , T do
+3:
+4:
+
+s (X ⊤y).
+
+gt ← LP AV (Xwt−1, y).
+Calculate ˜wt ← wt−1 − η
+
+n Pn
+
+i=1(gt(w⊤
+
+t xi) − yi)xi + λwt−1.
+
+5: wt ← P A
+6: end for
+
+s ( ˜wt)
+
+CSI begins by initializing w∗ to w0 = P A
+
+s (·) is a projection operator that outputs the best s−
+atomic-sparse representation of the argument (Section 3.3). We then update our estimate of g⋆ to gt by using the
+LPAV algorithm on the data projected onto the vector wt−1 (Section 3.1). Using the updated estimate, gt, we update
+
+s (X ⊤y). Here P A
+
+5
+
+our weight vector to wt by a single step of iterative hard thresholding on the objective function of the optimization
+problem in Equation (8) with Φ = Φt, where Φt and gt are related by the equation Φ′
+t = gt. A key point to note is that
+CSI is highly general: indeed the only step that depends on the particular structural assumption made is the projection
+step (step 5 in Algorithm (1). In many cases of interest, this step is tractable, as discussed next.
+
+3.3 Atomic Projections with Examples
+
+A key component of Algorithm 1 is the projection operator P A
+Suppose we are given a vector w ∈ Rd, an atomic set A and a positive integer s. Also, let
+
+s (·), which entirely depends on the atomic set A.
+
+w = X
+
+a∈A
+
+caa,
+
+where the ca achieve the inf in the sense of (3). Let [c] ↓ be the elements ca, arranged in descending order by
+magnitude. We deﬁne
+
+P A
+
+s (w) :=
+
+s
+
+X
+
+i=1
+
+([c] ↓)iai
+
+(11)
+
+where (·)i is the ith element of the vector, and ai denotes the corresponding atom in the original representation. We
+can see that performing such projections is computationally efﬁcient in most cases:
+
+• Sparsity: When the atomic set are the signed canonical basis vectors, the projection step is the standard hard
+
+thresholding operation: retain the top s coefﬁcients of wt−1 by magnitude.
+
+• Low Rank: Under low rank constraints, P A
+
+s (·) reduces to retaining the best rank-s approximation of wt−1.
+
+Since s is typically small, this can be done efﬁciently using power iterations.
+
+• Group Sparsity: When the atoms are low dimensional unit disks, the projection step reduces to computing the
+
+norm of wt−1 restricted to each group, and retaining the top s groups.
+
+3.4 Computational Complexity of CSI
+
+To analyze the computational complexity of each iterate of the CSI algorithm, we need to analyze the time complexity
+of the gradient step, the projection step and the LPAV steps used in CSI . The gradient step takes O(nd) time. The
+projection step for low-rank, sparse and group sparse cases can be naively implemented using O(d log(d) + s) time or
+via the use of max-heaps in O(d + s log(d)) time. The LPAV algorithm is a quadratic program with immense structure
+in the inequality constraints and in the quadratic objective. Using clever algorithmic techniques one can solve this
+optimization problem in O(n log(n)) time (See Appendix D in Kakade et al. [2011]). The total runtime complexity
+for T iterations of CSI is O(T (nd + d log(d) + s + n log(n))), making the algorithm fairly efﬁcient. Nonetheless, we
+next detail a stochastic method that further reduces the complexity per iteration. This is especially useful in modern
+applications where n can be very large.
+
+4 Scalable Mini batch CSI
+
+In order to make CSI scalable to larger datasets, we now propose a stochastic extension. The method, sketched in
+Algorithm 2, performs updates similar to CSI , except that it works on randomly selected batches of data. Notice that
+steps 8-10 in Algorithm (2) outputs a random iterate wj, and the transfer function gj that was learned using wj and a
+random batch of data of size |B|, which is common in stochastic algorithms.
+There is a natural trade-off between the batch size |B|, the accuracy of updates and the computational complexity
+of each iterate of Stochastic CSI . While choosing a small size B leads to cheap updates, the LPAV step learns a sub-
+optimal transfer function. On the other hand, using a large batch size B, leads to accurate LPAV updates, but also leads
+to increased computational complexity of each iterate. As an extreme, |B| = 1 is extremely efﬁcient for the update of
+the weight vector w, but the LPAV method in this case will learn a constant transfer function.
+
+6
+
+parameters λ ≥ 0, s > 0, atomic set A, Threshold 0 < C < T .
+
+Algorithm 2 Stochastic CSI
+Require: Data: X = [x1, . . . , xn] ∈ Rn×d, Labels: y = [y1, . . . , yn]⊤, Iterations: T > 0, Step size: η > 0,
+1: Initialize w0 = P A
+2: for t=1,. . . , T do
+3:
+4:
+5:
+
+Obtain a batch B of size |B| uniformly at random without replacement.
+gt ← LP AV (XBwt−1, y).
+Calculate ˜wt ← wt−1 − ηj,t
+
+t xi) − yi)xi + λwt−1.
+
+n Pi∈B(gt(w⊤
+
+s (X ⊤y).
+
+s ( ˜wt)
+
+6: wt ← P A
+7: end for
+8: pick j ∈ {C + 1, C + 2, . . . , T} at random
+9: ˆw ← wj
+10: ˆg ← gj
+
+In our implementations, we perform multiple epochs of Stochastic CSI , each time randomly permuting the data
+at the start of the epoch, and performing the above sketched stochastic CSI updates on this randomly permuted data.
+Generally, a few epochs are enough, and in our experiments we mention results with 10 epochs. This method yields
+signiﬁcant speedups over the batch version, and since we only deal with minibatches, the complexity per iteration is
+now O((|B|d + d log(d) + s + |B| log(|B|)))
+
+5 Experiments
+
+We now compare and contrast our method with several other algorithms, in various high dimensional structural settings
+and on several datasets. We start with the case of standard sparse parameter recovery, before proceeding to display
+the effectiveness of our method in multitask learning scenarios and also in determining gene-disease associations in a
+structured matrix completion setting.
+
+5.1 Sparse Signal Recovery:
+
+We compare our method to several well known high dimensional sparse regression and classiﬁcation algorithms:
+
+• Sparse classiﬁcation with the logistic loss (SLR) and the squared hinge loss (SQH). We vary the regularization
+
+parameter over {2−10, 2−9,··· , 29, 210}. We used MATLAB code available in the L1-General library 4.
+
+• Sparse regression using least squares SLS. We used a modiﬁed Frank Wolfe method Rao et al. [2015a], 5, and
+
+varied the regularizer over {2−5, 2−4,··· , 219, 220}.
+
+• Our method CSI . We varied the sparsity of the solution as {d/4, d/8, d/16,··· , d/1024}, rounded off to the
+
+nearest integer, where d is the dimensionality of the data.
+
+For each dataset, we use a 50− 25− 25 split for training, cross validation and testing. All the results shown below and
+in the rest of the paper refer to the metric computed on the test set. We tested the algorithms on several datasets: link
+(n = 1051, d = 1840) and page (n = 1051, d = 3000) are datasets from the UCI machine learning repository. We
+also use four datasets from the 20 newsgroups corpus 6: atheism-religion (n = 1427, d = 17785), autos-motorcycle
+(n = 1986, d = 16347), cryptography-electronics (n = 1975, d = 22293), mac-windows (n = 1946, d = 7511).
+
+We compared the AUC (Table 1) as well as the classiﬁcation accuracy (Table 2) for each of the methods. Note
+that we provide results for two values of λ, 0 and 0.001. A non-zero value of λ make the problem stongly convex,
+accelerating convergence of optimization procedures. On most datasets, the AUC and the accuracy of CSI with λ = 0
+and λ = 0.001 are the same, however on link dataset CSI when run with λ = 0 gave superior AUC values over other
+methods whereas using λ = 0.001 on the link dataset gave better accuracy.
+
+4https://www.cs.ubc.ca/˜schmidtm/Software/L1General.html
+5http://www.cs.utexas.edu/˜nikhilr/Code.html
+6http://qwone.com/˜jason/20Newsgroups/
+
+7
+
+Table 1: AUC values for various methods on several datasets. SIM(λ) represents the CSI algorithm with the ℓ2
+regularization constant being λ. The entries in bold are the best values. Notice that except the link dataset, there is no
+signiﬁcant difference in the performance of CSI with different values of λ.
+
+dataset
+link
+page
+ath-rel
+aut-mot
+cryp-ele
+mac-win
+
+SLR
+0.9756
+0.9874
+0.8574
+0.9160
+0.9596
+0.6359
+
+SQH
+0.9464
+0.9115
+0.7262
+0.8373
+0.9115
+0.6152
+
+SLS
+0.9077
+0.9407
+0.7329
+0.7956
+0.8340
+0.6395
+
+SIM (0)
+0.9805
+0.9963
+0.8792
+0.9360
+0.9879
+0.6459
+
+SIM (10−3)
+0.9209
+0.9966
+0.8794
+0.9409
+0.9899
+0.6459
+
+Table 2: Classiﬁcation accuracy for various methods and on several datasets. SIM(λ) represents the CSI algorithm
+with the ℓ2 regularization constant being λ. The entries in bold are the best values. Notice that except the link dataset,
+there is no signiﬁcant difference in the performance of CSI with different values of λ.
+
+dataset
+link
+page
+ath-rel
+aut-mot
+cryp-ele
+mac-win
+
+SLR
+0.9542
+0.9466
+0.6869
+0.8013
+0.8885
+0.6049
+
+SQH
+0.9656
+0.9466
+0.6963
+0.7946
+0.8986
+0.6152
+
+SLS
+0.9465
+0.9313
+0.5981
+0.5420
+0.7230
+0.6296
+
+SIM (0)
+0.9542
+0.9771
+0.7477
+0.8519
+0.9493
+0.6317
+
+SIM (10−3)
+0.9733
+0.9733
+0.7710
+0.8583
+0.9493
+0.6295
+
+5.2 Group Sparsity: Multilabel and Multitask Learning
+Next, we consider the problem of multi-label learning using group sparsity structure. We consider two datasets 7: The
+ﬂags dataset contains 194 measurement and 7 possible outcomes (based on the colors in the ﬂag). The data is split
+into 129 − 65 measurements, for training and test respectively. Out of the training set, we randomly set aside 10%
+of the measurements for cross-validation. The atp7d dataset consists of 2 simultaneous regression tasks from 411
+dimensional data with 296 measurements. We perform a random 80 − 10 − 10 split of the data for training, validation
+and testing.
+We compared our method with group sparse logistic regression and least squares, using the MALSAR package
+Zhou et al. [2011]. In all cases, we ﬁxed λ = 10−4, and cross validated over the other parameters. For logistic
+regression and least squares, the range of parameter values was {2−10, 2−9,··· , 29, 210}. We varied the step size η ∈
+[2−6, 22] on a log scale for our method, setting the sparsity parameter to be 5 for both datasets. Table 3 shows that our
+method performs better than both compared methods. For classiﬁcation, we use the F1 score as a performance measure,
+since multilabel problems are highly unbalanced, and measures such as accuracy are not indicative of performance.
+For multitask learning, we report the MSE.
+
+7http://mulan.sourceforge.net/datasets.html
+
+Table 3: Group Sparsity constrained Multitask and Multilabel learning. CSI outperforms both linear and logistic
+regression. The ﬁrst row represents MSE (lower is better), and the second row represents F1 score (higher is better).
+The best results are shown in bold.
+
+dataset
+atp7d
+Flags
+
+SIM
+0.0611
+0.6539
+
+Logistic
+1.1257
+0.6458
+
+Linear
+0.8198
+0.5747
+
+8
+
+Table 4: Accuracy of stochastic implementation of different methods on large scale datasets. SLR and SQH are
+stochastic implementations of logistic regression and squared hinge loss. The entries in bold are the best perfoming
+methods.
+
+dataset
+rcv1
+real-sim
+
+Stochastic CSI
+0.92223
+0.8845
+
+SLR
+0.7237
+0.7102
+
+SQH
+0.710
+0.688
+
+Table 5: AUC scores for stochastic version of different methods on text classiﬁcation problems. SLR and SQH are
+stochastic implementations of logistic regression and squared hinge loss. The entries in bold are the best perfoming
+methods.
+
+dataset
+rcv1
+real-sim
+
+Stochastic CSI
+0.9739
+0.9540
+
+SLR
+0.781
+0.918
+
+SQH
+?0.599
+0.702
+
+5.3 Structured Matrix Factorization
+
+We now visit the problem of matrix completion in the presence of graph side information. We consider two datasets,
+Epinions and Flixster 8. Both datasets have a (known) social network among the users. We process the data as follows:
+we ﬁrst retain the top 1000 users and items with the most ratings. Then, to make the problem more challenging,
+we sparsify the data so as to randomly retain only 3000 observations in the training set, out of which we set aside
+300 observations for cross validation. Furthermore, we threshold the observations so that ratings greater than 3 are
+assigned 1, and the ratings less than equal to 3 are assigned −1, corresponding to “likes” and “dislikes” among users
+and items. We report the MSE in Table 6, along with some more details about the data. Note that the Epinions dataset
+has a (relatively) densely connected graph among users, while the Flixster data has a fairly large test set.
+
+The least squares approach solves the following program:
+
+min
+W
+
+1
+N k(Y − W )Ωk2
+
+F s.t. kS
+
+1
+
+2
+
+u U −1
+
+u W U −T
+
+v S
+
+1
+
+2
+
+v k∗ ≤ k
+
+(12)
+
+where Uu, Su are the singular vectors and singular values of the graph Laplacian of the graph among the rows of W
+and Uv, Sv are the same for the graph Laplacian corresponding to the graph among columns of W .
+
+5.4 Experiments with Stochastic CSI
+
+In this section we discuss experimental results with Stochastic CSI algorithm. The datasets we used are rcv1 and real-
+sim. Both of these datasets are large, sparse, high-dimensional datasets, that are publicly available 9. The rcv1 dataset
+comes with separate training and testing datasets, and in our experiments we used a part of the training dataset for
+validation purposes to report our results. The training, test and dimensionality of rcv1 dataset is approximately 15K,
+576K, 47K respectively. For the real-sim dataset we did a 60-20-20 split into training, validation and testing portions.
+The training, testing and dimensionality of the real-sim dataset is approximately 43K, 14K, 20K respectively. In our
+
+implementations we used a decaying schedule for ηj,t as ηj,t = η0/√jt. The batch size |B| was ﬁxed to √n, where
+
+n is the size of the training dataset. As mentioned previously we perform 10 passes of stochastic CSI over the entire
+training dataset, and report the test accuracy in Table (4), and the AUC scores in table (5). As we can see from
+these tables the stochastic CSI algorithm outperforms stochastic implementations of logisitic regression (SLR) and the
+squared hinge loss both on the classiﬁcation accuracy and AUC score metrics.
+
+8http://www.librec.net/datasets.html
+9https://www.csie.ntu.edu.tw/˜cjlin/libsvmtools/datasets/
+
+9
+
+Table 6: Dataset details and performance of different algorithms for structured matrix factorization.
+
+dataset
+Epinions
+Flixster
+
+# test set # user links
+61610
+4016
+
+3234
+64095
+
+LS
+1.0012
+1.0065
+
+CSI
+0.9488
+0.9823
+
+Figure 1: Accuracy of Stochastic CSI with batch size on the rcv1 dataset.
+
+0.94
+
+0.93
+
+0.92
+
+0.91
+
+y
+c
+a
+r
+u
+c
+c
+A
+n
+o
+
+ 
+
+i
+t
+
+a
+c
+i
+f
+i
+s
+s
+a
+C
+
+l
+
+0.9
+0
+
+100
+
+200
+
+300
+
+Batch Size
+
+400
+
+500
+
+600
+
+5.5 Effect of Batch size on the performance of Stochastic CSI
+
+In this experiment we are interested in studying the effect of batch size on the accuracy of stochastic CSI . In order
+to do this we varied the batch size in step of 75 starting from a batch size of 25, all the way up to 550. We notice
+that as one increases the batch size, there is a slight increase in the accuracy initially from a batch size of 25 to 100.
+After this there is slight dip in accuracy, and the accuracy remains almost the same up until a batch size of 300. After
+this, increasing the batch size decreases the accuracy by about 1%. Figure (1) shows the accuracy of the Stochastic
+CSI algorithm as a function of batch size.
+
+In the next experiment we measure the effect of increasing batch size on the running time of stochastic CSI . As the
+size of a batch increases the complexity of performing one step of projected gradient descent and function ﬁtting via
+LPAV increases. However, at the same time the number of iterations in an epoch which is equal to n
+|B| also decreases.
+We show the average time taken for one step of projected gradient descent and LPAV in Figure (2). As expected
+the time taken keeps monotonically increasing with increasing batch size. These timing experiments were run on a
+linux machine with Intel Xeon CPU, with a processor speed of 2GHz, with 10 cores, and 264 GB of memory running
+MATLAB R2014b.
+
+Figure 2: The average time taken for one iteration of stochastic CSI as a function of the batch size on the rcv1 dataset.
+The time shown is in seconds.
+
+h
+c
+o
+p
+e
+n
+a
+n
+
+ 
+
+ 
+
+i
+ 
+
+n
+o
+
+i
+t
+
+a
+r
+e
+
+ 
+
+r
+e
+p
+n
+e
+k
+a
+
+t
+ 
+
+e
+m
+
+i
+t
+ 
+
+e
+g
+a
+r
+e
+v
+A
+
+t
+i
+
+8
+
+6
+
+4
+
+2
+
+0
+0
+
+100
+
+200
+
+300
+
+Batch Size
+
+400
+
+500
+
+600
+
+10
+
+6 Conclusions and Discussion
+
+In this paper, we introduced CSI , an algorithm to learn single index models in high dimensions, under general struc-
+tural constraints on the data. The same algorithm works with minor changes to handle sparse, group sparse, and
+low-rank problems. Results on various datasets show that we obtain better accuracy and AUC scores than competing
+approaches. Since our optimization problem involves minimization of a calibrated loss function that changes from
+iteration to iteration, establishing that the iterates converge to a critical point remains a hard problem. In fact the
+notion of a critical point is also hard to deﬁne due to the changing nature of the calibrated loss optimization problem.
+However, experimentally we have noticed that the training error keeps decreasing with the number of iterations, and
+perhaps obtaining an upper bound on the training error is a more sensible theoretical problem. Either way, this remains
+a very hard and interesting technical problem, and we would like to study CSI theoretically in the future.
+
+References
+
+P. Alquier and G. Biau. Sparse single-index model. The Journal of Machine Learning Research, 14(1):243–280, 2013.
+
+A. Argyriou, T. Evgeniou, and M. Pontil. Convex multi-task feature learning. Machine Learning, 73(3):243–272,
+
+2008.
+
+A. Buja, T. Hastie, and R. Tibshirani. Linear smoothers and additive models. The Annals of Statistics, pages 453–510,
+
+1989.
+
+V. Chandrasekaran, B. Recht, P. A. Parrilo, and A. S. Willsky. The convex geometry of linear inverse problems.
+
+Foundations of Computational Mathematics, 12(6):805–849, 2012.
+
+A. Cohen, I. Daubechies, R. DeVore, G. Kerkyacharian, and D. Picard. Capturing ridge functions in high dimensions
+
+from point queries. Constructive Approximation, 35(2):225–243, 2012.
+
+D. L. Donoho. Compressed sensing. Information Theory, IEEE Transactions on, 52(4):1289–1306, 2006.
+
+J. H. Friedman and W. Stuetzle. Projection pursuit regression. Journal of the American statistical Association, 76
+
+(376):817–823, 1981.
+
+R. Ganti, N. Rao, R. M. Willett, and R. Nowak. Learning single index models in high dimensions. arXiv preprint
+
+arXiv:1506.08910, 2015a.
+
+R. S. Ganti, L. Balzano, and R. Willett. Matrix completion under monotonic single index models. In Advances in
+
+Neural Information Processing Systems, pages 1864–1872, 2015b.
+
+T. Hastie, R. Tibshirani, J. Friedman, and J. Franklin. The elements of statistical learning: data mining, inference and
+
+prediction. The Mathematical Intelligencer, 27(2):83–85, 2005.
+
+T. Hastie, R. Tibshirani, and M. Wainwright. Statistical learning with sparsity: the lasso and generalizations. CRC
+
+Press, 2015.
+
+J. L. Horowitz. Semiparametric and nonparametric methods in econometrics. Springer, 2009.
+
+J. L. Horowitz and W. H¨ardle. Direct semiparametric estimation of single-index models with discrete covariates.
+
+Journal of the American Statistical Association, 91(436):1632–1640, 1996.
+
+H. Ichimura. Semiparametric least squares (sls) and weighted sls estimation of single-index models. Journal of
+
+Econometrics, 58(1):71–120, 1993.
+
+L. Jacob, G. Obozinski, and J.-P. Vert. Group lasso with overlap and graph lasso. In Proceedings of the 26th Annual
+
+International Conference on Machine Learning, pages 433–440. ACM, 2009.
+
+11
+
+S. M. Kakade, V. Kanade, O. Shamir, and A. Kalai. Efﬁcient learning of generalized linear and single index models
+
+with isotonic regression. In Advances in Neural Information Processing Systems, pages 927–935, 2011.
+
+A. T. Kalai and R. Sastry. The isotron algorithm: High-dimensional isotonic regression. In COLT, 2009.
+
+Y. Koren, R. Bell, and C. Volinsky. Matrix factorization techniques for recommender systems. Computer, (8):30–37,
+
+2009.
+
+O. L. Mangasarian and B. Recht. Probability of unique integer solution to a system of linear equations. European
+
+Journal of Operational Research, 214(1):27–30, 2011.
+
+S. N. Negahban, P. Ravikumar, M. J. Wainwright, and B. Yu. A uniﬁed framework for high-dimensional analysis of
+
+m-estimators with decomposable regularizers. Statistical Science, 27(4):538–557, 2012.
+
+M. Y. Park and T. Hastie. L1-regularization path algorithm for generalized linear models. Journal of the Royal
+
+Statistical Society: Series B (Statistical Methodology), 69(4):659–677, 2007.
+
+Y. Plan, R. Vershynin, and E. Yudovina. High-dimensional estimation with geometric constraints. arXiv preprint
+
+arXiv:1404.3749, 2014.
+
+P. Radchenko. High dimensional single index models. Journal of Multivariate Analysis, 139:266–282, 2015.
+
+N. Rao, P. Shah, and S. Wright. Forward backward greedy algorithms for atomic norm regularization. Signal
+
+Processing, IEEE Transactions on, 63, 2015a.
+
+N. Rao, H.-F. Yu, P. K. Ravikumar, and I. S. Dhillon. Collaborative ﬁltering with graph information: Consistency and
+
+scalable methods. In Advances in Neural Information Processing Systems, pages 2098–2106, 2015b.
+
+N. S. Rao, R. D. Nowak, C. R. Cox, and T. T. Rogers. Classiﬁcation with the sparse group lasso. Signal Processing,
+
+IEEE Transactions on, 64, 2016.
+
+P. Ravikumar, J. Lafferty, H. Liu, and L. Wasserman. Sparse additive models. Journal of the Royal Statistical Society:
+
+Series B(Statistical Methodology), 71(5):1009–1030, 2009.
+
+S. Ryali, K. Supekar, D. A. Abrams, and V. Menon. Sparse logistic regression for whole-brain classiﬁcation of fmri
+
+data. NeuroImage, 51(2):752–764, 2010.
+
+A. Tsybakov. Introduction to nonparametric estimation. Springer Verlag, 2009.
+
+S. A. Van de Geer. High-dimensional generalized linear models and the lasso. The Annals of Statistics, pages 614–645,
+
+2008.
+
+H.-f. Yu, P. Jain, P. Kar, and I. Dhillon. Large-scale multi-label learning with missing labels. In Proceedings of the
+
+31st International Conference on Machine Learning (ICML-14), pages 593–601, 2014.
+
+J. Zhou, J. Chen, and J. Ye. MALSAR: Multi-tAsk Learning via StructurAl Regularization. Arizona State University,
+
+2011. URL http://www.public.asu.edu/˜jye02/Software/MALSAR.
+
+T. Zhou, H. Shan, A. Banerjee, and G. Sapiro. Kernelized probabilistic matrix factorization: Exploiting graphs and
+
+side information. In SDM, volume 12, pages 403–414. SIAM, 2012.
+
+12
+
+

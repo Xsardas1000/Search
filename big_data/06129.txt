@@ -1,0 +1,1718 @@
+Automated Correction for Syntax Errors in Programming
+
+Assignments using Recurrent Neural Networks
+
+Sahil Bhatia
+
+Netaji Subhas Institute of Technology
+
+Delhi, India
+
+sahilbhatia.nsit@gmail.com
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+9
+1
+
+ 
+ 
+]
+L
+P
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+9
+2
+1
+6
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+ABSTRACT
+We present a method for automatically generating repair feedback
+for syntax errors for introductory programming problems. Syn-
+tax errors constitute one of the largest classes of errors (34%) in
+our dataset of student submissions obtained from a MOOC course
+on edX. The previous techniques for generating automated feed-
+back on programming assignments have focused on functional cor-
+rectness and style considerations of student programs. These tech-
+niques analyze the program AST of the program and then perform
+some dynamic and symbolic analyses to compute repair feedback.
+Unfortunately, it is not possible to generate ASTs for student pro-
+grams with syntax errors and therefore the previous feedback tech-
+niques are not applicable in repairing syntax errors.
+
+We present a technique for providing feedback on syntax errors
+that uses Recurrent neural networks (RNNs) to model syntactically
+valid token sequences. Our approach is inspired from the recent
+work on learning language models from Big Code (large code cor-
+pus). For a given programming assignment, we ﬁrst learn an RNN
+to model all valid token sequences using the set of syntactically
+correct student submissions. Then, for a student submission with
+syntax errors, we query the learnt RNN model with the preﬁx to-
+ken sequence to predict token sequences that can ﬁx the error by
+either replacing or inserting the predicted token sequence at the er-
+ror location. We evaluate our technique on over 14, 000 student
+submissions with syntax errors. Our technique can completely re-
+pair 31.69% (4501/14203) of submissions with syntax errors and in
+addition partially correct 6.39% (908/14203) of the submissions.
+
+1.
+
+INTRODUCTION
+
+With the ever-increasing role of computing, there has been a
+tremendous growth in interest in learning programming and com-
+puting skills. The computer science enrollments in universities has
+been growing steadily and it is becoming more and more challeng-
+ing to meet this increasing demand. Recently, several online edu-
+cation initiatives such as edX, Coursera, and Udacity have started
+providing Massive Open Online Courses (MOOCs) to tackle this
+challenge of providing quality education at scale that is easily ac-
+cessible to students worldwide. While there are several beneﬁts of
+
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed
+for proﬁt or commercial advantage and that copies bear this notice and the full cita-
+tion on the ﬁrst page. Copyrights for components of this work owned by others than
+ACM must be honored. Abstracting with credit is permitted. To copy otherwise, or re-
+publish, to post on servers or to redistribute to lists, requires prior speciﬁc permission
+and/or a fee. Request permissions from permissions@acm.org.
+
+c(cid:13) 2016 ACM. ISBN 978-1-4503-2138-9.
+DOI: 10.1145/1235
+
+Rishabh Singh
+Microsoft Research
+Redmond, WA, USA
+
+risin@microsoft.com
+
+MOOCs – access to quality course material and instruction, cheaper
+than traditional university courses, learning at one’s own pace etc.,
+there are also several drawbacks. One important drawback is that
+students enrolled in MOOCs do not typically get quality feedback
+for assignments compared to the feedback provided in traditional
+classroom settings since it is prohibitively expensive to hire enough
+instructors and teaching assistants to provide individual feedback
+to thousands of students.
+In this paper, we address the problem
+of providing automated feedback on syntax errors in programming
+assignments using machine learning techniques.
+
+The problem of providing feedback on programming assignments
+at scale has seen a lot of interest lately. These approaches can be
+categorized into two broad categories – peer-grading [11] and au-
+tomated grading techniques [18, 13]. In the peer-grading approach,
+students rate and provide feedback on other student submissions
+based on a grading rubric. Some MOOCs have made this step
+mandatory for students before they get feedback for their own as-
+signments. While peer-grading has been shown to be effective for
+student learning, it also presents several challenges. First, it takes a
+long time (sometimes days) to get any useful feedback, and second,
+there is a potential for inaccuracies in feedback especially when
+students providing feedback themselves are struggling in learning
+the material.
+
+The second approach of automated feedback generation aims to
+automatically provide feedback on student submissions. Most re-
+cent approaches for automated grading have focused on providing
+feedback on the functional correctness and style considerations of
+student programs. AutoProf [18] is a system for providing auto-
+mated feedback on functional correctness of buggy student solu-
+tions.
+It uses constraint-based synthesis techniques to ﬁnd min-
+imum number of changes to an incorrect student submission such
+that it becomes functionally equivalent to a reference teacher imple-
+mentation. The Codewebs system [13] is a search engine for cod-
+ing assignments that allows for querying massive dataset of student
+submissions using "code phrases", which are subgraphs of AST in
+the form of subtrees, subforests, and contexts. A teacher provides
+feedback on a handful of submissions, which is then propagated
+to provide feedback on thousands of submissions by querying the
+dataset using code phrases.
+
+While providing feedback on functional and stylistic elements
+of student submissions is important, a signiﬁcant fraction of sub-
+missions (more than 34% in our dataset) comprise of syntax errors
+and providing feedback on syntactic errors has largely been unex-
+plored. Many of the techniques described previously for automated
+grading can not provide feedback on syntactic errors since they in-
+herently depend on analyzing the AST of the student submission,
+which is unfortunately not available for programs with syntax er-
+rors. Although compilers have improved a lot in ﬁnding the error
+
+location and in describing the syntax errors using better error mes-
+sages, they can not provide feedback on how to ﬁx these errors in
+general since they are developed for general-purpose scenarios.
+
+In this paper, we present a technique to automatically provide
+feedback on student programs with syntax errors leveraging the
+large dataset of correct student submissions. Our hypothesis is that
+even though there are thousands of student submissions, the diver-
+sity of solution strategies for a given problem is relatively small and
+the ﬁxes to syntactic errors can be learnt from correct submissions.
+For a given programming problem, we use the set of (possibly
+functionally incorrect) student submissions without syntax errors
+to learn a sequence model of tokens, which is then used to hypothe-
+size possible ﬁxes to syntax errors in a student solution. Our system
+incorporates the suggested changes to the incorrect program and if
+the modiﬁed program passes the compiler syntax check, it provides
+those changes as possible ﬁxes to the syntax error. We use a Recur-
+sive Neural Network (RNN) [17] to learn the token sequence model
+that can learn large contextual dependencies between tokens.
+
+Our approach is inspired from the recent pioneering work on
+learning probabilistic models of source code from a large repository
+of code for many different applications [8, 14, 3, 2, 1, 4, 16]. Hindle
+et al. [8] learn an n-gram language model to capture the repetitive-
+ness present in a code corpora and show that n-gram models are
+effective at capturing the local regularities. They used this model
+for suggesting next tokens that was already quite effective as com-
+pared to the type-based state-of-the-art IDE suggestions. Nguyen
+et al. [14] enhanced this model for code auto-completion to also in-
+clude semantic knowledge about the tokens (such as types) and the
+scope and dependencies amongst the tokens to consider global re-
+lationships amongst them. The NATURALIZE framework [1] learns
+an n-gram language model for learning coding conventions and
+suggesting changes to increase the stylistic consistency of the code.
+More recently, some other probabilistic models such as conditional
+random ﬁelds and log bilinear context models have been presented
+for suggesting names for variables, methods, and classes [16, 2].
+We also learn a language model to encode the set of valid token
+sequences, but our approach differs from these approaches in four
+key ways: i) our application of using a language model learnt from
+syntactically correct programs to ﬁx syntax errors is novel and dif-
+ferent from previous applications, ii) since we cannot obtain the
+Abstract Syntax Tree (AST) of these programs with syntax errors
+many of these techniques that use AST information for learning
+the language model are not applicable, iii) we learn recursive neu-
+ral networks (RNN) that can capture more complex dependencies
+between tokens than n-gram or logbilinear neural networks, and
+ﬁnally iv) instead of learning one language model for the com-
+plete code corpus, we learn individual RNN models for different
+programming assignments so that we can generate individualized
+repair feedback for different problems.
+
+We evaluate the effectiveness of our technique on student so-
+lutions for 5 programming problems taken from the Introduction
+to Programming class (6.00x) offered on the edX platform. Our
+technique can suggest tokens for completely ﬁxing the syntax er-
+rors for 31.69%(4501/14203) of the submissions with syntax er-
+rors. Moreover, for an additional 6.39%(908/14203) programs,
+our technique can suggest ﬁxes that correct the ﬁrst syntax error in
+the program but doesn’t fully correct the program because of the
+presence of multiple syntax errors.
+
+This paper makes the following key contributions:
+
+• We formalize the problem of ﬁnding ﬁxes for syntax errors
+in student submissions as a token sequence learning problem
+using the recurrent neural networks (RNN).
+
+• We present the SYNFIX algorithm to use the predicted to-
+ken sequences for ﬁnding repairs to syntax errors that per-
+forms different code transformations including insertion and
+replacement of predicted sequences in a ranked order.
+
+• We evaluate the effectiveness of our system on more than
+14, 000 student submissions from an online introductory pro-
+gramming class. Our system can completely correct the syn-
+tax errors in 31.69% of the submissions and partially correct
+the errors in an additional 6.39% of the submissions.
+
+2. MOTIVATING EXAMPLES
+
+We now present a few examples of the different types of syntax
+errors we encounter in student submissions from our dataset and
+the repair corrections our system is able to generate using the token
+sequence model learnt from the syntactically-correct student sub-
+missions. The example corrections are shown in Figure 1 for the
+student submissions for the recPower problem taken from the In-
+troduction to Programming MOOC (6.00x) on edX. The recPower
+problem asks students to write a recursive Python program to com-
+pute the value of baseexp given a real value base and an integer
+value exp as inputs.
+
+Our syntax correction algorithm considers two types of parsing
+errors in Python programs: i) Syntax errors, and ii) Indentation er-
+rors. It uses the offset information provided by the Python compiler
+to locate the potential locations for syntax errors, and then uses the
+program statements from the beginning of the function to the error
+location as the preﬁx token sequence for performing the predic-
+tion. However, there are many cases such as the ones shown in
+Figure 1(c) where the compiler is not able to accurately ﬁnd the ex-
+act offset location for the syntax error. In such cases, our algorithm
+ignores the tokens present in the error line and considers the preﬁx
+ending at the previous line. Using the preﬁx token sequence, the
+algorithm uses a neural network to perform the prediction of next
+k tokens that are most likely to follow the preﬁx sequence, which
+are then either inserted at the error location or are used to replace
+the original token sequence at the error location.
+
+A sample of syntax errors and the ﬁxes generated by our algo-
+rithm (emphasized in boldface red font) based on inserting the pre-
+dicted tokens from the offset location is shown in Figure 1(a). For
+correcting syntax errors in this class, our algorithm ﬁrst queries the
+learnt language model to predict the next token sequence using the
+preﬁx token sequence ending at either the offset (error) location or
+one token before the offset location (Offset-1). It then tries insert-
+ing the tokens from the predicted sequence in increasing order of
+length at the corresponding offset location until the syntax error
+in the line is ﬁxed. The kinds of errors in this class typically in-
+clude inserting unbalanced parenthesis, completing partial expres-
+sions (such as exp- to exp-1), adding syntactic tokens such as : after
+if and else expressions, etc.
+
+Some example syntax errors that require replacing the original
+tokens in the incorrect program with the predicted tokens are shown
+in Figure 1(b). These errors typically include replacing an incor-
+rect operator with another operator (such as replacing = with *, = in
+comparisons with ==), deleting additional mismatched parenthesis
+etc. Our algorithm performs a similar technique for generating pre-
+ﬁx token sequences as in the case of previous class of syntax errors
+that require token insertion. The only difference is that instead of
+inserting the tokens from the predicted token sequence, it replaces
+the original tokens with the predicted tokens.
+
+There are several cases in which the Python compiler isn’t able
+to accurately locate the error location offset. Some examples of
+these cases are shown in Figure 1(c) that include wrong spelling of
+
+Figure 2: An overview of the workﬂow of our system.
+
+keywords (retrun instead of return, f instead of if), wrong expres-
+sion for the return statement etc. For ﬁxing such syntax errors, our
+algorithm generates the preﬁx token sequence that ends at the last
+token of the line previous to the error line and ignores all the to-
+kens occurring in the error line. It then queries the model to predict
+a token sequence that ends at a new line, and then replaces the error
+line completely with the predicted token sequence.
+
+Finally, a sample of indentation errors is shown in Figure 1(d).
+These errors typically involve mistyped operators, using the wrong
+indentation after a function deﬁnition, conditional, and loop ex-
+pressions etc. Our algorithm tries the same strategy as described
+previously for the class of syntax errors including inserting or re-
+placing the tokens at the offset location.
+
+An interesting point to note here is that currently our system pre-
+dicts token sequences for ﬁxing the syntax errors in the code that
+may or may not correspond to the correct semantic ﬁx, i.e. the sug-
+gested ﬁx would pass the parser check but may not compute the de-
+sired result (or may even throw a runtime exception). For example,
+in some cases such as the incorrect expression recurPower(base,exp-
+=1), the top token sequence prediction results in the expression
+recurPower(base,exp-11), which is a syntactically correct expres-
+sion but does not result in computing the desired result of comput-
+ing baseexp. Even for such cases, the generated ﬁx can still provide
+some hints to the students about the correct usage of expressions
+for the corresponding program contexts. However, for many of the
+cases, the suggested repair for syntax correction also happens to
+correspond to the correct semantic ﬁx as shown in Figure 1.
+
+3. APPROACH
+
+An overview of the workﬂow of our system is shown in Figure 2.
+For a given programming problem, we ﬁrst use the set of all syn-
+tactically correct student submissions to train a neural network in
+the training phase for learning a token sequence model for all valid
+token sequences that is speciﬁc to the problem. We then use the
+SYNFIX algorithm to ﬁnd small corrections to a student submis-
+sion with syntax errors using the token sequences predicted from
+the learnt model. These corrections are then used for providing
+feedback in terms of potential ﬁxes to the syntax errors. We now
+describe the two key phases in our workﬂow: i) the training phase,
+and ii) the SYNFIX algorithm.
+3.1 Neural Network Model
+
+The simplest class of neural networks [6] (also called convolu-
+tional networks) are feedforward neural networks and were the ﬁrst
+type of artiﬁcial neural network devised. These networks accept a
+ﬁxed-sized vector as input (e.g. a bag of words model of a piece of
+
+Figure 4: A simple RNN with a single hidden layer.
+
+text) and produce a ﬁxed-size vector as output (e.g. the sentiment
+label for the text).
+In these networks, the information moves in
+only one forward direction from the input nodes to the hidden lay-
+ers to the output layer. The feedforward networks have been found
+to be quite successful for a variety of classiﬁcation tasks includ-
+ing sentiment analysis, image recognition, document relevance etc.
+However, there are two big limitations of these networks: 1) they
+only accept ﬁxed-size input vectors and 2) they can perform only a
+ﬁxed number of computational steps (deﬁned by the ﬁxed number
+of hidden layers).
+
+To overcome these limitations, another class of neural networks
+called RNN (Recurrent Neural Network) have been devised that
+can operate over sequences of input and output vectors as opposed
+to ﬁxed-length vectors. Moreover, in addition to the feedforward
+structure of the network, the output of a hidden layer is connected
+to its own input (cyclic paths) thus generating a feedback in the net-
+work. This feedback property of RNN gives them memory to retain
+information from previous steps and then use it for processing the
+current and future states. These additional capabilities make RNNs
+a very powerful computational model and can theoretically repre-
+sent long context patterns. Although the RNNs are much more ex-
+pressive than n-gram and feed forward networks, the conventional
+wisdom has been that RNNs are more difﬁcult to train. But with
+some recent algorithmic and computational advances, they have
+been shown to be efﬁciently learnable and have recently been used
+successfully for many tasks such as machine translation, video clas-
+siﬁcation by frames, speech recognition etc.
+In this section, we
+describe how we model our problem of learning token sequences
+from syntactically correct student programs and then predicting to-
+ken sequences for repairing incorrect programs using RNNs.
+
+We ﬁrst describe a brief overview of the computational model of
+a simple RNN with a single hidden layer. Consider an input se-
+quence of length L and an RNN with I number of inputs, a single
+hidden layer with H number of hidden units, and k output units.
+Let xt ∈ RI denote the input at time step t (encoded as a vec-
+tor), st ∈ RH denote the hidden state at time step t, W ∈ RH×I
+denote the weight matrix corresponding to the weights on connec-
+tions from input layer to hidden layer, V ∈ RH×H be the weight
+matrix from hidden to hidden layer (recursive), and U ∈ RI×H be
+the weight matrix from hidden to the output layer. A simple RNN
+architecture with I = 3 number of inputs, H = 4 number of hid-
+den units in a single hidden layer, and k = 2 output units is shown
+
+SynFix---------------Syntactically Correct Student SubmissionsStudent Submission with Syntax ErrorsFeedbackLearnt ModelInput LayerHidden LayerOutput Layerdef recPower (base , exp ):
+
+if exp <= 0:
+return 1
+return base ∗ recPower (base , exp − 1 )
+
+def recPower (base , exp ):
+
+if exp <= 0:
+return 1
+return base ∗ recPower (base , exp−1)
+
+(a) SyntaxError - Insert Token
+
+def recPower (base , exp ):
+
+if exp == 1:
+return base ∗ ( recPower (base , (exp − 1)))
+
+return base
+
+def recPower (base , exp ):
+
+if exp > 1:
+else:
+
+return 1
+
+return base ∗ recurPower (base , exp−1)
+
+(b) SyntaxError - Replace Token
+
+def recurPower (base , exp ):
+
+def recurPower (base , exp ):
+
+if exp == 0:
+return 1
+return base = * recurPower (base ,exp−1)
+
+total = base
+if(exp ==0):
+
+return total
+
+else:
+
+total ∗= base
+return total+ recurPower (base ,exp− = 11)
+
+def recurPower (base , exp ):
+
+if exp = ==0:
+
+return 1;
+
+else:
+
+return base∗ recurPower (base ,exp−1)
+
+def recurPower (base , exp ):
+
+if exp == 0:
+return 0
+
+elif exp == 1:
+
+return base
+
+else:
+
+return base∗ recurPower (base ,exp−1) )
+
+(c) SyntaxError - Previous Line Insert
+
+def recurPower (base , exp ):
+
+f exp == 1:
+if exp == 1:
+return base ∗ recurPower (base , (exp − 1))
+
+return base
+
+def recurPower (base , exp ):
+
+if exp == 0:
+
+return = exp + 1
+return base
+return (base∗ recurPower (base ,exp−1))
+
+else:
+
+def recurPower (base , exp ):
+
+if exp == 1:
+
+return base
+
+else:
+
+retrun base * recurPower(base, exp - 1)
+return base * recurPower(base, exp - 1)
+
+def recurPower (base , exp ):
+
+if exp == 0:
+return 1
+if exp == 1:
+
+return base
+
+if exp > 1:
+
+return exp -= 1
+return base * recurPower(base, exp-1)
+return recurPower (base ,exp−1)
+
+else:
+
+def recurPower (base , exp ):
+
+if exp == 0:
+return 1
+
+return 1
+
+return base ∗ recurPower (base ,exp−1)
+
+(d) Indentation Error - Insert Token
+
+def recurPower (base , exp ):
+
+x = base
+while(exp > 0):
+
+x ∗= base
+-= 1
+exp -= 1
+return base
+
+Figure 1: Some examples of the ﬁxes suggested by our system for the recurPower student submissions with syntax errors taken from
+edX. The suggestions are emphasized in red using larger font, whereas the the program expressions/statements that are removed are
+emphasized in blue with a frame box.
+
+(a) Training Phase
+
+(b) Prediction Phase
+
+Figure 3: The modeling of our syntax repair problem using an RNN with 1 hidden layer. (a) We provide input and output token
+sequences in the training phase to learn the weight matrices. (b) In the prediction phase, we provide a token sequence to the input
+layer of the RNN and generate the output token sequences using the learnt model.
+
+in Figure 4. The computation model of the RNN can be deﬁned
+using the following equations:
+
+st = f (W ∗ xt + V ∗ st−1)
+ot = softmax(U ∗ st)
+
+The hidden state vector st at time step t is computed by applying
+an activation function f (e.g. tanh or sigmoid) to a weighted sum of
+the input vector xt and the previous hidden state vector st−1. The
+output vector ot is computed by applying the softmax function to
+the weighted state vector value st.
+
+The artiﬁcial neurons are analogous to the neurons in human
+body which continuously receive electrochemical signal through
+their dendrites and when the sum of these signal surpass a certain
+threshold they send(ﬁre) the electrochemcial signals through their
+axons. The hidden units and output units use a similar activation
+strategy to determine the state of the units during a particular time
+stamp. The hidden units take the weighted sum as input and map
+it to a value in the set (-1,1) using the sigmoid function to model
+non-linear activation relationships. The activation of a unit h in the
+hidden layer and output unit k at time step t is given by:
+
+I(cid:88)
+
+i=1
+
+ah
+t =
+
+H(cid:88)
+H(cid:88)
+
+h(cid:48)=1
+
+W [i, n] ∗ xi
+
+t +
+
+ak
+t =
+
+(cid:48)
+
+, h] ∗ sh(cid:48)
+t−1
+
+V [h
+
+U [n, k] ∗ f (ah
+t )
+
+h=1
+
+During the training phase, RNN uses backpropagation through
+time(BPTT) [20] to calculate the gradient and adjust the weights.
+BPTT is an extension of the backpropagation algorithm that takes
+into account the recursive nature of the hidden layers from one time
+step to the next. The loss function depends not only on the direct
+inﬂuence of the hidden layer but also on the values from hidden
+layer during the next time step. The loss function which is min-
+imized during the training is the cross entropy error between the
+training output label and the predicted output label.
+
+There are two common ways to feed each word of the sequence
+to the input layer of the RNN: 1) words are represented as one hot
+vector which is multiplied by the weight matrix and used for the
+forward pass, and 2) words are mapped to high dimensional vector
+and an embedding matrix is used to perform lookups. While train-
+
+ing the network for learning sequence models, the target sequence
+is the input sequence shifted left by 1 since the model is trained to
+minimize the negative log likelihood of the predicted token and the
+next actual token in the sequence.
+
+We now describe how we model our syntax repair problem for a
+given programming assignment using an RNN. We ﬁrst use the syn-
+tactically correct student submissions to obtain the set of all valid
+token sequences. We then use a threshold frequency value to decide
+whether to relabel a token to a general IDENT token for handling
+rarely used tokens (such as infrequent variable/method names). A
+token is encoded into a ﬁxed-length hot vector such that it contains
+1 for the index corresponding to the token index in the vocabulary
+and 0 in all other places. The size of the hot vector is equal to the
+size of the training vocabulary.
+
+In the training phase, we provide the token sequences to the in-
+put layer of the RNN and the input token sequence shifted left by
+1 as the target token sequence to the output layer as shown in Fig-
+ure 3(a). The ﬁgure also shows the equations to compute the out-
+put probabilities for output tokens and the weights associated with
+connections from input to hidden layer, hidden to hidden layer, and
+hidden to output layer. After learning the network from the set
+of syntactically correct token sequences, we use the model to pre-
+dict next token sequences given a preﬁx of the token sequence to
+the input layer as shown in Figure 3(b). The ﬁrst output token is
+predicted at the output layer using the input token sequence. For
+predicting the next output token, the predicted token is used as the
+next input token in the input layer as shown in the ﬁgure.
+
+Long Short Term Memory networks (LSTM): LSTMs [9] are
+a special kind of RNN that are capable of learning long-term de-
+pendencies and have been shown to outperform general RNNs for
+a variety of tasks. In theory, RNNs are capable of handling any
+form of long-term dependencies on the past information because
+of the recursive connections. But, in practice, RNNs only perform
+well for cases where the gap between the required context informa-
+tion and the place where it’s needed is small. As the gap becomes
+larger, it becomes more difﬁcult for RNNs to learn to connect the
+desired information. LSTMs are explicitly designed to avoid this
+long-term dependency issue with the RNNs. Instead of regular net-
+work units, the LSTMs contain LSTM blocks that intuitively de-
+termine whether the input is signiﬁcant enough to remember, when
+it should forget the value, and when the value should be used for
+other layers. In the evaluation section, we also use different LSTM
+
+ifexp==1:exp==1:\r\n\r\n\tInput LayerHidden LayerOutput Layerifexp==1:\r\n\tInput TokensPredicted TokensAlgorithm 1 SYNFIX
+
+Input: buggy program P , token sequence model M
+
+ins) = φ return (P (cid:48)
+
+for i ∈ range(1, k) do
+
+P (cid:48)
+if Parse(P (cid:48)
+P (cid:48)
+if Parse(P (cid:48)
+
+(err,loc) := Parse(P );(cid:101)T := Tokenize(P )
+(cid:101)Tpref ix :=(cid:101)T[1..loc]
+(cid:101)Tk := Predict(M,(cid:101)Tpref ix)
+ins := Insert(P, loc,(cid:101)Tk[1..i])
+repl := Replace(P, loc,(cid:101)Tk[1..i])
+pref ix :=(cid:101)T[1..previousline(loc)]
+(cid:101)Tprev
+:= Predict(M,(cid:101)Tprev
+(cid:101)Tprev
+prev := ReplaceLine(P, line(loc),(cid:101)Tprev
+where (cid:101)Tprev
+prev,(cid:101)Tprev
+
+[m] = \n)
+prev) = φ return (P (cid:48)
+
+repl) = φ return (P (cid:48)
+
+end for
+
+pref ix)
+
+k
+
+P (cid:48)
+
+k
+
+ins,(cid:101)Tk[1..i])
+repl,(cid:101)Tk[1..i])
+
+[1..m])
+
+k
+
+[1..m])
+
+k
+
+if Parse(P (cid:48)
+return φ
+
+models to learn token sequences and compare their performance
+with the RNN models.
+3.2 The SYNFIX Algorithm
+The SYNFIX algorithm, shown in Algorithm. 1, takes as input a
+program P (with syntax errors) and a token sequence model M,
+and returns either a ﬁxed program P (cid:48) (if possible) or φ denoting
+that the program cannot be ﬁxed. The algorithm ﬁrst uses a parser
+to obtain the type of error err and the token location where the error
+
+occurs loc, and computes a preﬁx of the token sequence (cid:101)Tpref ix
+
+length k that is most likely to follow the preﬁx token sequence.
+
+corresponding to the token sequence starting from the beginning of
+the program until the error token location loc. We use the notation
+a[i..j] to denote a subsequence of a sequence a starting at index i
+(inclusive) and ending at index j (exclusive). The algorithm then
+
+queries the model M to predict the token sequence(cid:101)Tk of a constant
+After obtaining the token sequence(cid:101)Tk, the algorithm iteratively
+tries token sequences (cid:101)Tk[1..i] of increasing lengths (1 ≤ i ≤ k)
+until either inserting or replacing the token sequence(cid:101)Tk[1..i] at the
+(cid:101)Tpref ix of the original token sequence such that it ignores all pre-
+then predicts another token sequence(cid:101)Tprev
+new token sequence preﬁx, and selects a subsequence(cid:101)Tprev
+
+error location results in a ﬁxed program P (cid:48) with no syntax errors.
+If the algorithm cannot ﬁnd a token sequence that can ﬁx the syntax
+errors in the program P , the algorithm then creates another preﬁx
+
+vious tokens in the same line as that of the error token location. It
+using the model for the
+[1..m]
+that ends at a new line token. Finally, the algorithm checks if re-
+placing the line containing the error location with the predicted to-
+ken sequence results in no syntax errors. If yes, it returns the ﬁxed
+program P (cid:48). Otherwise, the algorithm returns φ denoting that no
+ﬁx can be found for the syntax error in P .
+
+Example: Consider the Python program shown in Figure 5. The
+Python parser returns a syntax error in line 2 with the error off-
+set corresponding to the location of the = token. The SYNFIX al-
+gorithm ﬁrst constructs a preﬁx of the token sequence consisting
+of tokens from the start of the program to the error location such
+’\t’, ’if’, ’exp’]. It then queries the learnt model to predict the most
+likely token sequence that can follow the input preﬁx sequence.
+Let us assume the value for length of predicted sequence k is set
+
+that (cid:101)Tpref ix = [’def’, ’recurPower’, ’(’, ’base’, ’,’, ’exp’, ’)’, ’:’, ’\r\n’,
+to 3 and the model returns the predicted token sequence (cid:101)Tk =
+
+k
+
+k
+
+def recurPower (base , exp ):
+
+if exp = 0:
+return 1;
+
+else:
+
+return base∗ recurPower (base ,exp−1)
+
+Figure 5: An incorrect student submission to the recurPower
+problem with a syntax error in line 2 (= instead of ==).
+
+def recurPower (base , exp ):
+
+if exp == 1:
+
+retrun exp;
+
+else:
+
+return base∗ recurPower (base ,exp−1)
+
+Figure 6: An incorrect student submission to the recurPower
+problem with a syntax error in line 3 (wrong spelling of return).
+
+[’==’, ’0’, ’:’]. The algorithm ﬁrst tries to use the smaller preﬁxes of
+the predicted token sequence (in this case ’==’) to see if the syntax
+error can be ﬁxed. It ﬁrst tries to insert the predicted token sequence
+’==’ in the original program but that results in the expression if exp
+It then tries to replace the
+== = 0:
+original token sequence with the predicted token sequence, which
+results in the expression if exp == 0: that passes the parser check.
+The algorithm then returns the corresponding feedback of replacing
+the token ’=’ with the token ’==’ for ﬁxing the syntax error.
+
+that still results in an error.
+
+constructs the preﬁx token sequence as(cid:101)Tpref ix = [’def’, ’recurPower’,
+
+Consider another incorrect Python attempt shown in Figure 6,
+where there is a syntax error at the token ’exp’ in line 3 retrun exp
+(wrong spelling of the return keyword). The algorithm similarly
+’(’, ’base’, ’,’, ’exp’, ’)’, ’:’, ’\r\n’, ’if’, ’exp’, ’==’, ’1’, ’\r\n’, ’\t’, ’retrun’].
+For this preﬁx, the algorithm is not able to either insert or replace
+the predicted token sequence in the original program such that the
+syntax error is removed. The algorithm then removes all the tokens
+in the preﬁx token sequence that occur in the error line (in this case
+removes the tokens ’\t’ and ’retrun’), and then queries the model
+again to predict another token sequence with the updated preﬁx se-
+quence such that the predicted sequence ends in a newline token. In
+this case, the algorithm predicts the token sequence corresponding
+to the statement return base that ﬁxes the original syntax error.
+
+4. EVALUATION
+
+We now present the evaluation of our system on 40, 835 Python
+submissions taken from the Introduction to Programming in Python
+course on the edX MOOC platform. The ﬁrst question we inves-
+tigate is whether it is possible to learn the RNN models for token
+sequences that can capture syntactically valid sequences. We then
+evaluate in how many cases our system can ﬁx the syntax errors
+with the predicted sequences using different algorithmic choices in
+the SYNFIX algorithm. Finally, we also experiment with different
+RNN and LSTM conﬁgurations and the vocabulary threshold value
+to evaluate their effect on the ﬁnal result.
+4.1 Benchmarks
+
+Our benchmark set consists of student submissions to ﬁve pro-
+gramming problems recurPower, iterPower, oddTuples, evalPoly, and
+compDeriv taken from the edX course. The recurPower problem
+asks students to write a recursive function that takes as input a num-
+ber base and an integer exp, and computes the value baseexp. The
+iterPower problem has the same functional speciﬁcation as the re-
+
+Problem
+
+recurPower
+iterPower
+oddTuples
+evalPoly
+compDeriv
+
+Total
+
+Total
+
+Attempts
+
+Syntactically
+
+Correct
+
+10247
+11855
+17057
+1148
+528
+40835
+
+8176
+9194
+8233
+824
+205
+26632
+
+Syntax Errors
+(Percentage)
+2071 (20.21%)
+2661 (22.45%)
+8824 (51.73%)
+324 (28.22%)
+323 (61.18%)
+
+14203 (34.78% )
+
+Table 1: The total number of student submissions and submis-
+sions with syntax errors for each problem.
+
+curPower problem but asks students to write an itervative solution
+instead of a recursive solution. The oddTuples problem asks stu-
+dents to write a function that takes as input a tuple l and returns
+another tuple that consists of every other element of l. The evalPoly
+problem asks students to write a function to compute the value of a
+polynomial on a given point, where the coefﬁcients of the polyno-
+mial are represented using a list of doubles. Finally, the compDeriv
+problem asks students to write a function to return a polynomial
+(represented as a list) that corresponds to the derivative of a given
+polynomial.
+
+The number of student submissions for each problem in our eval-
+uation set is shown in Table 1. In total our evaluation set consists
+of 40, 835 student submissions. The number of submissions for
+the evalPoly and compDeriv problems are relatively lesser than the
+number of submissions for the other problems. This is because
+these problems were still in the submission stage at the time we ob-
+tained the data snapshot from the edX platform. But this also gives
+us a measure to evaluate how well our technique performs when we
+have thousands of correct attempts in the training phase as opposed
+to only hundreds of correct attempts. Another interesting aspect to
+observe from the table is the fact that a large fraction of student
+submissions have syntax errors (34.78%). For each problem, we
+use the set of syntactically correct student submissions for learning
+the recurrent neural network and use the submissions with syntax
+errors as the test set to evaluate the learnt model.
+
+4.2 Training Phase
+
+During the training phase, we use all student submissions with
+no syntax errors for learning the token sequence model for a given
+problem. The student submissions are ﬁrst tokenized into a set of
+sequence of tokens, which are then fed into the neural network for
+learning the token sequence model. The total number of tokens ob-
+tained from the syntactically correct student submissions for each
+problem in shown in Table 2. The table also presents the initial vo-
+cabulary size (the set of unique tokens in the student submissions)
+and the training vocabulary size, which is obtained by replacing all
+tokens whose occurrence frequency is under a threshold as IDENT.
+For our experiments, we use a threshold of t = 4.
+
+To train the recurrent neural network, we used a learning rate of
+0.002, a sequence length of 10, and a batch size of 50. We use
+the batch gradient descent method with rmsprop (decay rate 0.97)
+to learn the edge weights, where the gradients were clipped at a
+threshold of 5. As we will see later, we experiment with both the
+RNN and LSTM networks with 1 or 2 hidden layers and each with
+either 128 or 256 hidden units. These neural networks were trained
+for a maximum of 40 epochs and the time required to train each
+neural network for different problems was on an average 1.5 hours.
+The experiments were performed on a 1.4 GHz Intel Core i5 CPU
+with 4GB RAM.
+
+Problem
+
+recurPower
+iterPower
+oddTuples
+evalPoly
+compDeriv
+
+Correct
+Total
+Attempts Tokens
+338,958
+358,849
+385,264
+55,370
+18,557
+
+8176
+9194
+8233
+824
+205
+
+Vocab Training
+Vocab
+Size
+191
+117
+526
+795
+317
+554
+276
+373
+226
+150
+
+Table 2: The total number of tokens and the vocabulary size
+used for training the neural network.
+
+Problem
+
+recurPower
+iterPower
+oddTuples
+evalPoly
+compDeriv
+
+Total
+
+Incorrect
+Attempts
+
+2071
+2661
+8824
+324
+323
+14203
+
+Completely
+
+Fixed
+
+1061 (51.23%)
+
+1599 (60%)
+
+1575 (17.85%)
+131 (40.43%)
+135 (41.79%)
+4501 (31.69%)
+
+Fixed
+(Other)
+
+281 (13.57%)
+276 (10.37%)
+303 (3.43%)
+38 (11.73%)
+10 (3.09%)
+908 (6.39%)
+
+Table 3: The number of submissions that are completely ﬁxed
+and partially ﬁxed (error in another line) by our system using
+the LSTM-(2,128) neural network.
+
+4.3 Number of Corrected Submissions
+
+We ﬁrst present the overall results of our system in terms of how
+many student submissions are corrected using the predicted tokens
+in Table 3. Since our algorithm currently considers only one syntax
+error in a student submission and there are many submissions with
+multiple syntax errors, we also report the number of cases where
+the suggested correction ﬁxes the ﬁrst syntax error but the submis-
+sion isn’t completely ﬁxed because of other errors. We call this
+class of programs as Fixed(Other). In total, our system is able to
+provide suggestions to completely ﬁx the syntax error in 31.69%
+of the cases. Additionally, it is able to ﬁx the ﬁrst syntax error on a
+given error line without ﬁxing other syntax errors on future lines in
+6.39% of the cases. The system isn’t able to provide any ﬁx to the
+errors for the remaining 61.92% of the submissions. The number of
+programs that are completely and partially ﬁxed for each individual
+problem is also shown in the table.
+
+We can ﬁrst observe that even with relatively lesser number of to-
+tal attempts for the evalPoly and compDeriv problems, the system is
+able to repair a signiﬁcant number of syntax errors (40.43%+11.73%
+= 52.16%). We do get some improvement with larger number of
+correct submissions, but the RNNs are able to learn comprehensive
+language models even with few hundreds of correct submissions.
+Another interesting observation is that the system is able to com-
+pletely ﬁx the syntax errors for a large fraction of the problems
+except for the oddTuples problem. On further manual inspection,
+we found that this was the case because the student attempts for
+the oddTuples problem consisted of a large number of indentation
+errors. Moreover, there was also a large number of diverse solution
+strategies that were not represented in the training set.
+
+A more detailed breakdown of the number of submissions cor-
+rected or partially corrected by our system is shown in Table 4. The
+table reports the number of cases for which the syntax errors were
+ﬁxed by the predicted token sequences using ﬁve different algorith-
+mic choices: i) Offset: the preﬁx token sequence is constructed
+from the start of the program to the error token reported by the
+parser, ii) Offset-1: the preﬁx token sequence is constructed upto
+one token before the error token, iii) PrevLine: the preﬁx token
+
+Problem
+
+recurPower
+iterPower
+oddTuples
+evalPoly
+compDeriv
+
+Total
+
+Incorrect
+Attempts
+
+2071
+2661
+8824
+324
+323
+14203
+
+Completely Fixed
+Offset-1
+
+Offset
+
+Insert Replace
+
+48
+9
+29
+7
+1
+94
+
+48
+8
+28
+5
+1
+90
+
+Insert Replace
+467
+672
+464
+44
+43
+1690
+
+708
+869
+622
+47
+71
+2371
+
+PrevLine
+
+856
+1206
+1368
+108
+99
+3637
+
+Fixed (Other Line)
+
+Offset
+
+Insert Replace
+
+16
+191
+11
+15
+3
+236
+
+15
+214
+15
+15
+3
+262
+
+Offset-1
+
+Insert Replace
+215
+241
+306
+30
+13
+805
+
+310
+360
+351
+40
+20
+1081
+
+Table 4: The breakdown of the method used for using the predicted token sequence to ﬁx the syntax error in the original program.
+Offset corresponds to using the exact error location pointed out by the parser to construct the token preﬁx, Offset-1 corresponds to
+a token before the error token, Insert and Replace respectively denote whether the predicted token sequence is inserted or replaced,
+and PrevLine uses the preﬁx upto the previous line and replaces the error line with the predicted token sequence.
+
+sequence is constructed upto the previous line and the error line is
+replaced by the predicted token sequence, (iv) Insert: the predicted
+token sequence is inserted at the Offset location, and (v) Replace:
+the original tokens starting at the Offset location are replaced by
+the predicted token sequence. As we can see, there is no one single
+choice that works better than every other choice. This motivates the
+need of the SYNFIX algorithm that tries all these different algorith-
+mic choices in the order of ﬁrst ﬁnding an insertion or a replace-
+ment ﬁx using the predicted token sequences of increasing length
+and then using the Previous Line method. We use this ranking order
+over the choices to prefer smaller changes to the original program.
+We can observe that the Previous Line choice performs the best
+for the completely ﬁxed case. The reason for this is that the al-
+gorithm has more freedom to make larger changes to the original
+program by completely replacing the error line. It also sometimes
+lead to undesirable semantic changes, which may not correspond
+to student’s intuition. The Previous line changes are explored only
+after trying out the Insertion/Replace choices in the SYNFIX al-
+gorithm. The replacement of original tokens with the predicted
+token sequences performs a little better than the insertion choice.
+Another interesting observation is that generating the preﬁx token
+sequences for querying the language model that end at one token
+earlier than the error token (Offset-1) performs a lot better than us-
+ing preﬁx sequences that end at the error token (Offset). Finally,
+we observe that there are many student submissions that are ﬁxed
+uniquely by each one of the 5 choices, and the algorithm therefore
+needs to consider all the choices.
+
+There are about 28% additional student submissions (amongst
+the 61.92% of the submissions for which our technique can not
+generate any repair) for which we can provide some repair feed-
+back by using the PrevLine choice. In these submissions, the re-
+placement of the erroneous line with the predicted line causes the
+error to be ﬁxed in the error line but does not necessarily make the
+program syntactically correct. We do not report these cases in the
+earlier tables as part of the partially ﬁxed programs because often
+times the replaced line itself introduces new syntax errors in the
+submission. However, we believe that providing such ﬁxes might
+still be beneﬁcial to the students to provide them hints regarding
+the likely statements that should occur in place of the error line.
+
+Another interesting point to note is that in some cases the number
+of partially ﬁxed programs that are reported in Table 4 is more than
+the number of partially ﬁxed programs in Table 3. For instance
+for the recurPower problem, the Offset-1 and Replace combination
+can partially ﬁx 310 submissions, whereas the number of partially
+ﬁxed submissions reported in Table 3 is 281 for the recurPower
+problem. This is the case because some of those 310 submissions
+get completely corrected using other algorithmic choices and are
+
+Baseline
+Network
+
+RNN-(1,128)
+RNN-(2,128)
+RNN-(2,256)
+LSTM-(1,128)
+LSTM-(2,128)
+LSTM-(2,256)
+
+Total
+
+Incorrect
+
+2071
+2071
+2071
+2071
+2071
+2071
+
+Completely
+
+Fixed
+1078
+1062
+990
+1028
+1061
+1045
+
+Total
+Fixed
+(Other) Fixed
+1365
+1329
+1292
+1322
+1342
+1338
+
+287
+267
+302
+294
+281
+293
+
+Table 5: The performance of different neural networks on the
+recurPower student submissions.
+
+instead counted in the Completely Fixed category in Table 3.
+4.4 Different Neural Network Baselines
+
+In this section, we compare different baseline neural networks
+for learning the token sequence models and their respective effec-
+tiveness in correcting the syntax errors for the recurPower prob-
+lem. In particular, we consider 6 baselines: (i) RNN-(1,128), (ii)
+RNN-(2,128), (iii) LSTM-(1,128), (iv) LSTM-(2,128), (v) LSTM-
+(1,256), and (vii) LSTM-(2,256), where the network NN-(x,y) de-
+notes a neural network (RNN or LSTM) consisting of x number of
+hidden layers with y number of units each. The results for the 6
+baseline networks is presented in Table 5. There isn’t a large dif-
+ference amongst the performance of different neural networks. The
+RNN-(1,128) model ﬁxes the largest number of student submis-
+sions completely (1078), and also has the best performance after
+including the partially corrected submissions. Interestingly, adding
+an additional hidden layer with more number of hidden units actu-
+ally degrades the performance of the network on our dataset. Our
+hypothesis for this phenomenon is that the network with more hid-
+den layers and more number of hidden units overﬁts the token se-
+quences in the training phase and doesn’t generalize as well as the
+neural network with fewer hidden units. Another interesting obser-
+vation is that RNNs perform slightly better in our scenario of ﬁxing
+syntax errors as compared to the LSTMs.
+4.5 Effect of Different Threshold values
+
+We also experiment with the performance of our system by vary-
+ing the threshold values for constructing the training vocabulary.
+The results for 3 different threshold values (t = 1, 4, 8) are shown
+in Table 6. As the threshold increases, a larger number of tokens
+are now labeled as the IDENT token and thereby decreases the size
+of the training vocabulary. Without using any threshold value (t=1),
+the system ﬁxes the fewest number of syntax errors for the recur-
+Power problem. There are several incorrect submissions that cannot
+
+Threshold
+
+Values
+
+t=1
+t=4
+t=8
+
+Initial Training Completely
+Vocab
+191
+191
+191
+
+Vocab
+191
+117
+86
+
+Fixed
+904
+1078
+1068
+
+Fixed
+(Other)
+
+307
+287
+277
+
+Table 6: The performance of different threshold values for con-
+structing the training vocabulary for the recurPower problem
+using the RNN-(1,128) neural network.
+
+be corrected in this case because the learnt model performs poorly
+on preﬁx token sequences consisting of rarely used tokens (such as
+infrequent variable names). We can also observe that the thresh-
+old value of 4 performs better than the threshold value of 8. One
+hypothesis for this phenomenon is that the neural network over-
+generalizes some of the tokens to IDENT and loses the speciﬁc to-
+ken information needed for ﬁxing some syntax errors.
+
+5. RELATED WORK
+
+Language Models for Big Code:
+
+In this section, we describe several related work on learning lan-
+guage models for Big Code, automated code grading approaches,
+and machine learning based grading techniques for other domains.
+The most closely related
+work to ours is that on learning language models of source code
+from a large code corpus and then using these models for sev-
+eral applications such as learning natural coding conventions, code
+suggestions and auto-completion, improving code style, suggest-
+ing variable and method names etc. Hindle et al. [8] use an n-gram
+model to capture the regularity of local project-speciﬁc contexts in
+software. They apply the learnt model to present suggestions for
+next tokens in the context of the Java language, and showed that
+the simple language model even without syntax or type information
+outperformed the state-of-the-art Eclipse IDE token suggestion en-
+gine. Nguyen et al. [14] extended this syntactic n-gram language
+model to also include semantic token annotations that describe the
+token type and their semantic role (such as variable, function call
+etc.) and combine it with topic modeling to obtain n-gram topic
+model that also captures global technical concerns of the source
+ﬁles and pairwise association of code tokens. They apply this en-
+hanced model for code suggestion and show that it improves the
+accuracy over syntactic n-gram approach by 18-68%. Allamanis et
+al. [3] applied this technique of learning n-gram models on a much
+larger code corpus containing over 350 million lines of code, and
+showed that using a large corpus for training these n-gram model
+can signiﬁcantly increase their predictive capabilities.
+
+NATURALIZE [1] is a language-independent framework that uses
+the n-gram language model to learn the coding convention and cod-
+ing style from a project codebase, and suggests revisions to im-
+prove stylistic consistency. It was used to suggest natural identiﬁer
+names and formatting conventions, and achieved 94% accuracy for
+suggesting identiﬁer names as its top suggestion. The framework
+constructs an input snippet using the abstract syntax tree for the
+identiﬁer for which the suggestions are needed and selects n-grams
+from this snippet containing the identiﬁer. The n-grams containing
+that identiﬁer are also selected from a training corpus (source codes
+from project whose conventions are to be adopted). The learnt n-
+gram model is then used for scoring all the possible candidates se-
+lected from the training corpus to replace the identiﬁer in the input
+codebase. Allamanis et al. [2] recently presented a technique for
+suggesting method and class names from its body and methods re-
+spectively using a neural probabilistic language model. The input
+to these models is a sequence of ﬁnite length which is mapped to
+
+some lower dimension(D) vector (word representation). These vec-
+tors are then fed to hidden layer (non linear function) of the neural
+network. The ﬁnal output layer is a softmax layer that evaluates
+the conditional probability of each word in the vocabulary given
+the input sequence. JSNice [16] is a scalable prediction engine
+for predicting identiﬁer names and type annotation of variables in
+JavaScript programs. The key idea in JSNice is to transform the
+input program into a representation that enables formulating the
+problem of inferring identiﬁer names and type annotations as struc-
+tured prediction with conditional random ﬁelds (CRFs). Given an
+input program, it ﬁrst converts the program into a dependency net-
+work that captures relationships between program elements whose
+properties are to be predicted with elements whose properties are
+known.
+It then uses Maximum a Posteriori (MAP) inference to
+perform the structured prediction on the network.
+
+Our technique is inspired from these previous work in learning
+language models from a corpus of code, but differs from them in
+four key ways. First, our application of using the language model
+to compute ﬁxes to syntax errors in student submissions is differ-
+ent from the applications considered by previous approaches such
+as suggestions for identiﬁer, method, and class names, code auto-
+completion and suggestion, and coding convention inference. Sec-
+ond, we use a recursive neural network (RNN) to capture long con-
+text relationships amongst tokens in a token sequence unlike pre-
+vious approaches that use n-gram models, CRFs, and log bilinear
+neural networks. RNNs are traditionally considered to be hard to
+learn, but we leverage the recent advances in efﬁciently learning
+the RNNs for learning the token sequence models. Third, since we
+cannot obtain abstract syntax trees for programs with syntax errors,
+many of these techniques that depend on analyzing the ASTs are
+not applicable in our setting. Finally, we learn different RNN mod-
+els for different programming assignments as opposed to learning
+a single model from the whole corpus. This allows us to ﬁnd more
+accurate repairs for syntax errors that are problem dependent.
+
+Automated Code Grading and Feedback: The automated grad-
+ing approaches can broadly be classiﬁed into two broad categories:
+1) programming languages based approaches, and 2) machine learn-
+ing based approaches. AutoProf [18] is a system for providing
+automated feedback on functional correctness of introductory pro-
+gramming assignments. In addition to an incorrect student submis-
+sion, it also takes as input a reference implementation specifying
+the intended functional behavior of the programming problem, and
+an error model consisting of rewrite rules corresponding to com-
+mon mistakes that students make for the given problem. AutoProf
+uses constraint-based synthesis techniques [19] for ﬁnding mini-
+mum number of changes (guided by an error model) in the incor-
+rect student submission to make it functionally equivalent to the
+reference implementation. Another approach [7] based on dynamic
+program analysis was recently presented for providing feedback on
+performance problems. It runs student submissions on a set of test
+cases to capture certain key values that occur during program exe-
+cutions, which are then used to identify the high-level strategy used
+by the student submission and provide corresponding feedback.
+
+There has also been a lot of interest in the machine learning
+community on automated feedback generation and grading for pro-
+gramming problems. Huang et al. [10] present an approach to au-
+tomatically cluster syntactically similar Matlab/Octave programs
+based on the AST tree edit distance using an efﬁcient approach
+based on dynamic programming. Codewebs [13] creates a queryable
+index that allows for fast searches of code phrases into a massive
+dataset of student submissions. It accepts three form of queries:
+subtrees, subforests, and contexts that are subgraphs of an AST.
+A teacher provides detailed feedback on a few handful of labeled
+
+def recurPower (base , exp ):
+
+def recurPower (base , exp ):
+
+if exp == 0:
+return 1
+else:
+return base ∗ base∗∗( exp−1)
+
+Figure 7: A student submission with multiple syntax errors in
+lines 3 and 5.
+
+if exp = 0:
+return base ∗ recurPower (base , exp−1)
+
+return base
+
+Figure 8: The ﬁx generated by our system suggests the expres-
+sion exp == 0 using the preﬁx token sequence. A better ﬁx exp
+== 1 can be suggested if the algorithm also took into account
+the token sequence following the error location return base.
+
+submissions, which is then propagated to thousands of student sub-
+missions by understanding the underlying structure present in the
+labeled submissions and querying the search engine. Another re-
+cently proposed approach uses neural networks to simultaneously
+embed both the precondition and postcondition spaces of a set of
+programs into a feature space, where programs are considered as
+linear maps on this space. The elements of the embedding matrix
+of a program are then used as code features for automatically prop-
+agating instructor feedback at scale [15].
+
+The key difference between our technique and the previous pro-
+gramming languages and machine learning based techniques is that
+the previous techniques rely on the ability to generate the AST for
+the student submission to perform further analysis. However, with
+syntax errors, it is not possible to obtain such ASTs and that unfor-
+tunately limits these techniques to provide feedback on syntactic
+errors in student submissions.
+
+Machine learning for Grading in Other domains: There have
+been similar automated grading systems developed for domains
+other than programming such as Mathematics and short answer
+questions. The Mathematical Language Processing (MLP) [12]
+framework leverages solutions from large number of learners to
+evaluate correctness of student solutions to open response Math-
+ematical questions. It ﬁrst converts an open response to a set of
+numerical features, which are then used for clustering to uncover
+structures of correct, partially-correct, and incorrect solutions. A
+teacher assigns a grade/feedback to one solution in a cluster, which
+is then propagated to all solutions in the cluster. Basu et al. [5]
+present an approach to train a similarity metric between short an-
+swer responses to United States Citizenship Exam, which is then
+used to group the responses into clusters and subclusters for pow-
+ergrading. The main difference between our technique and these
+techniques is that we use RNNs to learn a language model for token
+sequences unlike machine learning based clustering approaches used
+by these techniques. Moreover, we focus on giving feedback on
+syntax errors whereas these techniques focus on semantic correct-
+ness of the student solutions.
+
+6. LIMITATIONS AND FUTURE WORK
+
+There are several limitations in the presented algorithm that we
+would like to extend in future work. One limitation of our tech-
+nique is that it currently handles only one syntax error in the student
+program. For example, consider the student submission in Figure 7.
+The SYNFIX algorithm is able to correctly ﬁx the ﬁrst indentation
+error in line 3 by inserting a tab token before the return token, but
+the updated program does not pass the compiler check because of
+another indentation error in line 5. We plan to extend our algorithm
+to also handle multiple syntax errors by automating the process of
+ﬁxing the ﬁrst syntax error found in the program using the SYNFIX
+algorithm and then calling the algorithm again recursively on the
+next error found in the updated program.
+
+Our system currently only uses the preﬁx token sequence for sug-
+gesting the token sequence for repair. For the program shown in
+
+Figure 8, the algorithm suggests the ﬁx corresponding to the ex-
+pression exp==0. If the algorithm also took into account the token
+sequences following the error location such as return base, then
+it could have predicted a better ﬁx corresponding to the token se-
+quence exp == 1. There is a class of RNN called bidirectional-RNN
+that allows for predicting tokens based on both past and future con-
+texts. We intend to investigate in future work if bidrectional-RNNs
+can be trained efﬁciently in our setting and if they can improve the
+ﬁx coverage.
+
+Another limitation of our technique is that it only checks for syn-
+tactic correctness while ﬁnding a repair candidate. There are some
+cases where the suggested sequence ﬁxes the syntax errors but is
+semantically incorrect. We can try to solve this issue by adding a
+semantic check in the SYNFIX algorithm in addition to the syntac-
+tic parser check, and by allowing the algorithm to query the learnt
+model for multiple token sequence predictions until we obtain one
+that is a semantically correct ﬁx as well.
+
+Finally, there is an interesting research question on how to best
+translate the repairs generated by our technique into good pedagog-
+ical feedback, especially the cases for which the suggested ﬁx is not
+semantically correct. Some syntax errors are simply typos such as
+mismatched parenthesis or missing operators, for which the feed-
+back generated by our technique should be sufﬁcient. But there are
+some class of syntax errors that point to deeper misconceptions in
+the student’s mind. Some examples of such errors include assigning
+to return keyword e.g. return = exp, performing an assignment in-
+side a parameter value of a function call e.g. recurPower(base,exp-
+=1), etc. We would like to build a system on top of our technique
+that can ﬁrst distinguish small syntax errors from deeper miscon-
+ception errors, and then translate the suggested repair ﬁx accord-
+ingly so that students can learn the high-level concepts for correctly
+understanding the language syntax.
+
+7. CONCLUSION
+
+In this paper, we presented a technique to use Recurrent neu-
+ral networks (RNNs) to learn token sequence models for ﬁnding
+repairs to syntax errors in student programs. For a programming
+assignment, our technique ﬁrst uses the set of all syntactically cor-
+rect student submissions to train an RNN for learning the token
+sequence model, and then uses the trained model to predict token
+sequences for ﬁnding repairs for student submissions with syntax
+errors. Our technique takes inspiration from two emerging research
+areas: 1) Learning language models from big code, and 2) Efﬁcient
+learning techniques for Recurrent neural networks. For our dataset
+of student attempts obtained from the edX platform, our technique
+can generate repairs for about 32% of submissions. We believe this
+technique can provide a basis for providing automated feedback on
+syntax errors to hundreds of thousands of students learning from
+online introductory programming courses that are being taught by
+edX, Coursera, and Udacity.
+
+[18] R. Singh, S. Gulwani, and A. Solar-Lezama. Automated feed-
+back generation for introductory programming assignments.
+In PLDI, pages 15–26, 2013.
+
+[19] A. Solar-Lezama, L. Tancau, R. Bodík, S. A. Seshia, and V. A.
+In
+
+Saraswat. Combinatorial sketching for ﬁnite programs.
+ASPLOS, pages 404–415, 2006.
+
+[20] P. J. Werbos. Backpropagation through time: what it does and
+how to do it. Proceedings of the IEEE, 78(10):1550–1560,
+Oct 1990.
+
+References
+[1] M. Allamanis, E. T. Barr, C. Bird, and C. A. Sutton. Learning
+
+natural coding conventions. In FSE, pages 281–293, 2014.
+
+[2] M. Allamanis, E. T. Barr, C. Bird, and C. A. Sutton. Suggest-
+ing accurate method and class names. In FSE, pages 38–49,
+2015.
+
+[3] M. Allamanis and C. A. Sutton. Mining source code reposito-
+ries at massive scale using language modeling. In MSR, pages
+207–216, 2013.
+
+[4] M. Allamanis and C. A. Sutton. Mining idioms from source
+
+code. In FSE, pages 472–483, 2014.
+
+[5] S. Basu, C. Jacobs, and L. Vanderwende. Powergrading: a
+clustering approach to amplify human effort for short answer
+grading. TACL, 1:391–402, 2013.
+
+[6] C. M. Bishop. Neural Networks for Pattern Recognition. Ox-
+
+ford University Press, Inc., New York, NY, USA, 1995.
+
+[7] S. Gulwani, I. Radicek, and F. Zuleger. Feedback genera-
+tion for performance problems in introductory programming
+assignments. In FSE, pages 41–51, 2014.
+
+[8] A. Hindle, E. T. Barr, Z. Su, M. Gabel, and P. T. Devanbu. On
+
+the naturalness of software. In ICSE, pages 837–847, 2012.
+
+[9] S. Hochreiter and J. Schmidhuber. Long short-term memory.
+
+Neural Comput., 9(8):1735–1780, Nov. 1997.
+
+[10] J. Huang, C. Piech, A. Nguyen, and L. J. Guibas. Syntactic
+and functional variability of a million code submissions in a
+machine learning MOOC. In AIED, 2013.
+
+[11] C. E. Kulkarni, P. W. Wei, H. Le, D. J. hao Chia, K. Pa-
+padopoulos, J. Cheng, D. Koller, and S. R. Klemmer. Peer
+and self assessment in massive online classes. ACM Trans.
+Comput.-Hum. Interact., 20(6):33, 2013.
+
+[12] A. S. Lan, D. Vats, A. E. Waters, and R. G. Baraniuk. Math-
+ematical language processing: Automatic grading and feed-
+In Learn-
+back for open response mathematical questions.
+ing@Scale, pages 167–176, 2015.
+
+[13] A. Nguyen, C. Piech, J. Huang, and L. J. Guibas. Codewebs:
+scalable homework search for massive open online program-
+ming courses. In WWW, pages 491–502, 2014.
+
+[14] T. T. Nguyen, A. T. Nguyen, H. A. Nguyen, and T. N. Nguyen.
+A statistical semantic language model for source code.
+In
+Proceedings of the 2013 9th Joint Meeting on Foundations of
+Software Engineering, ESEC/FSE 2013, 2013.
+
+[15] C. Piech, J. Huang, A. Nguyen, M. Phulsuksombati, M. Sa-
+hami, and L. J. Guibas. Learning program embeddings to
+propagate feedback on student code. In ICML, pages 1093–
+1102, 2015.
+
+[16] V. Raychev, M. T. Vechev, and A. Krause. Predicting program
+properties from "big code". In POPL, pages 111–124, 2015.
+
+[17] D. E. Rumelhart, G. E. Hinton, and R. J. Williams. Parallel
+distributed processing: Explorations in the microstructure of
+cognition, vol. 1. chapter Learning Internal Representations
+by Error Propagation, pages 318–362. MIT Press, 1986.
+
+

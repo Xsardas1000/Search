@@ -1,0 +1,1018 @@
+Segmental Recurrent Neural Networks for End-to-end Speech Recognition
+
+Liang Lu1∗, Lingpeng Kong2∗, Chris Dyer2, Noah A. Smith3, and Steve Renals1
+
+1Centre for Speech Technology Research, The University of Edinburgh, Edinburgh, UK
+
+2School of Computer Science, Carnegie Mellon University, Pittsburgh, USA
+
+3Computer Science & Engineering, The University of Washington, Seattle, USA
+
+{liang.lu, s.renals}@ed.ac.uk, {lingpenk, cdyer}@cs.cmu.edu, nasmith@cs.washington.edu
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+1
+
+ 
+
+ 
+ 
+]
+L
+C
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+3
+2
+2
+0
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Abstract
+
+We study the segmental recurrent neural network for end-to-end
+acoustic modelling. This model connects the segmental con-
+ditional random ﬁeld (CRF) with a recurrent neural network
+(RNN) used for feature extraction. Compared to most previ-
+ous CRF-based acoustic models, it does not rely on an external
+system to provide features or segmentation boundaries. Instead,
+this model marginalises out all the possible segmentations, and
+features are extracted from the RNN trained together with the
+segmental CRF. In essence, this model is self-contained and can
+be trained end-to-end. In this paper, we discuss practical train-
+ing and decoding issues as well as the method to speed up the
+training in the context of speech recognition. We performed
+experiments on the TIMIT dataset. We achieved 17.3% phone
+error rate (PER) from the ﬁrst-pass decoding — the best re-
+ported result using CRFs, despite the fact that we only used a
+zeroth-order CRF and without using any language model.
+Index Terms: end-to-end speech recognition, segmental CRF,
+recurrent neural networks.
+
+1. Introduction
+
+Speech recognition is a typical sequence to sequence transduc-
+tion problem, i.e., given a sequence of acoustic observations,
+the speech recognition engine decodes the corresponding se-
+quence of words (or phonemes). A key component in a speech
+recognition system is the acoustic model, which computes the
+conditional probability of the output sequence given the input
+sequence. However, directly computing this conditional proba-
+bility is challenging due to many factors including the variable
+lengths of the input and output sequences. The hidden Markov
+model (HMM) converts this sequence-level classiﬁcation task
+into a frame-level classiﬁcation problem, where each acoustic
+frame is classiﬁed into one of the hidden states, and each output
+sequence corresponds to a sequence of hidden states. To make
+it computationally tractable, HMMs usually rely on the condi-
+tional independence assumption and the ﬁrst-order Markov rule
+— the well-known weaknesses of HMMs [1]. Furthermore, the
+HMM-based pipeline is composed of a few relatively indepen-
+dent modules, which makes the joint optimisation nontrivial.
+
+There has been a consistent research effort to seek ar-
+chitectures to replace HMMs and overcome their limitation
+for acoustic modelling, e.g.,
+[2, 3, 4, 5]; however these ap-
+proaches have not yet improved speech recognition accuracy
+over HMMs. In the past few years, several neural network based
+∗ Equal contribution. Lu and Renals are funded by the UK
+EPSRC Programme Grant EP/I031022/1, Natural Speech Technol-
+ogy (NST). The NST research data collection may be accessed at
+http://datashare.is.ed.ac.uk/handle/10283/786.
+
+approaches have been proposed and demonstrated promising
+results. In particular, the connectionist temporal classiﬁcation
+(CTC) [6, 7, 8, 9] approach deﬁnes the loss function directly
+to maximise the conditional probability of the output sequence
+given the input sequence, and it usually uses a recurrent neu-
+ral network to extract features. However, CTC simpliﬁes the
+sequence-level error function by a product of the frame-level
+error functions (i.e., independence assumption), which means it
+essentially still does frame-level classiﬁcation. It also requires
+the lengths of the input and output sequence to be the same,
+which is inappropriate for speech recognition. CTC deals with
+this problem by replicating the output labels so that a consecu-
+tive frames may correspond to the same output label or a blank
+token.
+
+Attention-based RNNs have been demonstrated to be a
+powerful alternative sequence-to-sequence transducer, e.g., in
+machine translation [10], and speech recognition [11, 12, 13].
+A key difference of this model from HMMs and CTCs is that
+the attention-based approach does not apply the conditional in-
+dependence assumption to the input sequence. Instead, it maps
+the variable-length input sequence into a ﬁxed-size vector rep-
+resentation at each decoding step by an attention-based scheme
+(see [10] for further explanation). It then generates the output
+sequence using an RNN conditioned on the vector representa-
+tion from the source sequence. The attentive scheme suits the
+machine translation task well, because there may be no clear
+alignment between the source and target sequence for many lan-
+guage pairs. However, this approach does not naturally apply to
+the speech recognition task, as each output token only corre-
+sponds to a small size window of acoustic spectrum.
+
+In this paper, we study segmental RNNs [14] for acoustic
+modelling. This model is similar to CTC and attention-based
+RNN in the sense that an RNN encoder is also used for fea-
+ture extraction, but it differs in the sense that the sequence-level
+conditional probability is deﬁned using an segmental (semi-
+Markov) CRF [15], which is an extension on the standard
+CRF [16]. There have been numerous works on CRFs and their
+variants for speech recognition, e.g,
+[4, 5, 17] (see [18] for
+an overview). In particular, feed-forward neural networks have
+been used with segmental CRFs for speech recognition [19, 20].
+However, segmental RNN is different in that it is an end-to-
+end model — it does not depend on an external system to pro-
+vide segmentation boundaries and features, instead, this model
+is trained by marginalising out all possible segmentations, while
+the features are derived from the encoder RNN, which is trained
+jointly with the segmental CRF. Our experiments were per-
+formed on the TIMIT dataset, and we achieved 17.3% PER
+from ﬁrst-pass decoding with zeroth-order CRF and without us-
+ing any language model — the best reported result using CRFs.
+
+(cid:88)
+
+J(cid:89)
+
+2. Segmental Recurrent Neural Networks
+2.1. Segmental Conditional Random Fields
+Given a sequence of acoustic frames X = {x1,··· , xT} and
+its corresponding sequence of output labels y = {y1,··· , yJ},
+where T ≥ J, segmental (or semi-Markov) conditional random
+ﬁeld deﬁnes the sequence-level conditional probability with the
+auxiliary segment labels E = {e1,··· , eJ} as
+
+P (y, E | X) =
+
+1
+
+Z(X)
+
+j=1
+
+exp f (yj, ej, X) ,
+
+(1)
+
+where ej = (cid:104)sj, nj(cid:105) is a tuple of the beginning (sj) and the end
+(nj) time tag for the segment of yj, and nj > sj while nj, sj ∈
+[1, T ]; yj ∈ Y and Y denotes the vocabulary set; Z(X) is the
+normaliser that that sums over all the possible (y, E) pairs, i.e.,
+
+J(cid:89)
+
+Z(X) =
+
+exp f (yj, ej, X) .
+
+(2)
+
+y,E
+
+j=1
+
+(cid:62)
+
+f (yj, ej, X) = w
+
+Here, we only consider the zeroth-order CRF, while the exten-
+sion to higher order models is straightforward. Similar to other
+CRF-based models, the function f (·) is deﬁned as
+Φ(yj, ej, X),
+
+(3)
+where Φ(·) denotes the feature function, and w is the weight
+vector. Previous works on CRF-based acoustic models mainly
+use heuristically handcrafted feature function Φ(·). They also
+usually rely on an external system to provide the segment la-
+bels. In this paper, we deﬁne Φ(·) using neural networks, and
+the segmentation E is marginalised out during training, which
+makes our model self-contained.
+
+2.2. Feature Representations
+We use neural networks to deﬁne the feature function Φ(·),
+which maps the acoustic segment and its corresponding label
+into a joint feature space. More speciﬁcally, yj is ﬁrstly rep-
+resented as a one-hot vector vj, and it is then mapped into a
+continuous space by a linear embedding matrix M as
+
+(4)
+Given the segment label ej, we use an RNN to map the acoustic
+segment to a ﬁxed-dimensional vector representation, i.e.,
+
+uj = Mvj
+
+hj
+1 = r(h0, xsj )
+2 = r(hj
+hj
+...
+
+1, xsj +1)
+
+(5)
+(6)
+
+hj
+dj
+
+= r(hj
+
+dj−1, xnj )
+
+(7)
+where h0 denotes the initial hidden state, dj = nj − sj denotes
+the duration of the segment and r(·) is a non-linear function.
+We take the ﬁnal hidden state hj
+as the segment embedding
+dj
+vector, then Φ(·) can be represented as
+
+),
+
+Φ(yj, ej, X) = g(uj, hj
+dj
+
+(8)
+where g(·) corresponds to one layer or multiple layers of lin-
+ear or non-linear transformation. In fact, it is ﬂexible to include
+other relevant features as additional inputs to the function g(·),
+e.g., the duration feature which can be obtained by converting
+dj into another embedding vector. In practice, multiple RNN
+layers can be used transform the acoustic signal X before ex-
+tracting the segment embedding vector hj
+dj
+
+as Figure 1.
+
+Figure 1: Segmental RNN using ﬁrst-order CRF. The coloured
+circles denote the segment embedding vector hj
+in Eq.(7). Us-
+dj
+ing bi-directional RNNs is straightforward.
+
+2.3. Conditional Maximum Likelihood Training
+For speech recognition, the segmentation labels E are usually
+unknown, training the model by maximising the conditional
+probability as Eq. (1) is therefore not practical. The problem
+can be addressed by deﬁning the loss function as the negative
+marginal log-likelihood as
+L(θ) = − log P (y | X)
+
+P (y, E | X)
+
+= − log
+
+= − log
+
+(cid:88)
+(cid:88)
+(cid:124)
+
+E
+
+E
+
+(cid:89)
+
+j
+
+exp f (yj, ej, X)
+
++ log Z(X),
+
+(9)
+
+(cid:123)(cid:122)
+
+≡Z(X,y)
+
+(cid:125)
+
+where θ denotes the set of model parameters, and Z(X, y) de-
+notes the summation over all the possible segmentations when
+only y is observed. To simplify notations, the objective function
+L(θ) is deﬁne with only one training utterance.
+
+However, the number of possible segmentations is exponen-
+tial with the length of X, which makes the naive computation
+of both Z(X, y) and Z(X) impractical. Fortunately, this can
+be addressed by using the following dynamic programming al-
+gorithm as proposed in [15]:
+
+(cid:88)
+
+α0 = 1
+
+αt =
+
+αk ×(cid:88)
+
+y∈Y
+
+0<k<t
+
+Z(X) = αT
+
+f (y,(cid:104)k, t(cid:105), X)
+
+(10)
+
+(11)
+
+(12)
+
+In Eq. (11), the ﬁrst summation is over all the possible segmen-
+tation up to timestep t, and the second summation is over all
+the possible labels from the vocabulary. The computation cost
+of this algorithm is O(T 2 · |Y|), where |Y| is the size of the
+vocabulary. The cost can be further reduced by introducing an
+upper bound of the segment length, in which case Eq. (11) can
+be rewritten as
+
+αk ×(cid:88)
+
+(cid:88)
+(cid:26) 0
+
+l<k<t
+
+t − L
+
+αt =
+
+l =
+
+f (y,(cid:104)k, t(cid:105), X)
+
+y∈Y
+if
+
+t − L < 0
+otherwise
+
+(13)
+
+(14)
+
+where L denotes the maximum value of the segment length.
+The cost is then reduced to O(L·T ·|Y|), and for long sequences
+
+x1x2x3x4y2y1x5x6y3Table 1: Speedup by hierarchical subsampling networks.
+
+subsampling
+No
+1 layer
+2 layers
+
+L
+30
+15
+8
+
+speedup
+1
+∼3x
+∼10x
+
+Table 2: Results of hierarchical subsampling networks. d(w)
+and d(hj) denote the dimension of w and hj
+in Eqs. (3) and
+dj
+(7) respectively. layers denotes the number of LSTM layers
+and hidden is the dimension of the LSTM cells. conc is short
+for concatenating operation in the subsampling network.
+
+System d(w)
+64
+skip
+64
+conc
+64
+add
+64
+skip
+64
+conc
+64
+add
+
+d(hj
+dj
+64
+64
+64
+64
+64
+64
+
+)
+
+layers
+
+hidden
+
+PER(%)
+
+3
+3
+3
+3
+3
+3
+
+128
+128
+128
+250
+250
+250
+
+21.2
+21.3
+23.2
+20.1
+20.5
+21.5
+
+This joint maximization algorithm may yield high search error,
+because it only considers one segmentation. In the future, we
+shall investigate the beam search algorithm which may yield a
+lower search error.
+
+2.5. Further Speedup
+
+It is computationally expensive for RNNs to model long se-
+quences, and the number of possible segmentations is exponen-
+tial with the length of the input sequence as mentioned before.
+The computational cost can be signiﬁcantly reduced by using
+the hierarchical subsampling RNN [21] to shorten the input se-
+quences, where the subsampling layer takes a window of hidden
+states from the lower layer as input as shown in Figure 2. In this
+work, we consider three variants: a) concatenate – the hidden
+states in the subsampling window are concatenated before been
+fed into the next layer; b) add – the hidden states are added into
+one vector for the next layer; c) skip – only the last hidden state
+in the window is kept and all the others are skipped. The last
+two schemes are computationally cheaper as they do not intro-
+duce extra model parameters.
+
+3. Experiments
+
+3.1. System Setup
+
+We used the TIMIT dataset to evaluate the segmental RNN
+acoustic models. This dataset was preferred for the rapid eval-
+uation of different system settings, and for the comparison to
+other CRF and end-to-end systems. We followed the standard
+protocol of the TIMIT dataset, and our experiments were based
+on the Kaldi recipe [22]. We used the core test set as our evalu-
+ation set, which has 192 utterances. We used 24 dimensional
+log ﬁterbanks (FBANKs) with delta and double-delta coefﬁ-
+cients, yielding 72 dimensional feature vectors. Our models
+were trained with 48 phonemes, and their predictions were con-
+verted to 39 phonemes before scoring. The dimension of uj
+was ﬁxed to be 32. For all our experiments, we used the long
+short-term memory (LSTM) networks [23] as the implementa-
+tion of RNNs, and the networks were always bi-directional. We
+set the initial SGD learning rate to be 0.1, and we exponentially
+decay the learning rate by a factor of 2 when the validation er-
+ror stopped decreasing. Our models were trained with dropout
+
+Figure 2: Hierarchical subsampling recurrent network [21] .
+The size of the subsampling window is two in this example.
+like speech signals where T (cid:29) L, the computational savings
+are substantial.
+
+The term Z(X, y) can be computed similarly. In this case,
+since the label y is now observed, the summation over all the
+possible labels y ∈ Y in Eq. (11) is not necessary, i.e.,
+
+(cid:88)
+
+β0,0 = 1
+
+βt,j =
+
+βk,j−1 × f (yj,(cid:104)k, t(cid:105), X)
+
+(15)
+
+(16)
+
+(17)
+
+0<k<t
+
+Z(X, y) = βT,J
+
+Again, we can limit the length of the possible segments as Eq.
+(13). Given Z(X) and Z(X, y), the loss function L(θ) can
+be minimised using the stochastic gradient decent (SGD) algo-
+rithm similar to training other neural network models. Other
+losses, for example, hinge, can be considered in future work.
+
+2.4. Viterbi Decoding
+During decoding, we need to search the target label sequence
+y that yields the highest posterior probability given X by
+marginalising out all the possible segmentations:
+P (y, E | X)
+
+(cid:88)
+
+= arg max
+
+(18)
+
+log
+
+y
+
+∗
+
+y
+
+E
+
+This involves minor modiﬁcation of the recursive algorithm in
+Eq. (11) that instead of summing over all the possible labels,
+the Viterbi path up to the timestep t is
+k × max
+∗
+α
+
+y∈Y f (y,(cid:104)k, t(cid:105), X)
+
+(cid:88)
+
+∗
+t =
+
+(19)
+
+α
+
+0<k<t
+
+However, marginalising out all the possible segmentations is
+still expensive. The computational cost can be further reduced
+by greedy searching the most likely segmentation, i.e.,
+
+α
+
+∗
+t = max
+0<k<t
+
+k × max
+∗
+α
+
+y∈Y f (y,(cid:104)k, t(cid:105), X),
+
+which corresponds to the decoding objective as
+
+∗
+
+∗
+, E
+
+y
+
+= arg max
+y,E
+
+log P (y, E | X)
+
+(20)
+
+(21)
+
+x1x2x3x4···x1x2x3x4···a) concatenate / addb) skipTable 3: Results of tuning the hyperparameters.
+
+Dropout
+
+0.2
+
+0.1
+×
+
+d(w)
+64
+64
+32
+64
+64
+32
+64
+64
+32
+64
+64
+64
+64
+
+d(hj
+dj
+64
+32
+32
+64
+32
+32
+64
+32
+32
+64
+64
+64
+64
+
+)
+
+layers
+
+hidden
+
+3
+3
+3
+3
+3
+3
+6
+6
+6
+3
+3
+6
+6
+
+128
+128
+128
+250
+250
+250
+250
+250
+250
+128
+250
+250
+250
+
+PER
+21.2
+21.6
+21.4
+20.1
+20.4
+20.6
+19.3
+20.2
+20.2
+21.3
+20.9
+20.4
+21.9
+
+Table 4: Results of three types of acoustic features.
+
+Features
+24-dim FBANK
+40-dim FBANK
+Kaldi
+
+√
+Deltas
+√
+×
+
+d(xt)
+
+72
+120
+40
+
+PER
+19.3
+18.9
+17.3
+
+regularisation [24], using an speciﬁc implementation for recur-
+rent networks [25]. The dropout rate was 0.2 unless speciﬁed
+otherwise. Our models were randomly initialised with the same
+random seed.
+
+3.2. Results of Hierarchical Subsampling
+We ﬁrst demonstrate the results of the hierarchical subsampling
+recurrent network, which is the key to speed up our experi-
+ments. We set the size of the subsampling window to be 2,
+therefore each subsampling layer reduced the time resolution
+by a factor of 2. We set the maximum segment length L in Eq.
+(14) to be 300 milliseconds, which corresponded to 30 frames
+of FBANKs (sampled at the rate of 10 milliseconds). With two
+layers of subsampling recurrent networks, the time resolution
+was reduced by a factor of 4, and the value of L was reduced to
+be 8, yielding around 10 times speedup as shown in Table 1.
+
+Table 2 compares the three implementations of the recur-
+rent subsampling network detailed in section 2.5. We observed
+that concatenating all the hidden states in the subsampling win-
+dow did not yield lower phone error rate (PER) than using the
+simple skipping approach, which may be due to the fact that the
+TIMIT dataset is small and it prefers a smaller model. On the
+other hand, adding the hidden states in the subsampling window
+together worked even worse, possibly due to that the sequential
+information in the subsampling window was ﬂattened. In the
+following experiments, we sticked to the skipping method, and
+using two subsampling layers.
+
+3.3. Hyperparameters and Different Features
+We then evaluated the model by tuning the hyperparameters,
+and the results are given in Table 3. We tuned the number of
+LSTM layers, and the dimension of LSTM cells, as well as the
+dimensions of w and the segment vector hj. In general, larger
+models with dropout regularisation yielded higher recognition
+accuracy. Our best result was obtained using 6 layers of 250-
+dimensional LSTMs. However, without the dropout regulari-
+sation, the model can be easily overﬁt due to the small size of
+training set. In the future, we shall evaluate this model with a
+large dataset.
+
+Table 5: Comparison to Related Works. LM denotes the lan-
+guage model, and SD denotes speaker-dependent transform.
+The HMM-DNN baseline was trained with cross-entropy us-
+ing the Kaldi recipe. Sequence training did not improve it due
+to the small amount of data. Note that RNN transducer and
+attention-based RNN are equipped with built-in RNNLMs.
+
+System
+HMM-DNN
+ﬁrst-pass SCRF [26]
+Boundary-factored SCRF [27]
+Deep Segmental NN [19]
+Discriminative segmental cascade [28]
+
++ 2nd pass with various features
+
+CTC [29]
+RNN transducer [29]
+Attention-based RNN [11]
+Segmental RNN
+Segmental RNN
+
+√
+LM SD PER
+√
+18.5
+33.1
+×
+√
+26.5
+√
+21.9
+√
+21.7
+19.9
+×
+18.4
+-
+17.7
+-
+17.6
+×
+18.9
+×
+17.3
+
+√
+×
+×
+×
+×
+×
+×
+×
+×
+×
+√
+
+We then evaluated another two types of features using the
+same system conﬁguration that achieved the best result in Ta-
+ble 3. We increased the number of FBANKs from 24 to 40,
+which yielded slightly lower PER. We also evaluated the stan-
+dard Kaldi features — 39 dimensional MFCCs spliced by a con-
+text window of 7, followed by LDA and MLLT transform and
+with feature-space speaker-dependent MLLR, which were the
+same features used in the HMM-DNN baseline in Table 5. The
+well-engineered features improved the accuracy of our system
+by more than 1% absolute.
+
+3.4. Comparison to Related Works
+In Table 5, we compare our result to other reported results using
+segmental CRFs as well as recent end-to-end systems. Previ-
+ous state-of-the-art result using segmental CRFs on the TIMIT
+dataset is reported in [28], where the ﬁrst-pass decoding was
+used to prune the search space, and the second-pass was used to
+re-score the hypothesis using various features including neural
+network features. Besides, the ground-truth segmentation was
+used in [28]. We achieved considerably lower PER with ﬁrst-
+pass decoding, despite the fact that our CRF was zeroth-order,
+and we did not use any language model. Furthermore, our re-
+sults are also comparable to that from the CTC and attention-
+based RNN end-to-end systems. The accuracy of segmental
+RNNs may be further improved by using higher-order CRFs or
+incorporating a language model into the decode step, and using
+beam search to reduce the search error.
+
+4. Conclusions
+
+In this paper, we present the segmental RNN — a novel acous-
+tic model that combines the segmental CRF with an encoder
+RNN for end-to-end speech recognition. We discuss the prac-
+tical training and decoding algorithms of this model for speech
+recognition, and the subsampling network to reduce the compu-
+tational cost. Our experiments were performed on the TIMIT
+dataset, and we achieved strong recognition accuracy using
+zeroth-order CRF, and without using any language model. In
+the future, we shall investigate discriminative training criteria,
+and incorporating a language model into the decoding step. Fu-
+ture works also include implementing a weighted ﬁnite sate
+transducer (WFST) based decoder and scaling this model to
+large vocabulary datasets.
+
+[18] E. Fosler-Lussier, Y. He, P. Jyothi, and R. Prabhavalkar,
+“Conditional random ﬁelds in speech, audio, and language
+processing,” Proceedings of the IEEE, vol. 101, no. 5, pp.
+1054–1075, 2013.
+
+[19] O. Abdel-Hamid, L. Deng, D. Yu, and H. Jiang, “Deep
+segmental neural networks for speech recognition.” in
+Proc. INTERSPEECH, 2013, pp. 1849–1853.
+
+[20] Y. He and E. Fosler-Lussier, “Segmental conditional ran-
+dom ﬁelds with deep neural networks as acoustic models
+for ﬁrst-pass word recognition,” in Proc. INTERSPEECH,
+2015.
+
+[21] A. Graves, “Hierarchical subsampling networks,” in Su-
+pervised Sequence Labelling with Recurrent Neural Net-
+works. Springer, 2012, pp. 109–131.
+
+[22] D. Povey, A. Ghoshal, G. Boulianne, L. Burget, O. Glem-
+bek, N. Goel, M. Hannemann, P. Motlıcek, Y. Qian,
+P. Schwarz, J. Silovsk´y, G. Semmer, and K. Vesel´y, “The
+Kaldi speech recognition toolkit,” in Proc. ASRU, 2011.
+
+[23] S. Hochreiter and J. Schmidhuber, “Long short-term
+memory,” Neural computation, vol. 9, no. 8, pp. 1735–
+1780, 1997.
+
+[24] N. Srivastava, G. Hinton, A. Krizhevsky, I. Sutskever, and
+R. Salakhutdinov, “Dropout: A simple way to prevent
+neural networks from overﬁtting,” The Journal of Machine
+Learning Research, vol. 15, no. 1, pp. 1929–1958, 2014.
+“Re-
+current neural network regularization,” arXiv preprint
+arXiv:1409.2329, 2014.
+
+[25] W. Zaremba,
+
+I. Sutskever,
+
+and O. Vinyals,
+
+[26] G. Zweig, “Classiﬁcation and recognition with direct seg-
+IEEE, 2012, pp. 4161–
+
+ment models,” in Proc. ICASSP.
+4164.
+
+[27] Y. He and E. Fosler-Lussier, “Efﬁcient segmental condi-
+tional random ﬁelds for phone recognition,” in Proc. IN-
+TERSPEECH, 2012, pp. 1898–1901.
+
+[28] H. Tang, W. Wang, K. Gimpel, and K. Livescu, “Discrim-
+inative segmental cascades for feature-rich phone recog-
+nition,” in Proc. ASRU, 2015.
+
+[29] A. Graves, A.-R. Mohamed, and G. Hinton, “Speech
+recognition with deep recurrent neural networks,” in Proc.
+ICASSP.
+
+IEEE, 2013, pp. 6645–6649.
+
+5. References
+
+[1] D. Gillick, L. Gillick, and S. Wegmann, “Don’t multiply
+lightly: Quantifying problems with the acoustic model as-
+sumptions in speech recognition,” in Proc. ASRU.
+IEEE,
+2011, pp. 71–76.
+
+[2] M. Ostendorf, V. Digalakis, and O. Kimball, “From
+HMM’s to segment models: A uniﬁed view of stochas-
+tic modeling for speech recognition,” IEEE Transactions
+on Speech and Audio Processing, pp. 360–378, 1996.
+
+[3] N. Smith and M. Gales, “Speech recognition using
+SVMs,” in Advances in neural information processing
+systems, 2001, pp. 1197–1204.
+
+[4] A. Gunawardana, M. Mahajan, A. Acero, and J. C. Platt,
+“Hidden conditional random ﬁelds for phone classiﬁca-
+tion.” in INTERSPEECH, 2005, pp. 1117–1120.
+
+[5] Y. Hifny and S. Renals, “Speech recognition using aug-
+mented conditional random ﬁelds,” Audio, Speech, and
+Language Processing, IEEE Transactions on, vol. 17,
+no. 2, pp. 354–365, 2009.
+
+[6] A. Graves and N. Jaitly, “Towards end-to-end speech
+recognition with recurrent neural networks,” in Proc.
+ICML, 2014, pp. 1764–1772.
+
+[7] A. Hannun, C. Case, J. Casper, B. Catanzaro, G. Di-
+amos, E. Elsen, R. Prenger et al., “Deep Speech: Scal-
+ing up end-to-end speech recognition,” in arXiv preprint
+arXiv:1412.5567, 2014.
+
+[8] H. Sak, A. Senior, K. Rao, and F. Beaufays, “Fast and
+accurate recurrent neural network acoustic models for
+speech recognition,” in Proc. INTERSPEECH, 2015.
+
+[9] Y. Miao, M. Gowayyed, and F. Metze, “EESEN: End-
+to-end speech recognition using deep RNN models and
+WFST-based decoding,” in Proc. ASRU, 2015.
+
+[10] D. Bahdanau, K. Cho, and Y. Bengio, “Neural machine
+translation by jointly learning to align and translate,” in
+Proc. ICLR, 2015.
+
+[11] J. K. Chorowski, D. Bahdanau, D. Serdyuk, K. Cho, and
+Y. Bengio, “Attention-based models for speech recogni-
+tion,” in Advances in Neural Information Processing Sys-
+tems, 2015, pp. 577–585.
+
+[12] L. Lu, X. Zhang, K. Cho, and S. Renals, “A study of the
+recurrent neural network encoder-decoder for large vocab-
+ulary speech recognition,” in Proc. INTERSPEECH, 2015.
+[13] W. Chan, N. Jaitly, Q. V. Le, and O. Vinyals, “Listen, at-
+
+tend and spell,” arXiv preprint arXiv:1508.01211, 2015.
+
+[14] L. Kong, C. Dyer, and N. A. Smith, “Segmental recurrent
+neural networks,” arXiv preprint arXiv:1511.06018, 2015.
+[15] S. Sarawagi and W. W. Cohen, “Semi-markov conditional
+random ﬁelds for information extraction,” in Advances in
+neural information processing systems, 2004, pp. 1185–
+1192.
+
+[16] J. Lafferty, A. McCallum, and F. Pereira, “Conditional
+random ﬁelds: Probabilistic models for segmenting and
+labeling sequence data,” in Proc. ICML, 2001, pp. 282–
+289.
+
+[17] G. Zweig, P. Nguyen, D. Van Compernolle, K. Demuynck,
+L. Atlas, P. Clark et al., “Speech recognition with seg-
+mental conditional random ﬁelds: A summary of the JHU
+CLSP 2010 summer workshop,” in Proc. ICASSP.
+IEEE,
+2011, pp. 5044–5047.
+
+

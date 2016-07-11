@@ -1,0 +1,1886 @@
+NetMemex: Providing Full-Fidelity Trafﬁc Archival
+
+Hyeontaek Lim, Vyas Sekar, Yoshihisa Abe, David G. Andersen
+
+Carnegie Mellon University
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+4
+1
+
+ 
+ 
+]
+I
+
+N
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+7
+8
+3
+4
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+ABSTRACT
+
+NetMemex explores efﬁcient network trafﬁc archival without
+any loss of information. Unlike NetFlow-like aggregation,
+NetMemex allows retrieving the entire packet data includ-
+ing full payload, which makes it useful in forensic analysis,
+networked and distributed system research, and network ad-
+ministration. Different from packet trace dumps, NetMemex
+performs sophisticated data compression for small storage
+space use and optimizes the data layout for fast query pro-
+cessing. NetMemex takes advantage of high-speed random
+access of ﬂash drives and inexpensive storage space of hard
+disk drives. These efforts lead to a cost-effective yet high-
+performance full trafﬁc archival system. We demonstrate
+that NetMemex can record full-ﬁdelity trafﬁc at near-Gbps
+rates using a single commodity machine, handling common
+queries at up to 90.1 K queries/second, at a low storage cost
+comparable to conventional hard disk-only trafﬁc archival
+solutions.
+
+1.
+
+INTRODUCTION
+
+Archiving network trafﬁc without loss of information is
+a useful foundation for activities including forensic analy-
+sis [12, 18, 24, 26, 29, 34], scientiﬁc research, particularly
+about networking and distributed systems [4, 7, 35], network
+administration [13, 34], and others.
+
+However, the task of trafﬁc archival is difﬁcult, as recent
+
+applications impose technical challenges:
+
+• Data volume. Applications often require recording a
+few or more days of full trafﬁc for analysis (e.g., forensic
+analysis) [24, 30], resulting in a large amount of data to
+store (10.8+ TB/Gbps/day without compression).
+
+• Recording performance. It has become more common
+to record high-speed trafﬁc (e.g., 1 Gbps rate) [6, 11, 24,
+29].
+
+• Query performance. There is an increasing demand
+
+for fast query processing [14, 15, 24].
+
+Previous solutions fail to fully address these challenges:
+(1) Lossy trafﬁc archival. There are numerous works that
+mitigate high storage consumption by aggregating or selec-
+tively recording trafﬁc data [8, 24, 30]. However, this lossy
+approach is inadequate for applications that cannot tolerate
+
+any loss of information from the original trafﬁc. A few com-
+pression schemes have been proposed for compressing trafﬁc
+information [16], but they focus only on well-structured for-
+mats such as NetFlow records.
+
+(2) Imbalance between recording and query performance,
+storage use. Many trafﬁc archival systems have difﬁculty in
+achieving both high recording and query processing perfor-
+mance. One of the most widespread methods is to focus on
+recording throughput by viewing hard disk drives as a huge
+circular queue and streaming packets to the queue as they
+arrive [12, 13, 15, 24]. In this technique, query processing
+can waste a large amount of I/O bandwidth due to high false
+positive rates incurred by inefﬁcient indexing over such an
+unstructured data layout. Some systems aim instead for high
+query performance [18], but they do not target high record-
+ing speed, so these approaches are only viable for ofﬂine or
+semi-online recording. These works do not perform detailed
+evaluation on the total storage cost, including the trafﬁc data
+and any other metadata such as indexes, unless their system
+design focuses on reducing the storage space use [24, 30].
+
+In this paper, we present NetMemex, a full-ﬁdelity trafﬁc
+archival system that simultaneously attains high recording
+and query performance and efﬁcient storage. A single-node
+server-class system running NetMemex can archive Internet
+trafﬁc of 0.62–1.15 Gbps, and it can handle up to 90.1 K
+common queries per second. While NetMemex employs
+ﬂash drives, which are expensive relative to hard disk drives,
+because of NetMemex’s data compression techniques, its
+total storage cost is similar to conventional hard disk only
+solutions.
+
+The three key elements of our approach are:
+• Flow-oriented data reorganization and indexing in-
+creases the efﬁciency of query processing and the effec-
+tiveness of data compression by transforming the packet
+stream into a ﬂow-oriented form;
+
+• Employing both ﬂash and hard disk improves query
+latency by storing frequently and randomly accessed
+small data on ﬂash while keeping less frequently ac-
+cessed bulk data on hard disk; and
+
+• Extensive data compression reduces the total storage
+cost by using effective data compression techniques,
+which are applied to the packet header and payload sep-
+arately.
+
+These approaches are not a combination of piecewise tech-
+
+1
+
+2.2 Data Compression
+Dictionary-based compression techniques are most com-
+monly used in everyday data compression. They maintain
+recently seen data patterns in a data structure called a dictio-
+nary. They use the dictionary to ﬁnd a duplicate pattern in the
+new data, and they replace the pattern with a reference to the
+pattern in the dictionary. Since the reference can be encoded
+in smaller space than the original pattern in many cases, they
+can reduce the total space required to represent the original
+data.
+
+A larger dictionary often (but not always) allows a higher
+compression ratio; unfortunately, it also typically decreases
+compression speed due to more expensive dictionary search
+operation. Therefore, fast compression techniques use small
+dictionary sizes (e.g., 32 KiB for zlib [17]). Redundancy
+elimination [3, 35], a form of dictionary-based compression
+on network routers, also maintain a small time window to
+operate at a high rate.
+
+Data deduplication techniques [21], unlike dictionary-
+based compression, efﬁciently detect and reduce data redun-
+dancy across longer ranges. They use “ﬁngerprints” to divide
+data stream into smaller blocks called chunks. Each chunk is
+hashed using a strong hash function (e.g., SHA-1) to generate
+a unique identiﬁer, and they store only one copy of chunks
+with the same hash. Because it is possible to maintain an
+index of chunk hashes that are collected for a large amount
+of data (e.g., TBs) and a long period of time (e.g., days),
+data deduplication can save space even if redundant data are
+scattered across the entire data.
+
+Dictionary-based compression and data deduplication are
+often used together to increase the compression effectiveness;
+each chunk is compressed using a dictionary-based compres-
+sion technique while chunks are deduplicated using a data
+deduplication technique.
+
+Header compression techniques [10, 19, 21] reduce the
+size of packet headers by exploiting redundancy in packets
+in the same ﬂow (i.e., between packets sharing the same 5-
+tuple). For example, the sequence and acknowledge numbers
+in a TCP ﬂow have small increments, which can be encoded
+in one or two octets instead of the full four octets. Header
+compression is typically applied between network links or
+end-points to reduce the bandwidth required to transit packets.
+
+2.3 Storage Systems and Technologies
+Log-structured ﬁle systems [20, 33] convert random writes
+to sequential writes by appending new data to a log. This ap-
+proach takes advantage of the fact that many storage devices
+are good at sequential writes.
+
+Key-value stores [5, 9, 25] provide a high-performance
+storage service with a hash table-like interface, e.g.,
+GET(key) and PUT(key, value). They are typically
+optimized to handle a large number of small items efﬁciently
+in space, time, or both. A key-value store is a useful building
+
+2
+
+Figure 1: High-level view of a trafﬁc archiving system
+(within the gray box) and its interaction with other sys-
+tem components (outside of the gray box). Solid arrows
+show data processing, storage, and eviction, and dashed
+arrows are data retrieval.
+
+niques; they work together to help NetMemex achieve its
+performance and cost goals. For example, ﬂow reordering
+substantially increases the effectiveness of compression, and
+data compression enables storing frequently accessed data on
+ﬂash without a signiﬁcant increase in the total storage cost.
+
+2. BACKGROUND
+
+We ﬁrst describe a general trafﬁc archiving system and its
+challenges, and then we show several data compression tech-
+niques and storage technologies that we use in NetMemex.
+
+2.1 Trafﬁc Archival Systems
+A trafﬁc archival system is a storage system specialized for
+network trafﬁc data storage and retrieval. This system stores
+network packets and returns the stored information upon
+request.
+
+Figure 1 shows typical components of a trafﬁc archiving
+system. A trafﬁc archiving system has a simple interface.
+The system receives captured packets from an external packet
+acquisition method, such as tcpdump/libpcap [37] and Endace
+DAG [13], and keeps them for a speciﬁc period of time.
+Stored packets and trafﬁc information can be requested by
+trafﬁc analysis software.
+
+Inside the system, incoming packets go through the stages
+of recording and indexing, storage, and eviction. The record-
+ing and indexing phase accepts the input packets and stores
+them to storage. The packets can be transformed in this stage
+if there is a better data format available. As the storage ﬁlls,
+the system evicts old data to make room for new packets. The
+evicted data can be either discarded or stored in other storage
+for later analysis and longer archival; the auxiliary storage
+can be a larger-scale trafﬁc archiving system or a large-scale
+ordinary storage cluster.
+
+3.1 Architecture
+Figure 2 depicts the architecture of NetMemex. Within the
+basic structure of a trafﬁc archiving system, NetMemex com-
+bines multiple techniques to manipulate network trafﬁc data.
+Packets are acquired using packet capture software and
+
+transferred to NetMemex in the standard libpcap format.
+
+NetMemex records the full packets by transforming them
+into a compressed form that can be selectively accessed. Net-
+Memex ﬁrst groups the packets into ﬂows (§3.2). It applies
+header compression (§3.3) and payload compression (§3.4)
+to the headers and payloads of each ﬂow, followed by ﬂow
+indexing (§3.5). Through this process, NetMemex makes traf-
+ﬁc data smaller and easy for query processing (§3.6), where
+each step preserves the full ﬁdelity of the original trafﬁc.
+
+NetMemex stores data using both ﬂash drives and hard
+disk drives, to take advantage of the strength of each storage
+class; ﬂash holds headers and indexes, which are small and
+frequently accessed, and disk holds bulk payload data on
+disk.
+
+On both storage device types, NetMemex maintains data in
+a log-structured way in order to handle recording and eviction
+efﬁciently (§3.7), and to extend the lifetime of the ﬂash drives.
+To enable high-speed query processing, NetMemex allows
+an analysis application to choose how much detail about
+the original trafﬁc is necessary. For fastest operation, the
+application can ask NetMemex if any matching ﬂow exists.
+It can retrieve a full list of matching ﬂows if necessary. If
+packet headers matter, but high query performance is still
+needed, NetMemex can return full headers from ﬂash drives.
+When the full ﬁdelity is necessary, the application can request
+full packet reconstruction, which will make NetMemex fetch
+payload data from hard disk and construct a view of the
+original trafﬁc.
+
+Query processing produces full headers and packets in the
+libpcap format so that existing trafﬁc analysis applications
+can easily use query results.
+
+3.2 Flow Grouping and Lifetime
+A ﬂow in NetMemex is a sequence of packets with the same
+5-tuple (source and destination IP address, protocol, source
+and destination port number if exist), ordered by arrival time
+(packet timestamp). Flow grouping is the ﬁrst recording
+step that transforms the packet stream into a query-friendly
+form and facilitates per-ﬂow compression in the subsequent
+recording process by grouping input packets into ﬂows.
+
+Figure 3 illustrates how ﬂow grouping works. NetMemex
+classiﬁes incoming packets according to their 5-tuple and
+enqueues them to corresponding buffers. When a 5-tuple
+stream terminates, NetMemex ﬂushes all packets from the
+buffer of the 5-tuple, and these packets form a ﬂow. It sends
+completed ﬂows to the next recording stage to compress and
+index them.
+
+Figure 2: Architecture of NetMemex.
+
+block for data deduplication; the system can use a chunk hash
+as a key to check if the chunk has been seen by looking its
+hash.
+
+Flash and hard disk devices are commonly used storage
+devices nowadays. Flash is a NAND-based solid-state stor-
+age technology that provides high random read speed, often
+exceeding 35 K small reads per second [2]; however, its ran-
+dom write speed is slow (e.g., 300 small writes per second);
+ﬂash cannot perform in-place updates (a large “erase block”
+must be erased before being written) and typically uses a
+log structure internally, which is still unable to provide high
+random write throughput for small writes.
+
+Hard disks are mechanical storage devices; it uses a spin-
+ning disk and moving I/O head. Due to physical limitations,
+hard disks are bad at random access. On the other hand, they
+offer fast sequential read and write and provide inexpensive
+storage space; as of 2013, a hard disk drive is 15.85 times
+cheaper than a ﬂash drive in terms of $ per GB.
+
+3. DESIGN
+
+In this section, we ﬁrst provide an overview of the design of
+NetMemex, and then we describe each component of Net-
+Memex in detail.
+
+3
+
+headers, as headers are a formatted data structure consisting
+of short and varying data ﬁelds. Instead, header compres-
+sion typically encodes differences between two consecutive
+headers instead of recording the full header content.
+
+To maximize the effectiveness of header compression, it
+should be applied to a ﬂow consisting of packets with the
+same 5-tuple. This is seamlessly done in NetMemex because
+of the ﬂow grouping step.
+
+Compared to the standard header compression, Net-
+Memex’s header compression (Figure 4) is unique in two
+aspects:
+
+NetMemex applies intra-packet compression extensively,
+in addition to intra-ﬂow compression of the conventional
+header compression. NetMemex can predict header ﬁeld val-
+ues using the other information within the same packet and
+store only differences between the predicted values and the
+actual values in the header. For example, the IP packet length
+is typically inferable from the total packet length speciﬁed
+in the packet capture metadata. The IP checksum is also a
+ﬁeld that can be often omitted for storage when the check-
+sum is valid; if the checksums do not match, NetMemex
+simply stores the invalid checksum found in the header to
+preserve the full ﬁdelity. This intra-packet compression is
+possible in NetMemex but not typically in the general header
+compression due to possible transmit errors; NetMemex do
+not need to worry about errors as NetMemex does not send
+compressed headers over network.
+
+Because NetMemex sees multiple packets in the same ﬂow,
+NetMemex can use conventional dictionary compression as
+the ﬁnal step of header compression. This allows remov-
+ing further redundancy; for instance, when TCP sequence
+numbers simply increase by a constant, the standard header
+compression would result in the same difference value for
+each packet; however, by applying dictionary compression,
+NetMemex can compress such repetition.
+
+One (often negligible) side effect of header compression
+is that compressed header data becomes ﬂow-addressable,
+not packet-addressable. One header can be read only after
+the decompression of the preceding header. Hence, each
+ﬂow is randomly accessible efﬁciently, but each packet in a
+ﬂow requires partial or full decompression of the ﬂow. Since
+many queries request the ﬁrst part of a ﬂow or the whole
+ﬂow rather than accessing random packets within it, this ﬂow-
+addressability typically does not decrease query processing
+throughput.
+
+After header compression, NetMemex writes the data to
+ﬂash storage. The new data is appended to the most recently
+written one. NetMemex can easily delete the oldest headers
+by treating the storage as a circular queue.
+
+3.4 Payload Compression
+In packet payloads, NetMemex takes a different strategy to
+reduce their volume because of their redundancy characteris-
+
+Figure 3: Example of ﬂow grouping in NetMemex. The
+5-tuple ID of each packet are labeled in the square. The
+packets of the 5-tuple A are grouped into two ﬂows be-
+cause the lifetime of any ﬂow is disallowed from exceed-
+ing the maximum ﬂow duration (MFD). Packets of each
+ﬂow are separated into headers and payloads for the sub-
+sequent processing of header compression and payload
+compression.
+
+NetMemex imposes a maximum ﬂow duration (MFD) on
+each ﬂow to bound the memory consumption of packet buffer-
+ing. Without limits on ﬂow duration, ﬂow grouping could
+demand an unbounded amount of memory for buffers when a
+ﬂow runs for a long period. To solve this problem, NetMemex
+stops adding new packets to a ﬂow if its lifetime is about to
+exceed the MFD. In Figure 3, for instance, 5-tuple A actually
+generates two ﬂows in NetMemex, since the ﬂow duration
+would exceed if all packets are grouped into a single ﬂow.
+As a consequence, NetMemex can regulate the total buffer
+size to be within (input trafﬁc rate)× MFD, and the memory
+requirement of ﬂow grouping becomes more predictable and
+manageable.
+
+Flow grouping does not destroy any of the trafﬁc informa-
+tion because each packet holds the timestamp. When required,
+analysis programs can sort packets by recorded timestamps
+to obtain the original packet arrival order.
+
+3.3 Header Compression
+In this paper, a header refers to a packet header and per-packet
+metadata (i.e., timestamp, packet lengths). Headers contain
+key information for queries, such as hosts, port numbers, and
+TCP sequence numbers.
+
+NetMemex applies a variant of header compression [10,
+19] to packet headers in order to efﬁciently reduce their size.
+Conventional compression algorithms, such as zlib [17] and
+LZO [23], aim to ﬁnd and compress exact byte string matches;
+unfortunately, these algorithms do not work well directly for
+
+4
+
+Figure 4: Schematic diagram of header compression and payload compression showing how a ﬂow with three packets
+is compressed.
+
+tics. First, the internal structure of packet payloads is more
+irregular than headers. Header compression largely relies
+on well-deﬁned relations between packets. However, many
+transport layer protocols, such as TCP, break this type of
+redundancy in the payload data. For instance, they can adjust
+packet boundaries for various reasons (e.g., MSS, congestion
+window). This adjustment shifts and cuts the byte stream of
+the content, making the redundancy between two packets less
+explicit. Second, payloads frequently show abundant redun-
+dancy across different ﬂows, apart from each other in time.
+For example, two separate connections may download the
+same ﬁle with a large time gap (e.g., a few hours). Because
+header compression is applied to each ﬂow, it is less effective
+for these kinds of redundancy in the payload.
+
+Instead, as illustrated in Figure 4, NetMemex compresses
+payloads using variable-length chunk deduplication, simi-
+lar to LBFS [27], in conjunction with per-chunk dictionary
+compression.
+It begins by constructing a byte stream by
+coalescing all the payloads in a ﬂow, which essentially ig-
+nores packet boundaries. Then, chunking is done by scanning
+the stream and detecting chunk boundaries using ﬁngerprint-
+ing [32]; once chunks are discovered, each chunk is hashed
+using a collision-resistant hash function (e.g., SHA-1). These
+chunk hashes act as keys when NetMemex queries the chunk
+index, an external key-value store, to determine whether each
+chunk is duplicate. Finally, NetMemex stores the location of
+the chunks together with the compressed headers.
+
+The chunk index should be high-performance and cost-
+effective. For a typical average chunk size of 4 KiB, 1 Gbps-
+rate trafﬁc generates 30.5 K chunks per second; each chunk
+will incur one lookup for the index, so the chunk index must
+be fast to avoid stalling the recording process. In addition,
+although payload compression may reduce the volume of the
+payload data, this savings can be compromised if the cost of
+maintaining the chunk index is high. Even with the small
+chunk descriptor size (20-byte chunk hash and 8-byte chunk
+location for each chunk), the chunk index is often too large
+
+5
+
+to ﬁt entirely in main memory (e.g., 73.8 GB for one day for
+the above setting).
+
+The chunk index keeps track of recent chunks only for a
+certain duration (deduplication window). If a chunk is older
+than this duration, its entry is removed from the chunk index
+(but this does not remove the chunk itself from disk); this
+mechanism controls how much system resources NetMemex
+should use for deduplication.
+
+The above performance and space requirements make a
+ﬂash-based key-value store a good candidate for the chunk
+index. We use SILT [22] as the chunk index in NetMemex;
+it provides fast operation using ﬂash and has high space
+efﬁciency, satisfying NetMemex’s requirements.
+
+Indexing
+
+3.5
+Once a ﬂow is compressed, NetMemex indexes it for accel-
+erated query processing. NetMemex prepares indexes for
+common criteria such as IP addresses, port numbers, and
+so on; whenever a query includes any of such criteria, Net-
+Memex queries the index to signiﬁcantly reduce the amount
+of data to read and inspect.
+
+For lightweight indexing, NetMemex’s index is (1) ﬂow-
+oriented, (2) compressed, (3) allows false positives, and (4)
+per-epoch.
+
+NetMemex indexes ﬂows, not individual packets. As
+shown in Figure 5, NetMemex builds a hash table with
+65,536 buckets; it hashes the indexed ﬁeld value (e.g., IP
+address) to determine a bucket, and inserts the location of the
+ﬂow to the bucket. Since all packets in the ﬂow are stored
+consecutively by header compression, NetMemex can read
+the packets using the ﬂow location only.
+
+NetMemex compresses these ﬂow locations in each bucket
+using a similar way to header compression. The location
+numbers are monotonely increasing after sort, and thus Net-
+Memex can store the differences between two consecutive
+locations. After compression, the index requires only 6.07
+bytes per ﬂow per ﬁeld.
+
+Figure 5: Lightweight ﬂow indexing for the IP address and the port number. Each bucket contains the location of ﬂows
+whose address or port number is hashed into that bucket number.
+
+However, there can exist hash collisions from using a small
+number for buckets, and this leads to false positive answers
+(but no true negatives). NetMemex ensures that the output
+contains only true positive results, by decompressing the
+packet headers and checking if the query criteria are met.
+
+Finally, NetMemex generates a set of independent indexes
+for each epoch. The indexes for an epoch describe the ﬂows
+that have ended during that period of time. Since the epoch
+length is relatively short (typically a few minutes), NetMemex
+can construct indexes completely in memory and dump them
+to ﬂash at the end of each epoch as a form of log structure.
+It also facilitates support for time range queries (e.g., last 1
+minute) by allowing query processing to use only a subset of
+the indexes and makes eviction easy by removing the oldest
+set of indexes.
+
+3.6 Query Processing
+
+NetMemex supports two query modes: ofﬂine and online. In
+ofﬂine mode, NetMemex handles queries while not recording
+any incoming trafﬁc. This mode is useful when rapid and
+quick query processing is crucial rather than accepting new
+packets. On the other hand, when online, NetMemex records
+new trafﬁc data and processes queries using idle CPU cycles
+and I/O. Online mode is useful when the user needs to query
+the archived data without disrupting recording.
+
+Query processing in NetMemex is made efﬁcient by using
+indexes and data organization done in the recording stage. A
+query handling task consists of ﬂow lookup, header decom-
+pression, and packet reconstruction. Each step can generate a
+list of ﬂows, full headers, and full packets, respectively, based
+on the result from the previous step. Depending on the query
+type, NetMemex determines how further query processing it
+should proceed.
+
+Flow lookup is the ﬁrst stage of query processing. This
+step uses indexes that can help reﬁning query hits. When
+given a time range in the query, NetMemex chooses a subset
+of the indexes stored; NetMemex looks up selected indexes
+and intersects the lookup results (i.e., a set of ﬂow locations)
+if there are any AND operation. Then, it veriﬁes the full index
+keys stored together with compressed headers to ﬁnally reﬁne
+the ﬂow list.
+
+Flow lookup is useful in answering simple and quick
+
+queries. For example, existence test queries, which asks
+whether there is any ﬂow seen in the trafﬁc, can be done by
+using the ﬂow lookup only.
+
+The header decompression stage adds header content to
+the list of matching ﬂows. NetMemex proceeds by decom-
+pressing the stored headers and emitting libpcap-compatible
+records.
+
+The last query processing step is packet reconstruction,
+which builds and outputs full packets. This stage uses the
+list of chunk locations attached to the compressed headers.
+The speciﬁed chunks are read from disk, decompressed, and
+combined as a byte stream for a ﬂow. Then, using the payload
+length information in the headers, the byte stream is divided
+into packet payloads and appended to each header. This stage
+is slower to process than the previous steps because reading
+chunks requires hard disk access, and decompressing chunks
+may cost a large amount of computation compared to the
+previous stages.
+
+3.7 Eviction
+
+Eviction is simple in NetMemex because it stores all trafﬁc
+data in a log-structured way. It can remove the oldest data
+without affecting the newer data.
+
+NetMemex currently does not send the evicted trafﬁc data
+to an external longer-term archival service, which remains as
+future work.
+
+4.
+
+IMPLEMENTATION
+
+Our implementation of NetMemex uses multiple CPU cores
+to provide high-speed recording and query processing while
+avoiding packet drops.
+
+The main thread of NetMemex accepts input packets from
+either a ﬁle or from standard input in the libpcap [37] trace
+format, which allows ﬂexibility in choosing the packet acqui-
+sition method. This thread enqueues input packets to a buffer
+corresponding to their 5-tuple. When it detects the end of a
+ﬂow, it adds index entries for the ﬂow in the ﬂow indexes;
+then, it dequeues and dispatches the ﬂow to a worker thread.
+The worker thread compresses the header and payload of
+the packets in the ﬂow and stores the result to ﬂash and disk.
+
+6
+
+The main thread also handles queries in online and ofﬂine
+mode. Query processing uses continuations to implement
+online mode. NetMemex can stop query processing when it
+needs to continue archiving; it can resume the query process-
+ing task from the last state where it left without losing the
+work done before.
+
+NetMemex is implemented in 17 K lines of C++ and is
+targeted to run on GNU/Linux x86-64. For dictionary com-
+pression in both header and payload compression, NetMemex
+uses LZO [23], which makes a good compromise between
+compression ratios, compression speed, and decompression
+speed.
+
+5. EVALUATION
+
+In this section, we evaluate three aspects of NetMemex: (1)
+query performance; (2) recording throughput and memory
+use; and (3) storage use.
+
+5.1 Methodology
+Evaluating a trafﬁc archiving system often requires full-
+packet network trafﬁc. This imposes two practical issues
+in privacy concerns and fair experimental comparisons.
+
+Access to actual packet data must be handled carefully.
+Both we and our IRB required that we avoid storing any trafﬁc
+data possibly containing personally identiﬁable information
+(PII) on non-volatile storage, even if it is encrypted with a
+known encryption key. This restriction means that payload
+processing had to be performed on the live data on-the-ﬂy.
+
+However, this live payload processing makes it difﬁcult
+to fairly compare multiple system conﬁgurations. Different
+experiment runs with a certain system setting will see differ-
+ent live trafﬁc data, which may lead to completely different
+results. If one experiment run uses multiple system conﬁgura-
+tions at a time, the system must handle more tasks than would
+have been required in a realistic situation with one system
+conﬁguration.
+
+To mitigate these difﬁculties, we investigate both static and
+dynamic aspects of NetMemex’s performance. In particular,
+we used the original live trafﬁc with full payloads to inves-
+tigate storage use under different system settings, and we
+also used synthetic trafﬁc based on anonymized header-only
+traces to examine system throughput and memory and storage
+use.
+
+The following table shows the hardware we used for the
+
+evaluation.
+
+Component
+
+CPU
+DRAM
+
+HDD (input ﬁles)
+HDD (output ﬁles)
+SSD (output ﬁles)
+
+Speciﬁcation
+2x Intel Xeon E5-2450 at 2.1 GHz
+DDR3 PC3-12800 48 GiB
+Western Digital RE4 500 GB
+2x Seagate Barracuda LP 2 TB (RAID 0)
+Intel X25-M G2 80 GB
+
+7
+
+Input Workloads
+
+5.2
+We used two types of input workloads, UNIV* and ISP*, as
+summarized in Table 1.
+
+For UNIV* workloads, NetMemex directly reads live traf-
+ﬁc from a border router of a university. Due to privacy con-
+cerns, NetMemex performed the entire archival process on the
+live trafﬁc without storing data with any PII on non-volatile
+storage devices.1
+
+To measure the efﬁciency of payload compression, Net-
+Memex chunked, hashed, and compressed the trafﬁc data
+using multiple chunking conﬁgurations (chunk size, variable-
+or ﬁxed-length chunks).
+It recorded the hashes and both
+original and compressed sizes. Because performing this ex-
+tra chunking and compression required signiﬁcant system
+resources, we restricted NetMemex to process only the por-
+tion of the university border trafﬁc that originates from or
+is destined for eight randomly sampled /24 subnets within
+the university network. The speciﬁc identities of the subnets
+were kept anonymous from us. Because trafﬁc subsampling
+typically reduces redundancy within the input, we believe
+that this measurement method makes our estimates of space
+savings from deduplication conservative.
+
+The ISP* workload uses the CAIDA Anonymized Inter-
+net Traces 2012 Dataset [1]. These traces contain headers
+only (i.e., timestamps, packet sizes, and anonymized packet
+headers).
+
+This information is insufﬁcient to provide enough data to
+evaluate NetMemex because of its lack of payloads. There-
+fore, we appended synthetic payloads to each packet for two
+main purposes: (1) as we can control the type of payload
+generation, we can evaluate NetMemex from different angles
+with high reproducibility, which is often impossible with real
+trafﬁc data; and (2) by feeding artiﬁcial payload data into
+NetMemex, we can evaluate NetMemex’s behavior under un-
+common but important workloads, for example, anomalous
+network trafﬁc or attacks targeted at NetMemex itself.
+
+In ISP* workloads, we used two types of payloads: redun-
+dant (-RE) and non-redundant (-NR); redundant payloads set
+each i-th payload byte to a product of i and a random value
+speciﬁc to the packet, whereas non-redundant payloads use
+completely random bytes for the payload. ISP-RE shows
+how NetMemex would behave with highly redundant trafﬁc,
+and ISP-NR often incurs the heaviest load on NetMemex
+because it cannot reduce the amount of the total data it must
+handle through data compression.
+
+Table 2 shows common system parameters used for each
+input workload. We used a longer maximum ﬂow length
+for UNIV* because their relatively low bandwidth allows
+NetMemex to store long ﬂows for ﬂow grouping, whereas we
+limit it to 1 minute under ISP* workloads to avoid running
+out of system memory.
+
+1The trafﬁc collection and analysis was conducted with IRB approval for
+
+case # anonymized for submission.
+
+Source
+UNIV1
+UNIV2
+ISP*
+
+Description
+
+University border router
+University border router
+CAIDA equinix-sanjose B
+
+Start Time (UTC)
+2011-07-28 19:17
+2011-08-23 17:26
+2012-11-15 13:00
+
+Length
+7 days
+7 days
+
+30 minutes
+
+Original Bitrate
+
+Packet Count Avg Packet Size
+
+5.58 Mbps
+4.08 Mbps
+1.57 Gbps
+
+980 M
+739 M
+527 M
+
+430 B
+418 B
+669 B
+
+Table 1: Input workloads. The packet size excludes metadata (e.g., timestamps).
+
+Input Workload
+
+Epoch Length Maximum Flow Length
+
+UNIV1
+UNIV2
+ISP-RE
+ISP-NR
+
+1 minute
+1 minute
+1 minute
+1 minute
+
+5 minutes
+5 minutes
+1 minute
+1 minute
+
+Table 2: The epoch length and the maximum ﬂow length
+used in the experiments.
+
+All results used variable-length chunking with a target
+chunking size of 4096 bytes, if not speciﬁed; UNIV* addi-
+tionally used variable-length chunking with target average
+chunk size of 256 and 1024 bytes, and ﬁxed-length chunk-
+ing with target chunk size of 1024 and 4096 bytes, and no-
+chunking (treats the whole ﬂow’s payload as one chunk).
+
+5.3 Query Performance
+To demonstrate query performance, we used ISP-NR. We
+omit the ISP-RE result because ISP-NR is more challeng-
+ing trafﬁc to record due to its data volume and thus we can
+expect conservative performance results. All query outputs
+were written to /dev/null to prevent the measurement
+from being affected by the query output size.
+
+Query types Query performance greatly varies by query
+type, e.g., match criteria, output data formats, query mode,
+and so on, as it performs different data structure access and
+computation to serve the queries.
+
+We combine the following four characteristics to generate
+
+various query types in the query performance evaluation:
+
+1. Query mode controls whether NetMemex should stop
+recording while processing queries (“ofﬂine”) or should
+continue to record new trafﬁc while handling query pro-
+cessing using idle system resources (“online”).
+
+2. Time range deﬁnes what period of time NetMemex
+should search for. “Last 1 min” queries the trafﬁc data
+recorded in the last 1 minute, while “entire” looks for
+all recorded trafﬁc data.
+
+3. Retrieval format speciﬁes how much information the
+query wants. “Existence test” queries only ask if there
+exists any ﬂow or packet that matches query criteria.
+“Header” and “full” queries request full headers and
+payloads for the matching packets.
+
+4. Query target indicates how frequent hit the query will
+cause. “No hits” means there will be no result at all
+
+matching the query criteria (e.g., source address
+== 1.1.1.1). “light hitters” will have a few results
+in the recorded trafﬁc (e.g., infrequently used ports),
+whereas “heavy hitters” will result in a large number
+of ﬂows and packets as the query result (e.g., HTTP
+connections).
+
+Ofﬂine query mode Table 3 shows NetMemex’s perfor-
+mance in ofﬂine query mode. With the query time range
+limited to the last 1 minute, even the slowest existence test
+query, which has no hits, thus making NetMemex enumer-
+ate all candidate matches returned by the ﬂow index, can be
+processed in 38.4 µs per query on average. The query time
+jumps to 2.74 ms per query when NetMemex is instructed to
+investigate the entire time range. Other query results involv-
+ing light hitters or heavy hitters return in at most 15.1 µs on
+average because NetMemex often ﬁnds an early match and
+can stop further query processing.
+
+NetMemex can return a high number of ﬂows and packets
+for queries requesting headers. It can handle 24.5 K ﬂows per
+second, or 537.7 K packets per second at minimum. This high
+speed is due to the fact that NetMemex can ﬁnd matching
+packets quickly using ﬂow indexes while making I/O to the
+fast ﬂash drive only.
+
+For retrieving full packets with payloads, NetMemex
+shows about 0.1–5.8 K ﬂows per second, or 1.6–98.4 K
+packets per second because NetMemex accesses disk to read
+chunks to reconstruct full packet data.
+
+In retrievals involving header or payload retrieval, heavy
+hitters tend to allow higher query performance because Net-
+Memex spends less time enumerating unused candidate ﬂows.
+When indexes cannot help query processing (e.g., using
+a TCP sequence number with no other query criteria), Net-
+Memex examined 97.3 K ﬂows per second, or 1,670.7 K
+packets per second, similar to heavy hitters’ throughput.
+
+Comparison to query processing on pcap-format ﬁles
+To demonstrate how NetMemex can make query process-
+ing interactive, we performed existence test queries on ISP*
+header-only pcap ﬁles with no compression, zlib, or LZO. For
+the no-hit query type, queries on pcap required 179.4, 257.5,
+174.2 seconds per query, respectively for each compression
+method; tcpdump’s raw packet header scanning speed was
+at most 177.4 K ﬂows per second, or 3,024.3 K packets per
+second, which was faster than NetMemex’s exhaustive packet
+header scanning without using indexes, but when NetMemex
+
+8
+
+Time Range Query Target
+Last 1 min
+Last 1 min
+Last 1 min
+
+Light hitters
+Heavy hitters
+
+No hits
+
+Entire
+Entire
+Entire
+
+No hits
+
+Light hitters
+Heavy hitters
+
+µsec/query
+38.4
+12.7
+11.1
+2,740.9
+15.1
+13.2
+
+Retrieval
+Header
+Header
+Header
+Header
+
+Full
+Full
+Full
+Full
+
+Entire
+Entire
+
+Time Range Query Target
+Light hitters
+Last 1 min
+Heavy hitters
+Last 1 min
+Light hitters
+Heavy hitters
+Light hitters
+Heavy hitters
+Light hitters
+Heavy hitters
+
+Last 1 min
+Last 1 min
+
+Entire
+Entire
+
+Flows/sec
+74,710.3
+99,322.6
+24,450.9
+84,704.6
+112.6
+5,819.3
+93.6
+5,814.9
+
+Packets/sec
+1,487,702.6
+1,594,282.1
+537,654.5
+1,563,395.2
+1,601.0
+98,434.1
+1,870.3
+98,384.2
+
+Table 3: Query performance in ofﬂine mode on ISP-NR. The left table shows the existence test results, the right table
+shows the packet retrieval results.
+
+Time Range Query Target
+Last 1 min
+Last 1 min
+Last 1 min
+
+Light hitters
+Heavy hitters
+
+No hits
+
+Entire
+Entire
+Entire
+
+No hits
+
+Light hitters
+Heavy hitters
+
+µsec/query
+87.9
+42.4
+37.0
+33,463.3
+41.7
+41.5
+
+Retrieval
+Header
+Header
+Header
+Header
+
+Full
+Full
+Full
+Full
+
+Entire
+Entire
+
+Time Range Query Target
+Light hitters
+Last 1 min
+Heavy hitters
+Last 1 min
+Light hitters
+Heavy hitters
+Light hitters
+Heavy hitters
+Light hitters
+Heavy hitters
+
+Last 1 min
+Last 1 min
+
+Entire
+Entire
+
+Flows/sec
+19,053.4
+30,474.5
+4,401.8
+24,529.9
+10.7
+404.3
+10.0
+1,768.5
+
+Packets/sec
+441,648.4
+537,329.4
+89,276.5
+477,144.5
+177.2
+8,732.0
+248.9
+30,917.9
+
+Table 4: Query performance in online mode on ISP-NR. The left table shows the existence test results, the right table
+shows the packet retrieval results.
+
+can use indexes, tcpdump is more than 4 orders of magni-
+tude slower than the worst case for NetMemex requiring 2.74
+ms per query. We expect that the performance gap will be
+even larger if tcpdump operates on full-packet traces because
+tcpdump must read full payloads to access packet headers.
+
+This slow query processing with pcap ﬁles makes this
+approach inadequate in the situations where quick query pro-
+cessing is crucial.
+
+Online query mode Table 4 shows the query performance
+for the same types of queries when NetMemex is actively
+recording new trafﬁc data. The average recording speed of
+NetMemex is adjusted to 0.5 Gbps so that NetMemex has
+some idle time to process queries.
+
+As the recording activity creates ﬂash and disk activity,
+query throughput is slower during online operating than when
+ofﬂine. However, most existence test queries ﬁnish in less
+than 100 µs on average, with the exception of no-hits queries
+over the entire time range, which took 33.5 ms per query.
+The reason why only this type of query exhibits high latency
+is because the epoch data and ﬂow index are less likely to
+be cached in the in-memory system page cache because of
+the new data generated by recording; NetMemex must ac-
+cess indexes and header data on ﬂash, leading to relatively
+longer query time. Nevertheless, NetMemex handles exis-
+tence test queries at a high enough rate for users to make
+queries interactively.
+
+If indexes are not used, NetMemex could inspect 25.7 K
+
+Input
+
+Workload
+ISP-RE
+ISP-RE
+ISP-RE
+ISP-RE
+ISP-NR
+ISP-NR
+ISP-NR
+ISP-NR
+
+Chunk
+
+Deduplication
+
+Dictionary
+Compression
+
+No
+Yes
+No
+Yes
+No
+Yes
+No
+Yes
+
+No
+No
+Yes
+Yes
+No
+No
+Yes
+Yes
+
+Throughput
+(Mbps)
+665.2
+700.4
+1,153.4
+955.1
+664.4
+629.4
+656.6
+619.1
+
+Table 5: Recording performance with different payload
+processing modes.
+
+ﬂows per second, or 471.0 K packets per second, when also
+recording trafﬁc.
+
+5.4 Recording Performance
+
+Table 5 presents recording performance with ISP-RE and
+ISP-NR. To show system components’ contribution to the
+recording performance, we turn on and off chunk deduplica-
+tion and dictionary compression in payload compression as
+noted in the table. We do not report the performance with
+UNIV* because we used multiple chunk size conﬁgurations
+simultaneously on the live trafﬁc to avoid storing the original
+network trafﬁc, and thus its performance was not representa-
+tive.
+
+9
+
+Input
+
+Workload
+
+UNIV1
+
+UNIV2
+
+ISP-RE
+
+ISP-NR
+
+Original
+Size (GB) NetMemex
+
+Compressed Size (GB)
+
+48.3
+
+36.6
+
+26.9
+
+26.9
+
+5.13
+
+(-89.4%)
+
+(-80.2%)
+
+7.26
+
+7.41
+
+7.50
+
+(-72.5%)
+
+(-72.1%)
+
+zlib
+–
+
+–
+
+14.2
+
+LZO
+
+–
+
+–
+
+16.6
+
+(-47.2%)
+
+(-38.3%)
+
+14.2
+
+16.6
+
+(-47.2%)
+
+(-38.3%)
+
+Table 6: Storage use by headers. The numbers in the
+parenthesis show the difference of the new chunk count
+and size from the original count and size.
+
+With redundant payloads (ISP-RE), disabling chunk dedu-
+plication and enabling dictionary compression gives the best
+recording throughput of 1,153.4 Mbps. As we will see in Ta-
+ble 7, ISP-RE greatly beneﬁts from dictionary compression
+in reducing the data volume, and this leads to faster operation
+with less I/O.
+
+When payloads contain no redundancy (ISP-NR), using
+dictionary compression and chunk deduplication only adds
+overhead as they require additional computation and I/O.
+
+With chunk deduplication and dictionary compression en-
+abled, recording throughput is at most 17.2% slower than the
+best throughput conﬁguration.
+
+Thus, the result with synthetic workloads suggests that Net-
+Memex can achieve high recording throughput with payload
+compression, while it can further increase recording speed
+by adaptively bypassing chunk deduplication when its saving
+turns out to be less signiﬁcant for the current trafﬁc feed (e.g.,
+anomalous or heavy attack trafﬁc).
+
+Throughout recording, the amount of DRAM consumed
+
+by NetMemex did not exceed 15.7 GB.
+
+5.5 Storage Space Use
+Header As shown in Table 6, NetMemex effectively
+shrinks metadata and packet headers for all workloads. It
+saves at least 80.2% of space in header information size for
+UNIV1 and UNIV2, while it achieves 72.1–72.5% savings
+for the ISP* workloads; this savings greatly exceeds the sav-
+ings from simply compressing pcap-format traces with zlib
+and LZO, which required 14.2 GB and 16.6 GB, respectively,
+for ISP*.
+
+The university trace headers are compressed more than the
+ISP inputs primarily because UNIV* used longer ﬂow length
+(5 minutes) than ISP* did (1 minute). By having longer
+ﬂows, NetMemex’s header compression becomes more ef-
+fective, by not repeating a ﬁrst full packet for each ﬂow and
+having better efﬁciency for dictionary compression on the
+longer header data.
+
+Figure 6: Detected redundancy in payload from UNIV1
+(upper) and UNIV2 (lower) when varying the deduplica-
+tion window. No per-chunk compression is applied.
+
+In addition, the university has fewer hosts talking to other
+hosts. Common IP addresses thus appear more frequently,
+increasing the header compression efﬁciency.
+
+Note that ISP-RE and ISP-NR have slightly different
+header sizes on storage because this header information in-
+cludes the pointer to the payload chunk.
+
+Payload Table 7 shows the statistics for the original and
+unique chunks obtained by applying payload chunking and
+per-chunk dictionary compression.
+
+For redundancy elimination for payloads, NetMemex saves
+8.32–11.5% for real world data in UNIV1 and UNIV2. Af-
+ter compression, the total savings increase to at most 17.4–
+19.0%.
+
+While the compression ratios achieved for the synthetic
+payload ISP traces are obviously artiﬁcial, we discuss them
+brieﬂy so that their effect on recording and query performance
+is clear. In the redundant trace, ISP-RE, chunk deduplica-
+tion reduces the number of chunks by 39.9%, but only saves
+7.15% of total space: Deduplication was most effective for
+small chunks. Dictionary compression, on the other hand,
+saved 84.4% of total space on this highly-compressible work-
+load.
+
+Optimizing payload compression for the best storage cost
+The storage used by payload data differs by how NetMemex
+chunks and deduplicates payloads. We vary the deduplication
+window size (how long the chunk index retains the stored
+chunk hash) with different chunking methods and examine
+the amount of redundancy NetMemex detects and removes.
+
+10
+
+10-210-1100101102103104105106Deduplication Window Size (seconds)0510152025Detected Redundancy (% of Traffic)Var 256Var 1024Var 4096Fix 1024Fix 4096No Chunking10-210-1100101102103104105106Deduplication Window Size (seconds)0510152025Detected Redundancy (% of Traffic)Var 256Var 1024Var 4096Fix 1024Fix 4096No ChunkingInput
+
+Workload
+UNIV1
+UNIV2
+ISP-RE
+ISP-NR
+
+Original Chunk
+Size
+
+Count
+196.2 M 371.5 GB
+127.0 M 270.2 GB
+57.9 M 331.6 GB
+92.9 M 331.6 GB
+
+Count
+
+Unique Chunk
+
+Size
+
+184.9 M (-5.76%)
+116.3 M (-8.43%)
+34.8 M (-39.9%)
+92.9 M (-0.0%)
+
+340.6 GB (-8.32%)
+239.2 GB (-11.5%)
+307.9 GB (-7.15%)
+331.6 GB (-0.0%)
+
+Compressed Size
+306.9 GB (-17.4%)
+218.8 GB (-19.0%)
+51.8 GB (-84.4%)
+333.7 GB (+0.63%)
+
+Best-Cost Dedup Win
+
+Compressed Size
+316.2 GB (-14.9%)
+227.9 GB (-15.7%)
+
+–
+–
+
+Table 7: Payload compression results. The numbers in the parenthesis show the difference of the new chunk count and
+size from the original count and size.
+
+Figure 7: Detected redundancy in payload from UNIV1
+(upper) and UNIV2 (lower) when varying the deduplica-
+tion window. Per-chunk compression is applied.
+
+Figure 8: Storage cost analysis for storing the payload
+data of UNIV1 (upper) and UNIV2 (lower) when varying
+the deduplication window.
+
+Figure 6 and 7 show how these factors affect the ﬁnal space
+reduction, in uncompressed size (before applying dictionary
+compression) and compressed size (after applying dictionary
+compression; the ﬁnal space use on storage).
+
+Variable-length chunking allows more space savings than
+ﬁxed-length chunking. Except for a small deduplication win-
+dow (<100 seconds) where ﬁxed-length chunks can be com-
+pressed well with dictionary compression, variable-length
+chunking helps ﬁnd more duplicate chunks and results in
+better payload compression.
+
+A larger deduplication window allows detecting a larger
+amount of redundant data. However, the returns diminish:
+beyond 10 K seconds, the slope of the detected redundancy
+decreases.
+
+This diminishing effect leads to a sweet spot in storage cost
+savings. If NetMemex uses a large deduplication window, it
+saves HDD space, while using more SSD space to store the
+larger chunk index with more entries, and vice versa.
+
+Figure 8 plots how storage cost is affected by applying
+deduplication. For this plot, we set the HDD price to $0.0467
+
+per GB and the SSD price to $0.740 per GB, based on the
+market price of HDD and SSD as of January 2013. The ﬁgure
+clearly shows that using variable-length chunking with a
+small target chunk size (e.g., 256 bytes) can give the best cost
+effectiveness, while ﬁxed-length chunking and no-chunking
+showed low redundancy.
+
+However, a smaller chunk size has an extra cost: it makes
+many queries to the chunk index; thus, the chunk size should
+be just small enough to fully utilize the ﬂash drive where the
+chunk index is stored.
+
+The optimal deduplication window size typically lies be-
+tween 10 K and 30 K seconds; a larger window increases the
+storage cost signiﬁcantly due to too large chunk index size
+on ﬂash. Using the optimal deduplication window size for
+variable-length chunking with the 4096-byte average chunk
+size target, NetMemex reduces storage cost by up to 14.9%
+(UNIV1) and 15.7% (UNIV2).
+
+Index uses an insigniﬁcant amount of ﬂush storage. For
+ISP* workloads, NetMemex used 199.3 MB for the IP ad-
+
+11
+
+10-210-1100101102103104105106Deduplication Window Size (seconds)0510152025Detected Redundancy (% of Traffic)Var 256Var 1024Var 4096Fix 1024Fix 4096No Chunking10-210-1100101102103104105106Deduplication Window Size (seconds)0510152025Detected Redundancy (% of Traffic)Var 256Var 1024Var 4096Fix 1024Fix 4096No Chunking10-210-1100101102103104105106Deduplication Window Size (seconds)0.70.80.91.01.1Normalized Storage CostVar 256Var 1024Var 4096Fix 1024Fix 4096No Chunking10-210-1100101102103104105106Deduplication Window Size (seconds)0.70.80.91.01.1Normalized Storage CostVar 256Var 1024Var 4096Fix 1024Fix 4096No ChunkingInput
+
+Workload
+UNIV1
+UNIV2
+UNIV1
+UNIV2
+UNIV1
+UNIV2
+
+Archival Method
+
+Original dump
+Original dump
+
+LZO-compressed dump
+LZO-compressed dump
+
+NetMemex
+NetMemex
+
+Header
+
+On-ﬂash Size (GB)
+Flow Index
+
+Chunk Index
+
+–
+–
+–
+–
+
+5.13
+7.26
+
+–
+–
+–
+–
+1.59∗
+0.976∗
+
+–
+–
+–
+–
+
+0.141∗
+0.139∗
+
+On-disk Size (GB)
+Payload
+Header
+371.5
+48.3
+270.2
+36.6
+29.8∗
+326.9∗
+22.6∗
+242.4∗
+316.2
+–
+–
+227.9
+
+Total
+Cost
+$19.60
+$14.33
+$16.66
+$12.38
+$19.84
+$16.84
+
+Average
+of Two
+
+$16.97
+
+$14.52
+(-14.4%)
+$18.34
+(+8.1%)
+
+Table 8: Estimated total storage cost to archive 7-day trafﬁc at UNIV1 and UNIV2. The numbers with a star (∗) are
+based on our predictions. The numbers in the parenthesis show the difference of the new storage cost from the storage
+cost with the original dump.
+
+dress index and 176.0 MB for the port number index. This
+translates to 12.14 B per ﬂow, or only 0.712 B per packet.
+
+Total storage cost Combined with the cost to store ﬂow
+indexes and compressed headers on ﬂash, the total storage
+cost using NetMemex is comparable to the cost required by
+packet dump on hard disk, as summarized in Table 8. In this
+table, ﬂow index sizes are an estimated value based on the
+result with ISP*, and chunk index sizes are chosen based on
+Figure 8. The header size in the compressed dump is based on
+our result with LZO-compressed ISP* traces while the pay-
+load size in the compressed dump is approximated using the
+detected redundancy using no-chunking in UNIV* (Figure 7),
+12.0% and 10.3%, respectively. All other sizes are directly
+measured quantities. We do not perform similar evaluation
+with ISP* workloads because they lack real payload data
+and are too short to give a meaningful result.
+
+Summary NetMemex provides high query performance
+and near-Gbps recording throughput while adding only 8.1–
+26.3% to the storage cost.
+
+6. RELATED WORK
+
+Time Machine [24] is a trafﬁc archiving system that exploits
+the heavy-tailed nature of ﬂows to reduce the total data vol-
+ume. It keeps the ﬁrst 10–20 KB of each connection and drops
+the rest; this allows retaining 91–96% of all connections while
+saving 90% of hard disk space. They demonstrated recording
+about 4 days of trafﬁc at a research institution using 2.1 TB
+hard disk space. NetMemex differs from Time Machine in
+that NetMemex performs full trafﬁc archival without loss,
+which protects NetMemex from by attacks that exploit lossy
+archival. In addition, NetMemex exhibits high-performance
+query throughput, which requires only a few µs per query; in
+contrast, Time Machine takes 125 ms per in-memory query
+on average and may require minutes to complete disk-based
+queries due to its lack of efﬁcient data layout and indexing and
+the use of hard disk only. These differences in the complete-
+ness of archived data and the throughput of query processing
+
+make NetMemex more useful in retrospective analysis and
+other security uses, but at substantially higher storage cost.
+RRDtrace [30] is another lossy trafﬁc archiving system
+that focuses on storing a longer period of data on ﬁxed stor-
+age space. Different from Time Machine, RRDtrace applies
+more aggressive sampling on older data, preserving more
+detail about recent data without requiring much storage space.
+While RRDtrace is stronger than Time Machine against the
+attacks on the lossy archival because of the non-deterministic
+nature of its data reduction technique, it neither exploits the
+redundancy in the network trafﬁc to reduce the data volume
+nor provides query processing to quickly access the large
+amount of recorded trafﬁc data.
+
+Taylor et al. [36] presents a network data storage system
+that shares several commonalities with NetMemex. In this
+work, they aggregate packets into connections and generate
+summary objects that describe the payloads of the connec-
+tions as a list of key-value pairs, which are indexed by a set
+of partitioned indexes. Unlike NetMemex, however, this tech-
+nique is an application protocol-speciﬁc approach because
+it requires interpreting payload data to generate summary
+objects with application-level domain knowledge. Therefore,
+their system leaves a possibility for a bypass by using ma-
+liciously malformed payloads, encrypted connections (e.g.,
+SSL), or the application protocols that are not being inspected.
+NetFlow [28] and other aggregation-based monitoring tech-
+niques extract and record interesting features from the net-
+work trafﬁc. These features are typically very small compared
+to the original trafﬁc volume, enabling their efﬁcient storage
+for a long term. However, it is hard to deﬁne features of
+interest for many security applications such as retrospective
+analysis because these feature are simply unknown in ad-
+vance. Further, since it discards the original trafﬁc content,
+they are unsuitable for applications that require the original
+trafﬁc for accurate evaluation of system performance and
+correctness.
+
+NET-FLi [14] and pcapIndex [15] present a compact and
+fast indexing scheme that can be built on packet traces in the
+pcap format. It creates a bitmap index whose bit indicates the
+presence of a certain value at the corresponding location of the
+original trace, then it applies a bitmap compression technique
+
+12
+
+called COMPAX. NetMemex generally generates more com-
+pact indexes than these systems; NetMemex requires 0.356
+B/packet to index a ﬁeld for ISP traces, whereas COMPAX
+indexes require 3.64 B/packet on average to index a ﬁeld,
+making NetMemex’s indexes an order of magnitude smaller
+than COMPAX indexes; this is possible because NetMemex
+performs ﬂow-oriented data reorganization and allows its in-
+dexes to contain false positives that can be easily ﬁltered out
+during query processing.
+
+RasterZip [16] is a compression technique optimized for
+network trafﬁc data, which performs column-wise compres-
+sion opposed to byte-wise compression of conventional dic-
+tionary compressors. While RasterZip can compress data in
+an agnostic way as long as the data items are well structured
+(e.g., a ﬁxed number of columns), NetMemex’s header com-
+pression can handle irregularities in the input data (e.g., IP
+only, TCP, and UDP headers). In addition, RasterZip fails to
+remove redundancy that can be found with in-depth domain
+knowledge; NetMemex’s header compression detects and
+removes intra-packet redundancy (e.g., valid IP checksum)
+because NetMemex fully understands and can exploit the
+semantics of packet headers.
+
+Selective Packet Paging (SPP) [31] strengthens packet cap-
+ture systems from overload attacks that cause the systems to
+accept packets more than they can process. NetMemex is
+orthogonal to this work and can take advantage of it because
+SPP is used in the packet acquisition stage, which is outside
+of NetMemex.
+
+7. CONCLUSION
+
+NetMemex enables high-throughput recoding and query pro-
+cessing of network trafﬁc without sacriﬁcing the ﬁdelity of
+the archived information or requiring high storage expenses.
+In this paper, we show that NetMemex can handle common
+types of queries within a few µs on average with high-speed
+ﬂow/packet retrieval, record near-Gbps full packet trafﬁc, and
+use a small amount of storage space whose total hardware
+cost is comparable to hard disk-only solutions. NetMemex
+achieves these goals simultaneously by performing data re-
+organizations, using ﬂash and disk carefully, and applying
+smart data compression, in a sophisticated and organized
+manner.
+
+REFERENCES
+
+[1] The CAIDA UCSD Anonymized Internet Traces 2012
+http://www.caida.org/data/
+
+-
+passive/passive_2012_dataset.xml, 2012.
+
+20121115.
+
+an end-system redundancy elimination service for enterprises.
+In Proc. 7th USENIX NSDI, Apr. 2010.
+
+[4] A. Anand, V. Sekar, and A. Akella. SmartRE: an architecture
+for coordinated network-wide redundancy elimination.
+In
+SIGCOMM ’09: Proceedings of the ACM SIGCOMM 2009
+conference on Data communication, pages 87–98. ACM, 2009.
+[5] D. G. Andersen, J. Franklin, M. Kaminsky, A. Phanishayee,
+L. Tan, and V. Vasudevan. FAWN: A fast array of wimpy
+nodes. In Proc. 22nd ACM Symposium on Operating Systems
+Principles (SOSP), Oct. 2009.
+
+[6] E. Anderson and M. Arlitt. Full packet capture and ofﬂine
+analysis on 1 and 10 Gb/s networks. Technical Report HPL-
+2006-156, HP Laboratories Palo Alto, Nov. 2006.
+
+[7] Y. Cheng, J. Bellardo, P. Benko, A. C. Snoeren, G. M. Voelker,
+and S. Savage. Jigsaw: Solving the puzzle of enterprise 802.11
+analysis. In Proc. ACM SIGCOMM, Aug. 2006.
+
+[8] C. Cranor, T. Johnson, O. Spataschek, and V. Shkapenyuk.
+Gigascope: a stream database for network applications. In
+Proc. ACM SIGMOD, pages 647–651, June 2003.
+
+[9] G. DeCandia, D. Hastorun, M. Jampani, G. Kakulapati, A. Lak-
+shman, A. Pilchin, S. Sivasubramanian, P. Vosshall, and W. Vo-
+gels. Dynamo: Amazon’s highly available key-value store. In
+Proc. 21st ACM Symposium on Operating Systems Principles
+(SOSP), Oct. 2007.
+
+[10] M. Degermark, B. Nordgren, and S. Pink. IP header compres-
+sion. Internet Engineering Task Force, Feb. 1999. RFC 2507.
+[11] L. Degioanni and G. Varenni. Introducing scalability in net-
+work measurement: toward 10 Gbps with commodity hard-
+ware. In IMC ’04: Proceedings of the 4th ACM SIGCOMM
+conference on Internet measurement, pages 233–238. ACM,
+2004.
+
+[12] P. J. Desnoyers and P. Shenoy. Hyperion: high volume stream
+archival for retrospective querying. In ATC’07: 2007 USENIX
+Annual Technical Conference on Proceedings of the USENIX
+Annual Technical Conference, pages 1–14. USENIX Associa-
+tion, 2007.
+
+[13] Endace
+
+Limited.
+
+http://www.endace.com/
+
+high-speed-packet-capture-hardware.html,
+2013.
+
+[14] F. Fusco, M. P. Stoecklin, and M. Vlachos. NET-FLi: on-the-
+ﬂy compression, archiving and indexing of streaming network
+trafﬁc. Proc. VLDB Endow., 3(1-2), Sept. 2010.
+
+[15] F. Fusco, X. Dimitropoulos, M. Vlachos, and L. Deri. pcapIn-
+dex: an index for network packet traces with legacy compati-
+bility. SIGCOMM Comput. Commun. Rev., 42(1):47–53, 2012.
+ISSN 0146-4833.
+
+[16] F. Fusco, M. Vlachos, and X. Dimitropoulos. RasterZip: Com-
+pressing network monitoring data with support for partial de-
+compression. In Proceedings of the 12nd ACM SIGCOMM
+conference on Internet measurement, IMC ’12, 2012.
+
+[17] J.-L. Gailly and M. Adler. zlib. http://www.zlib.net/,
+
+[2] Intel Solid-State Drive X25-M Series.
+//ark.intel.com/products/56601/
+Intel-SSD-X25-M-Series-80GB-2_
+5in-SATA-3Gbs-34nm-MLC, 2012.
+
+http:
+
+2013.
+
+[18] R. Geambasu, T. Bragin, J. Jung, and M. Balazinska. On-
+demand view materialization and indexing for network foren-
+sic analysis. In NETDB’07: Proceedings of the 3rd USENIX
+
+[3] B. Aggarwal, A. Akella, A. Anand, A. Balachandran, P. Chit-
+nis, C. Muthukrishnan, R. Ramjee, and G. Varghese. EndRE:
+
+13
+
+international workshop on Networking meets databases, pages
+1–7. USENIX Association, 2007.
+
+[19] V. Jacobson. Compressing TCP/IP Headers for Low-speed
+Serial Links. Internet Engineering Task Force, Feb. 1990. RFC
+1144.
+
+[20] A. Kawaguchi, S. Nishioka, and H. Motoda. A ﬂash-memory
+based ﬁle system. In Proc. USENIX Annual Technical Confer-
+ence, Jan. 1995.
+
+[21] J. Lilley, J. Yang, H. Balakrishnan, and S. Seshan. A Uniﬁed
+Header Compression Framework for Low-Bandwidth Links.
+In Proc. ACM Mobicom, Aug. 2000.
+
+[22] H. Lim, B. Fan, D. G. Andersen, and M. Kaminsky. SILT:
+A memory-efﬁcient, high-performance key-value store. In
+Proc. 23rd ACM Symposium on Operating Systems Principles
+(SOSP), Oct. 2011.
+
+[23] LZO. http://www.oberhumer.com/opensource/
+
+lzo/, 2013.
+
+[24] G. Maier, R. Sommer, H. Dreger, A. Feldmann, V. Paxson, and
+F. Schneider. Enriching network security analysis with time
+travel. In Proc. ACM SIGCOMM, Aug. 2008.
+
+[25] A distributed memory object caching system. http://
+
+memcached.org/, 2011.
+
+[26] D. Moore, G. Voelker, and S. Savage. Inferring Internet denial
+of service activity. In Proc. 10th USENIX Security Symposium,
+Aug. 2001.
+
+[27] A. Muthitacharoen, B. Chen, and D. Mazieres. A low-
+bandwidth network ﬁle system. In Proc. 18th ACM Symposium
+on Operating Systems Principles (SOSP), Oct. 2001.
+
+[28] Cisco NetFlow.
+
+http://www.cisco.com/en/US/
+
+products/ps6601/products_ios_protocol_
+group_home.html, 2013.
+
+[29] Fluke
+
+Corporation.
+
+http://www.
+
+flukenetworks.com/enterprise-network/
+network-monitoring/Network-Time-Machine,
+2013.
+
+[30] A. Papadogiannakis, M. Polychronakis, and E. P. Markatos.
+RRDtrace: Long-term raw network trafﬁc recording using
+ﬁxed-size storage. In Proceedings of the 2010 IEEE Interna-
+tional Symposium on Modeling, Analysis and Simulation of
+Computer and Telecommunication Systems, MASCOTS ’10,
+2010.
+
+[31] A. Papadogiannakis, M. Polychronakis, and E. Markatos. Tol-
+erating overload attacks against packet capturing systems. In
+Proc. USENIX Annual Technical Conference, June 2012.
+
+[32] M. O. Rabin. Fingerprinting by random polynomials. Tech-
+nical Report TR-15-81, Center for Research in Computing
+Technology, Harvard University, 1981.
+
+[33] M. Rosenblum and J. K. Ousterhout. The design and imple-
+mentation of a log-structured ﬁle system. ACM Transactions
+on Computer Systems, 10(1):26–52, 1992.
+
+[34] NetScout Systems, Inc. http://www.netscout.com/
+
+products/sniffer_analysis.asp, 2013.
+
+[35] N. Spring and D. Wetherall. A protocol-independent tech-
+nique for eliminating redundant network trafﬁc. In Proc. ACM
+SIGCOMM, Sept. 2000.
+
+[36] T. Taylor, S. Coull, F. Monrose, and J. McHugh. Toward
+efﬁcient querying of compressed network payloads. In Proc.
+USENIX Annual Technical Conference, June 2012.
+
+[37] tcpdump/libpcap. http://www.tcpdump.org/, 2013.
+
+14
+
+

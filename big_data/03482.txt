@@ -1,0 +1,668 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+0
+1
+
+ 
+ 
+]
+
+M
+M
+
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+2
+8
+4
+3
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Predicting Chroma from Luma with Frequency Domain Intra
+
+Prediction
+
+Nathan E. Egge and Jean-Marc Valin
+
+Mozilla, Mountain View, USA
+
+Xiph.Org Foundation
+
+ABSTRACT
+
+This paper describes a technique for performing intra prediction of the chroma planes based on the reconstructed
+luma plane in the frequency domain. This prediction exploits the fact that while RGB to YUV color conversion
+has the property that it decorrelates the color planes globally across an image, there is still some correlation
+locally at the block level.1 Previous proposals compute a linear model of the spatial relationship between the luma
+plane (Y) and the two chroma planes (U and V).2 In codecs that use lapped transforms this is not possible since
+transform support extends across the block boundaries3 and thus neighboring blocks are unavailable during intra-
+prediction. We design a frequency domain intra predictor for chroma that exploits the same local correlation with
+lower complexity than the spatial predictor and which works with lapped transforms. We then describe a low-
+complexity algorithm that directly uses luma coeﬃcients as a chroma predictor based on gain-shape quantization
+and band partitioning. An experiment is performed that compares these two techniques inside the experimental
+Daala video codec and shows the lower complexity algorithm to be a better chroma predictor.
+
+Keywords: Intra Prediction, Lapped Transforms, Color Image Coding, Chroma Correlation, Regression, Gain-
+Shape Quantization, Perceptual Vector Quantization
+
+1. INTRODUCTION
+
+Still image and video codecs typically consider the problem of intra-prediction in the spatial domain. A predicted
+image is generated on a block-by-block basis using the previously reconstructed neighboring blocks for reference,
+and the residual is encoded using standard entropy coding techniques. Modern codecs use the boundary pixels
+of the neighboring blocks along with a directional mode to predict the pixel values across the target block (e.g.,
+AVC, HEVC, VP8, VP9, etc.). These directional predictors are cheap to compute (often directly copying pixel
+values or applying a simple linear kernel), exploit local coherency (with low error near the neighbors) and predict
+hard to code features (extending sharp directional edges across the block). In Figure 1 the ten intra-prediction
+modes of WebM are shown for a given input block based on the 1 pixel boundary around that block.
+
+In codecs that use lapped transforms these techniques are not applicable (e.g., VC-1, JPEG-XR, Daala, etc.).
+The challenge here is that the neighboring spatial image data is not available until after the target block has
+been decoded and the appropriate unlapping ﬁlter has been applied across the block boundaries. Figure 2 shows
+the decode pipeline of a codec using lapped transforms with a single block size. The support used in spatial intra
+prediction is exactly the region that has not had the unlapping post-ﬁlter applied. Note that the pre-ﬁlter has
+the eﬀect of decorrelating the image along block boundaries so that the neighboring pixel values before unlapping
+are particularly unsuitable for use in prediction.
+
+Work has been done to use intra prediction with lapped transforms. Modifying AVC, de Oliveira and Pesquet
+showed that it was possible to use the boundary pixels just outside the lapped region to use 4 of the 8 directional
+intra prediction modes with lapped transforms.4 The work of Xu, Wu and Zhang considers prediction as a
+transform and proposes a frequency domain intra prediction method using non-overlapped blocks.5 An early
+experiment with the Daala video codec extended this idea using machine learning to train sparse intra predictors.6
+However this technique is computationally expensive (4 multiplies per coeﬃcient) and not easily vectorized.
+
+Copyright 2014-2015 Mozilla Foundation. This work is licensed under CC-BY 3.0.
+
+Send correspondence to Nathan E. Egge <negge@xiph.org>.
+
+Figure 1. The 10 intra-prediction modes for 4x4 blocks in WebM (VP8).
+
+Figure 2. State of blocks in the decode pipeline of a codec using lapped transforms. Immediate neighbors of the target
+block (bold lines) cannot be used for spatial prediction as they still require post-ﬁltering (dotted lines).
+
+A promising technique was proposed by Lee and Cho to predict the chroma channels using the spatially
+coincident reconstructed luma channel.1 This was formally proposed for use in HEVC by Chen et al2 however
+was ultimately not selected due to the increased encoder and decoder running time of 20-30%. We propose
+a similar technique that adapts the spatial chroma-from-luma intra prediction for use with frequency-domain
+coeﬃcients. We call this algorithm frequency-domain chroma-from-luma (FD-CfL).
+
+More recently, work on the Daala video codec has included replacing scalar quantization with gain-shape
+quantization.7 We show that when prediction is used with gain-shape quantization, it is possible to design a
+frequency-domain chroma-from-luma predictor without the added encoder and decoder overhead. An experi-
+mental evaluation between FD-CfL and the proposed PVQ-CfL algorithm shows this reduction in complexity
+comes with no penalty to quality and actually provides an improvement at higher rates.
+
+2. CHROMA FROM LUMA PREDICTION
+
+In spatial-domain chroma-from-luma, the key observation is that the local correlation between luminance and
+chrominance can be exploited using a linear prediction model. For the target block, the chroma values can be
+estimated from the reconstructed luma values as
+
+C(u, v) = α · L(u, v) + β
+
+(1)
+
+(a)
+
+(b)
+
+(c)
+
+Figure 3. Comparison of (a) the original uncompressed image with composite images of (b) reconstructed luma and
+predicted chroma using experimental Daala intra modes and (c) reconstructed luma and predicted chroma using FD-CfL.
+
+where the model parameters α and β are computed as a linear least-squares regression using N pairs of spatially
+coincident luma and chroma pixel values along the boundary:
+
+N ·(cid:88)
+N ·(cid:88)
+
+Li · Ci −(cid:88)
+(cid:32)(cid:88)
+
+Li · Li −
+
+Li
+
+i
+
+i
+
+(cid:88)
+(cid:33)2 ,
+
+Ci
+
+i
+
+Ci
+
+α =
+
+(cid:88)
+
+Ci − α ·(cid:88)
+
+β =
+
+i
+
+i
+
+N
+
+Li
+
+.
+
+(2)
+
+i
+
+i
+
+When α and β are sent explicitly in the bitstream, the pairs (Li, Ci) are taken from the original, unmodiﬁed
+image. However, the decoder can also compute the same linear regression using its previously decoded neighbors
+and thus α and β can be derived implicitly from the bitstream. Additional computation is necessary when the
+chroma plane is subsampled (e.g., 4:2:0 and 4:2:2 image data) as the luma pixel values are no longer coincident
+and must be resampled. In the next section we adapt the algorithm to the frequency-domain and show that this
+issue does not exist at most block sizes.
+
+2.1 EXTENSION TO FREQUENCY-DOMAIN
+
+In codecs that use lapped transforms, the reconstructed pixel data is not available. However the transform coef-
+ﬁcients in the lapped frequency domain are the product of two linear transforms: the linear pre-ﬁlter followed by
+the linear forward DCT. Thus the same assumption of a linear correlation between luma and chroma coeﬃcients
+holds. In addition, we can take advantage of the fact that we are in the frequency domain to use only a small
+subset of coeﬃcients when computing our model.
+
+The chroma values can then be estimated using frequency-domain chroma-from-luma (FD-CfL):
+
+CDC = αDC · LDC + βDC
+CAC(u, v) = αAC · LAC(u, v)
+
+(3)
+
+(4)
+
+where the αDC and βDC are computed using the linear regression in Equation 2 with the DC coeﬃcients of the
+three neighboring blocks: up, left and up-left. When estimating CAC(u, v) we can omit the constant oﬀset βAC
+as we expect the AC coeﬃcients to be zero mean. Additionally, we do not include all of the AC coeﬃcients from
+the same three neighboring blocks when computing αAC.
+
+It is suﬃcient to use the three lowest AC coeﬃcients from the neighboring blocks. This means that the
+number of input pairs N is constant regardless of the size of chroma block being predicted. Moreover, the input
+AC coeﬃcients have semantic meaning: we use the strongest horizontal, vertical and diagonal components. This
+has the eﬀect of preserving features across the block as edges are correlated between luma and chroma, see the
+fruit and branch edges in Figure 3 (c).
+
+2.2 TIME-FREQUENCY RESOLUTION SWITCHING
+
+When image data is 4:4:4 or 4:2:0, the chroma and luma blocks are aligned so that the lowest 3 AC coeﬃcients
+describe the same frequency range. In codecs that support multiple block sizes (or that support 4:2:2 image
+data) it is the case that the luma blocks and the chroma blocks are not aligned. For example, in the Daala video
+codec the smallest block size supported is 4x4. In 4:2:0, when an 8x8 block of luma image data is split into four
+4x4 blocks, the corresponding 4x4 chroma image data is still coded as a single 4x4 block.
+
+This is a problem for FD-CfL as it requires the reconstructed luma frequency-domain coeﬃcients to cover
+the same spatial extent. In Daala this is overcome by borrowing a technique from the Opus audio codec.8 Using
+Time-Frequency resolution switching (TF) it is possible to trade oﬀ resolution in the spatial domain for resolution
+in the frequency domain. Here the four 4x4 luma blocks are merged into a single 8x8 block with half the spatial
+resolution and twice the frequency resolution. We apply a 2x2 Hadamard transform to corresponding transform
+coeﬃcients in four 4x4 blocks to merge them into a single 8x8 block. The low frequency (LF) coeﬃcients are
+then used with FD-CfL, see Figure 4.
+
+(a)
+
+(b)
+
+Figure 4.
+(a) Circuit diagram of the 2x2 TF-merge algorithm that uses 7 adds and 1 shift. (b) Using TF-merge to
+convert four 4x4 frequency domain luma blocks (Y) into a single 8x8 frequency domain block for use with TD-CfL when
+image data is 4:2:0. Note that only the lower frequency (LF) portion is actually necessary and thus only that portion of
+the TF-merge need be computed.
+
+2.3 COMPLEXITY COMPARISON
+
+Both the spatial and frequency domain chroma-from-luma techniques have the property that once the model
+parameters α and β have been determined the entire chroma block can be computed with one multiply and one
+add per pixel. This is far better than the frequency domain intra prediction used to predict the luma plane in
+Daala which uses 4 multiplies and 4 adds.6 An important question to answer is how does the computational
+complexity of the model ﬁtting step in FD-CfL compare to the HEVC proposal.2 Note that the HEVC proposal
+required resampling the entire luma block for 4:2:0 image data, a process which is roughly as expensive as a
+TF-merge and is necessary for all luma block sizes (not just at the smallest block size).
+
+Block Size
+N × N
+4 × 4
+8 × 8
+16 × 16
+
+Spatial Domain
+Mults
+Adds
+4 ∗ N + 2
+
+8 ∗ N + 3
+
+Freq. Domain
+
+Mults
+2 ∗ 12 + 5
+
+Adds
+
+4 ∗ 12 + 5
+
+18
+34
+66
+
+35
+67
+131
+
+29
+29
+29
+
+53
+53
+53
+
+Table 1. Comparison of cost to ﬁt the model in Equation 2 using spatial and frequency domain chroma-from-luma.
+
+To answer this question, Table 1 is provided which compares just the cost of ﬁtting the chroma-from-luma
+model. An interesting feature of the FD-CfL algorithm is that the cost to ﬁt the model is independent of the
+block size, as we only consider a small portion of the frequency domain coeﬃcients. In the frequency domain
+we use 12 (Li, Ci) pairs (the 4 LF coeﬃcients from the 3 neighboring blocks), versus 2 ∗ N pairs in the spatial
+domain (N from each of the bordering left and up blocks). This means that for all chroma block sizes larger
+than 4x4, model ﬁtting in the frequency domain is actually cheaper than in the spatial domain.
+
+3. GAIN-SHAPE QUANTIZATION
+
+Most modern video and still image codecs use scalar quantization as a “lossy” way of reducing the amount
+of information needed to code a block. After the block coeﬃcients have been transformed into the frequency-
+domain, they are each quantized to an integer index which is entropy coded.
+In the decoder the transform
+coeﬃcients are reconstructed by reversing the quantization. For a coeﬃcient Ci and quantization step size Qi,
+the quantization index γi and reconstructed coeﬃcient ˆCi can be found by
+
+γi = (cid:98)Ci/Qi(cid:99)
+ˆCi = γi · Qi
+
+(5)
+
+(6)
+
+Note that when the quantization step size is large (e.g., at low rates) the smaller, high frequency coeﬃcients go
+to zero. While good for compression (many codecs will run-length encode a string of zeros), this has the eﬀect
+of low-passing the block and removing much of the texture from the image.
+
+An alternative to scalar quantization is to use vector quantization (VQ). Here the quantization index γ no
+longer represents a single coeﬃcient, but rather an entire vector of coeﬃcients. The idea is to take, for example,
+the entire block of coeﬃcients and treat them as an n-dimensional vector. Quantization then amounts to ﬁnding
+the index γ of the nearest codeword (n-dimensional vector) in a possibly inﬁnite VQ-codebook. The density of
+codewords in the codebook around the n-dimensional vector we are quantizing dictates the quantization error.
+However, it has been shown that even for a ﬁxed set of input vectors, designing an optimal VQ-codebook is an
+NP-hard problem. Moreover, searching for the optimal quantization index γ requires computing the distance
+between the input vector and every VQ-codeword to select the closest.
+
+In the Daala video codec we use gain-shape quantization.9 A vector of coeﬃcients x is separated into two
+its magnitude (gain) and its direction (shape). The gain g = (cid:107)x(cid:107) represents how much
+intuitive components:
+energy is contained in the block, and the shape u = x/(cid:107)x(cid:107) indicates where that energy is distributed among the
+coeﬃcients. The gain is then quantized using scalar quantization, while the shape is quantized by ﬁnding the
+nearest VQ-codeword in an algebraically deﬁned codebook. This has the advantage of not needing to explicitly
+store the VQ-codebook in the decoder as well as allowing the encoder to search only a small set of VQ-codewords
+around the input vector. Given the gain quantization index γg, the shape vector quantization index γu and an
+implicitly deﬁned VQ-codebook CB, the reconstructed gain ˆg and shape ˆu can be found by
+
+and reconstructed coeﬃcients ˆx are thus
+
+ˆg = γg · Q
+ˆu = CB[γu]
+
+ˆx = ˆg · ˆu
+
+(7)
+
+(8)
+
+(9)
+
+By explicitly signaling the amount of energy in a block, and roughly where that energy is located, gain-
+shape quantization is texture preserving. Because the algebraic codebook used in Daala is based on the pyramid
+vector quantizer described by Fisher,10 this technique is referred to as Perceptual Vector Quantization (PVQ).
+A complete description of PVQ usage in Daala and its other advantages over scalar quantization is outside the
+scope of this paper and and is described in detail by Valin.7
+
+3.1 PREDICTION WITH PVQ
+
+In block based codecs, both intra- and inter-prediction can often construct a very good predictor for the block
+that will be decoded next. In the encoder, this predicted block is typically subtracted from the input image
+and the residual is transformed to the frequency domain, quantized and entropy coded. When the transform is
+linear, as is the case with codecs based on lapped transforms, this is equivalent to transforming the predictor
+and computing the diﬀerence in the frequency domain. However, if one were to simply quantize the frequency
+domain residual using PVQ, the texture preservation property described in the previous section would be lost.
+This is because the energy that would be preserved is no longer that of the block being coded, but instead the
+
+(a)
+
+(b)
+
+Figure 5. (a) A Householder reﬂection plane is computed that aligns the prediction vector so that its largest component
+is along an axis. (b) The input vector is reﬂected across the plane and the angle θ is computed and coded using scalar
+quantization. The axis on which the predictor lies is eliminated, the remaining n − 1 dimensions are coded using PVQ.
+
+gain represents how much the image is diﬀerent from its predictor. In Daala, this is avoided by explicitly not
+computing a residual, but instead extracting another intuitive parameter in gain-shape quantization.
+
+Ideally, when the predictor is good we would like the cost of coding the gain and shape to be low. That is,
+we would like the entropy of the symbols we code to be as small as possible. We can achieve this and retain the
+energy preserving properties of PVQ by using a Householder reﬂection. Considering the predictor as another
+n-dimensional vector, a reﬂection plane is computed that aligns the predictor with one of the axes in our n-
+dimensional vector space making all but one of the components in the predictor equal zero. The encoder can
+then reﬂect the input vector x across this reﬂection plane in a way that is perfectly reproducible in the decoder,
+see Figure 5.
+
+Let r be the n-dimensional vector of predictor coeﬃcients. Then the normal to the reﬂection plane can be
+
+computed as
+
+(10)
+where s· em is the signed unit vector in the direction of the axis we would like to reﬂect r onto. The input vector
+x can then be reﬂected across this plane by computing
+
+v =
+
+r
+
+(cid:107)r(cid:107) + s · em
+
+z = x − 2
+
+vT x
+vT v
+
+v
+
+(11)
+
+We can measure how well the predictor r matches our input vector x by computing the cosine of the angle θ
+between them as
+
+cos θ =
+
+xT r
+(cid:107)x(cid:107)(cid:107)r(cid:107) =
+
+zT r
+
+(cid:107)z(cid:107)(cid:107)r(cid:107) = −s
+
+zm(cid:107)z(cid:107)
+
+(12)
+
+We are free to choose any axis in our n-dimensional space and we select em to be the dimension of the largest
+component of our prediction vector r and s = sgn(rm). Thus the largest component lies on the m-axis after
+reﬂection. When the predictor is good, we expect that the largest component of z will also be in the em direction
+and θ will be small. If we code ˆθ using scalar quantization, we can remove the largest dimension of z and reduce
+the coding of x to a gain-shape quantization of the remaining n− 1 coeﬃcients where the gain has been reduced
+to sin θ · g. Given a predictor r, the reconstructed coeﬃcients ˆx are computed as
+
+ˆx = ˆg(cid:0) − s · cos ˆθ · em + sin ˆθ · ˆu(cid:1)
+
+(13)
+
+When the predictor is poor, θ will be large and the reﬂection is unlikely to make things easier to code. Thus
+when θ is greater than 90◦ we code a ﬂag and use PVQ with no predictor. Conversely when r is exact, ˆθ is zero
+and no additional information needs to be coded. In addition, because we expect r to have roughly the same
+amount of energy as x, we can get additional compression performance by using (cid:107)r(cid:107) as a predictor for g:
+
+ˆg = γg · Q + (cid:107)r(cid:107)
+
+(14)
+
+3.2 CHROMA FROM LUMA USING PVQ PREDICTION
+
+Let us now return to the frequency-domain chroma-from-luma (FD-CfL) algorithm from Section 2.1 and consider
+what happens when it is used with gain-shape quantization. As an example, consider a 4x4 chroma block where
+the 15 AC coeﬃcients are coded using gain-shape quantization with the FD-CfL predictor from Equation 4. The
+15-dimensional predictor r is simply a linearly scaled vector of the coincident reconstructed luma coeﬃcients:
+
+CAC(u, v) = αAC · LAC(u, v) =⇒ r = αAC · ˆxL
+
+(15)
+
+Thus the shape of the chroma predictor r is exactly that of the reconstructed luma coeﬃcients ˆxL with one
+exception:
+
+r
+(cid:107)r(cid:107) =
+
+αAC · ˆxL
+(cid:107)αAC · ˆxL(cid:107) = sgn(αAC)
+
+ˆxL(cid:107)ˆxL(cid:107)
+
+(16)
+
+Because the chroma coeﬃcients are sometimes inversely correlated with the coincident luma coeﬃcients, the
+linear term αAC can be negative. In these instances the shape of ˆxL points in exactly the wrong direction and
+must be ﬂipped.
+
+Moreover, consider what happens to the gain of xC when it is predicted from r. The PVQ prediction technique
+assumes that (cid:107)r(cid:107) = αAC · (cid:107)ˆxL(cid:107) is a good predictor of gC = (cid:107)xC(cid:107). Because αAC for a block is learned from
+its previously decoded neighbors, often it is based on highly quantized or even zeroed coeﬃcients. When this
+happens, αAC · (cid:107)ˆxL(cid:107) is no longer a good predictor of gC and the cost to code (cid:107)xC(cid:107) − αAC · (cid:107)ˆxL(cid:107) using scalar
+quantization is actually greater than the cost of just coding gC alone.
+
+Thus we present a modiﬁed version of PVQ prediction that is used just for chroma-from-luma intra prediction
+called PVQ-CfL. For each set of chroma coeﬃcients coded by PVQ, the prediction vector r is exactly the
+coincident luma coeﬃcients. Note that for 4:2:0 video we still need to apply the Time-Frequency resolution
+switching (TF) described in Section 2.2 to merge the reconstructed coeﬃcients of 4x4 luma blocks to get the
+coincident predictor ˆxL for the corresponding 4x4 chroma block. We determine if we need to ﬂip the predictor
+by computing the sign of the cosine of the angle between ˆxL and xC:
+
+f = sgn(ˆxT
+
+LxC)
+
+(17)
+A negative sign means the angle between the two is greater than 90◦ and ﬂipping ˆxL is guaranteed to make the
+angle less than 90◦.
+
+We then code f using a single bit‡, and the gain ˆgC using scalar quantization with no predictor. The shape
+quantization algorithm for xC is unchanged except that r = f · ˆxL. This algorithm has the advantage over
+FD-CfL of being both lower complexity (neither the encoder nor decoder need to compute a linear regression
+per block) and providing better compression (the chroma gain gC is never incorrectly predicted).
+
+3.3 PVQ WITH FREQUENCY BANDS
+Up to this point we have only examined the case when all of the AC coeﬃcients for an N ×N block are considered
+together as a single input vector for PVQ prediction. In practice, it may be better to consider portions of the
+AC coeﬃcients together so partitions of the block where ˆg = 0 or ˆθ = 0 are coded more eﬃciently. Consider the
+frequency band structure currently used by Daala in Figure 6. The PVQ-CfL technique in the previous section
+is trivially modiﬁed to work with any arbitrary partitioning of block coeﬃcients into bands.
+
+‡It is not strictly necessary to code a bit for f . Instead the parameter αAC could be found using least-squares regression
+and the sign extracted. However, using a single bit to code f is (1) better overall than relying on least-squares regression
+which can be wrong and (2) reduces the complexity signiﬁcantly.
+
+Figure 6. The band structure of 4x4, 8x8 and 16x16 blocks in Daala.
+
+Instead of considering whether to ﬂip the direction of xL for each band partition individually (a signaling
+cost of 7 bits per 16x16 block), simply look at the lowest 4x4 AC partition and use the ﬂip decision there for
+the entire block. The assumption is that having those larger low frequency coeﬃcients predicted well is far more
+important than getting it exactly right at higher frequencies. When the quantization step size is large, the high
+frequency coeﬃcients will be sent to zero regardless.
+
+4. EXPERIMENTAL EVALUATION
+
+The two frequency-domain intra-prediction techniques described in this paper for predicting chroma coeﬃcients
+from reconstructed luma coeﬃcients were evaluated within the framework of the experimental Daala video codec.
+To make the comparison fair, only the AC chroma coeﬃcients were predicted using chroma-from-luma with the
+DC chroma coeﬃcients being predicted as the average of its neighbors. Only gain-shape quantization was used
+to code the transform coeﬃcients, with implicitly predicted FD-CfL coeﬃcients being passed as the predictor to
+PVQ in one instance, and the PVQ-CfL algorithm being used in the other. All other video coding techniques
+used were identical.
+
+A sample of 50 still images taken from Wikipedia and downsampled to 1 megapixel were compressed at
+varying quantization levels, and the resulting rate-distortion curves were computed on both the Cb and Cr
+chroma planes using four diﬀerent metrics. The Bjontegaard distance11 was computed to measure the average
+improvement in both Rate (at equivalent quality) and SNR (at equivalent size) between the two techniques. The
+result of this experiment is shown in Table 2.
+
+Metric
+
+PSNR
+
+PSNR-HVS
+
+SSIM
+
+FastSSIM
+
+Cb (plane 1)
+
+Cr (plane 2)
+
+∆ Rate (%) ∆ SNR (dB) ∆ Rate (%) ∆ SNR (dB)
+
+-1.27280
+-2.67808
+-2.51125
+-3.18398
+
+0.05171
+0.13703
+0.07116
+0.06969
+
+-0.57558
+-1.24695
+-1.66549
+-2.79776
+
+0.02941
+0.07459
+0.05779
+0.06737
+
+Table 2. Computation of the Bjontegaard distance (improvement) between the two rate-distortion curves, moving from
+FD-CfL to PVQ-CfL, based on four quality metrics.
+
+For every quality metric we considered, the PVQ-CfL technique did a better job of predicting Cb and Cr
+chroma coeﬃcients both delivering higher quality at the same rate (up to 0.13 dB improvement for PSNR-HVS12)
+and better compression for equivalent distortion (3.2% smaller ﬁles for FastSSIM13). Looking at the actual rate-
+distortion curves in Figure 7, we see that the largest improvements are found at higher rates. However, the
+reduced complexity of PVQ-CfL over FD-CfL with no rate or quality penalty at lower rates means this technique
+is clearly superior and thus has been adopted in Daala.
+
+(a)
+
+(b)
+
+(c)
+
+(d)
+
+Figure 7. A comparison of the rate-distortion curves for FD-CfL and PVQ-CfL on the same set of 50 still images using
+quality metrics (a) PSNR, (b) PSNR-HVS, (c) SSIM and (d) FastSSIM.
+
+ 30 35 40 45 50 55 0.01 0.1 1 10Quality (dB)Rate (bits/pixel)subset1_FD-CfL_Cb (PSNR)subset1_PVQ-CfL_Cb (PSNR) 25 30 35 40 45 50 55 0.01 0.1 1 10Quality (dB)Rate (bits/pixel)subset1_FD-CfL_Cb (PSNR-HVS)subset1_PVQ-CfL_Cb (PSNR-HVS) 8 10 12 14 16 18 20 22 24 0.01 0.1 1 10Quality (dB)Rate (bits/pixel)subset1_FD-CfL_Cb (SSIM)subset1_PVQ-CfL_Cb (SSIM) 2 4 6 8 10 12 14 16 0.01 0.1 1 10Quality (dB)Rate (bits/pixel)subset1_FD-CfL_Cb (FastSSIM)subset1_PVQ-CfL_Cb (FastSSIM)5. CONCLUSIONS
+
+We have presented two new techniques for doing chroma-from-luma intra-prediction in the frequency domain for
+use with video and still image codecs that employ lapped transforms. The ﬁrst technique (FD-CfL) is suitable
+for use in codecs based on scalar quantization and provides a reduction in complexity when compared to spatial
+domain CfL as per block complexity stays constant with block size increases. The second technique (PVQ-
+CfL) extends the PVQ prediction technique in codecs using gain-shape quantization to allow for better chroma
+prediction with no additional per block complexity from model ﬁtting.
+
+This work is part of the Daala project.14 The full source code, including both of the algorithms described in
+
+this paper is available in the project git repository.15
+
+REFERENCES
+
+[1] Lee, S.-H. and Cho, N.-I., “Intra prediction method based on the linear relationship between the channels
+for yuv 4:2:0 intra coding,” in [Image Processing (ICIP), 2009 16th IEEE International Conference on ],
+1037–1040 (Nov 2009).
+
+[2] Kim, J., Park, S., Choi, Y., Jeon, Y., and Jeon, B., “New intra chroma prediction using inter-channel
+correlation,” Joint Collaborative Team on Video Coding (JCT-VC) of ITU-T VCEG and ISO/IEC MPEG
+(July 2010).
+
+[3] Tran, T., Liang, J., and Tu, C., “Lapped transform via time-domain pre- and post-ﬁltering,” Signal Pro-
+
+cessing, IEEE Transactions on 51, 1557–1571 (June 2003).
+
+[4] de Oliveira, R. and Pesquet-Popescu, B., “Intra-frame prediction with lapped transforms for image coding,”
+in [Acoustics, Speech and Signal Processing (ICASSP), 2011 IEEE International Conference on ], 805–808
+(May 2011).
+
+[5] Xu, J., Wu, F., and Zhang, W., “Intra-predictive transforms for block-based image coding,” Signal Process-
+
+ing, IEEE Transactions on 57, 3030–3040 (Aug 2009).
+
+[6] “Introducing daala part 2: Frequency domain intra prediction.” http://people.xiph.org/~xiphmont/
+
+demo/daala/demo2.shtml.
+
+[7] Valin, J.-M. and Terriberry, T. B., “Perceptual vector quantization for video coding,” SPIE Proceedings 9410
+
+(2015).
+
+[8] Valin, J.-M., Maxwell, G., Terriberry, T. B., and Vos, K., “High-quality, low-delay music coding in the opus
+
+codec,” in [Audio Engineering Society Convention 135 ], (Oct 2013).
+
+[9] “Daala, part 6: Perceptual vector quantization.” https://people.xiph.org/~jm/daala/pvq_demo/.
+[10] Fischer, T. R., “A pyramid vector quantizer,” IEEE Trans. on Information Theory 32, 568–583 (1986).
+[11] Bjontegaard, G., “Calculation of average psnr diﬀerences between rd-curves,” Tech. Rep. VCEG-M33, ITU-
+
+T SG16/Q6, Austin, TX, USA (Apr 2001).
+
+[12] Ponomarenko, N., Silvestri, F., Egiazarian, K., Carli, M., Astola, J., and Lukin, V., “On between-coeﬃcient
+contrast masking of dct basis functions,” in [Proceedings of the Third International Workshop on Video
+Processing and Quality Metrics for Consumer Electronics], (January 2007).
+
+[13] Chen, M.-J. and Bovik, A. C., “Fast structural similarity index algorithm,” in [Proc. ICASSP ], 994–997
+
+(march 2010).
+
+[14] “Daala website.” https://xiph.org/daala/.
+[15] “Daala git repository.” https://git.xiph.org/daala.git.
+
+

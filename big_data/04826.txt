@@ -1,0 +1,2198 @@
+Prepared for submission to JCAP
+
+FAST-PT : a novel algorithm to
+calculate convolution integrals in
+cosmological perturbation theory
+
+Joseph E. McEwen, Xiao Fang, Christopher M. Hirata, and
+Jonathan A. Blazek
+Center for Cosmology and AstroParticle Physics, Department of Physics, The Ohio State
+University, 191 W Woodruﬀ Ave, Columbus OH 43210, USA
+
+E-mail: mcewen.24@osu.edu
+
+Abstract. We present a novel algorithm, FAST-PT, for performing convolution or mode-
+coupling integrals that appear in nonlinear cosmological perturbation theory. The algorithm
+uses several properties of gravitational structure formation – the locality of the dark matter
+equations and the scale invariance of the problem – as well as Fast Fourier Transforms to
+describe the input power spectrum as a superposition of power laws. This yields extremely fast
+performance, enabling mode-coupling integral computations fast enough to embed in Monte
+Carlo Markov Chain parameter estimation. We describe the algorithm and demonstrate its
+application to calculating nonlinear corrections to the matter power spectrum, including one-
+loop standard perturbation theory and the renormalization group approach. We also describe
+our public code (in Python) to implement this algorithm, including the applications described
+here.
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+5
+1
+
+ 
+ 
+]
+
+.
+
+O
+C
+h
+p
+-
+o
+r
+t
+s
+a
+[
+ 
+ 
+
+1
+v
+6
+2
+8
+4
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Contents
+
+1 Introduction
+
+2 Method
+
+1-loop Standard Perturbation Theory
+
+2.1
+2.2 P22(k) type Convolution Integrals
+2.3 P13(k) type Convolution Integrals
+2.4 Regularization
+
+3 Performance
+
+1-loop Results
+
+3.1
+3.2 Renormalization Group Flow
+
+4 Summary
+
+A Mathematical Identities
+
+B Γ-function identities and evaluations
+
+C Mitigation of Edge Eﬀects
+
+D RG-ﬂow Integration
+
+1
+
+Introduction
+
+1
+
+3
+4
+5
+10
+10
+
+12
+12
+13
+
+15
+
+20
+
+20
+
+21
+
+21
+
+The large-scale structure of the universe provides numerous probes of the underlying cos-
+mological model, including the source of present-day accelerated expansion. Current and
+upcoming surveys [1–5] will provide impressive statistical power to test the ΛCDM (cos-
+mological constant plus cold dark matter) paradigm as well as potential modiﬁcations (see
+Ref. [6] for a review). Connecting the predictions of these models to observables from tracers
+of large-scale structure requires understanding the role of physics on a wide range of scales,
+including the growth of dark matter structure and the formation of galaxies and other other
+luminous objects. On small scales, numerical simulations are required to solve the for full
+nonlinear growth (e.g. [7]). Perturbative techniques provide an analytic approach to describe
+structure on mildly nonlinear scales and are particularly valuable in that they can be quickly
+calculated for diﬀerent sets of cosmological parameters (without running a new simulation)
+and provide physical intuition into the relevant processes.
+
+A number of cosmological observables can be modeled in the regime of validity for these
+perturbative techniques, including the clustering of galaxies and other luminous tracers, as
+well as weak gravitational lensing and cross-correlations between these probes (e.g. “galaxy-
+galaxy lensing.”). For instance, perturbation theory has long been used to describe corrections
+to the scale-dependence of dark matter clustering, including both two-point and higher-order
+statistics (see, e.g., [8]). Perturbative techniques can also eﬀectively predict the nonlinear
+shift and broadening of the baryon acoustic oscillation (BAO) feature [9, 10] – a powerful
+“standard ruler” for studying the evolution of geometry in the universe – including the po-
+tential impact of streaming velocities between baryons and dark matter in the early universe
+
+– 1 –
+
+[11–14]. The relationship between dark matter and luminous tracers will generally include
+a nonlinear “biasing” relationship, resulting in correlations that are naturally described in a
+perturbative expansion (e.g. [15, 16]). The velocity ﬁeld of dark matter and luminous tracers,
+which sources “redshift-space distortions” in clustering measurements can also be modeled an-
+alytically beyond linear theory (e.g. [17, 18]). Similarly, correlations of intrinsic galaxy shapes
+(known collectively as “intrinsic alignments”) can be described perturbatively and nonlinear
+perturbation theory may be especially important for “tidal torquing” (quadratic) alignment
+models (e.g. [19, 20]). Even in cases where N-body simulations are needed to reach the de-
+sired accuracy, a fast perturbation theory code is still valuable, since then interpolation from
+grids of N-body simulations can be used to compute the non-perturbative correction to an
+observable O, rather than trying to interpolate the much larger “raw” value of O.
+
+A generic feature of nonlinear perturbation theory is the coupling of modes at diﬀerent
+scales through kernels that captures the physics of structure growth. As a result, these nonlin-
+ear corrections typically appear as convolutions over the power spectrum or related functions
+of the wavevector.
+In this paper, we primarily consider the most ubiquitous of these ap-
+proaches, standard perturbation theory (SPT) (e.g. [8]). However, these types of integrals
+are found in other approaches as well, including Lagrangian perturbation theory (LPT, [21]),
+renormalized perturbation theory (RPT, [22]), renormalization group perturbation theory
+(RGPT, [23, 24]), the eﬀective ﬁeld theory (EFT, [25–28]) approach to structure formation,
+and renormalization and time ﬂow frameworks [29], which can include scale-dependent prop-
+agators for the ﬂuctuation modes (e.g. arising from massive neutrinos). Therefore, it is of
+great utility that the cosmological community have access to eﬃcient and accurate methods
+to compute these integrals. Such a method should be fast enough to be implemented within a
+Markov chain Monte Carlo code, which may explore > 106 points in parameter space. In this
+paper we provide such a method for 1-loop order perturbative descriptions of scalar quanti-
+ties (e.g. density or velocity divergence). A generalization to arbitrary-spin quantities (e.g.
+intrinsic alignments, a spin-2 tensor ﬁeld) will be presented in a follow-up paper.
+
+Our method, FAST-PT, can calculate the SPT power spectrum, to 1-loop order, on a
+sub-second time scale (∼ 0.07 s recurring cost for a power spectrum with N = 3000 sam-
+ples in k) and to the same level of accuracy as conventional methods. FAST-PT takes a
+power spectrum, sampled logarithmically, as an input. Special function identities are then
+used to rewrite the angular dependence of the mode-coupling kernels in terms of a summa-
+tion of Legendre polynomials. The angular integration for each of these components can be
+performed analytically, reducing the numerical evaluation to one-dimension. Because of the
+uniform (logarithmic) sampling we are able to utilize Fast Fourier Transform (FFT) methods,
+thus enabling computation of the mode-coupling integrals in O(N log N ) operations, where
+N is the number of samples in the power spectrum. Our approach is similar in structure
+to the evaluation of logarithmically sampled Hankel transforms [30, 31], which have been
+used to transform power spectrum into correlation functions (and vice versa). It also draws
+on the realization that convolution integrals in spherical symmetry – even convolutions of
+integrands with spin – can be expressed using Hankel transforms with the angular integrals
+performed analytically (e.g. [13]). We implement the FAST-PT algorithm in a publicly-
+available package. The code is written in Python, making use of numpy and scipy libraries,
+and has a self-contained structure that can be easily integrated into a larger project. We
+provide a public version of the code along with a user manual and example implementations
+at https://github.com/JoeMcEwen/FAST-PT.
+
+Recently, Schmittfull et al.
+
+[32] have presented a related method for fast perturbation
+
+– 2 –
+
+theory integrals, based on the same mathematical principles. Our Eq. (2.21) encapsulates the
+same approach as their Eq. (31), combined with the logarithmically sampled Hankel trans-
+form. However, the numerical approach is diﬀerent: the decomposition of an arbitrary power
+spectrum P (k) into power laws of complex exponent is treated as fundamental (and is kept
+explicitly in the code); the near-cancellation of P22 + P13 is handled by explicit regulariza-
+tion; and the P13 integral is solved using a diﬀerent method (based only on scale invariance).
+Finally, we present a fast implementation of RGPT.
+in §2, we provide the theory to our method, mo-
+In §3, we provide
+tivating our approach by considering the 1-loop SPT power spectrum.
+results for 1-loop corrections to the power spectrum and demonstrate an implementation of
+the renormalization group approach of [23, 24]. In §4, we summarize our results, including
+a discussion of other potential applications of FAST-PT, and provides a brief description
+of the publicly-available code. The appendices provide additional details of our numerical
+calculations and the structure of the terms under consideration.
+
+This paper is organized as follows:
+
+2 Method
+
+This work presents an algorithm to eﬃciently calculate mode-coupling integrals of the form
+
+(cid:90) d3q
+(2π)3 K(q, k − q)P (q)P (|k − q|) ,
+
+(2.1)
+
+where K(q1, q2) is a mode-coupling kernel that can be expanded in Legendre polynomials
+and P (q) is an input signal logarithmically sampled in q. The motivation for this method
+is mildly-nonlinear structure formation in the universe, although it can be more generally
+considered as a technique to evaluate a range of expressions in the form of Eq. (2.1).
+
+For clarity we list our conventions and notations:
+• fast Fourier transform and inverse fast Fourier transform are denoted as FFT and IFFT;
+• Fourier transform pairs have the 2π placed in the denominator of the wavenumber
+
+integral, as is standard in cosmology:
+
+Φ(k) =
+
+d3r Φ(x) e−ik·r ↔ Φ(r) =
+
+(2.2)
+
+(cid:90) d3k
+(2π)3 Φ(k) eik·r;
+
+(cid:90)
+
+• “log” always refers to natural log and we will use log10 explicitly when we are referring
+
+to base 10;
+
+• ⊗ represents a convolution (discrete or continous);
+• the Legendre polynomials will be denoted Pl (to avoid confusion with power spectra P ),
+normal Bessel functions of the ﬁrst kind are denoted Jµ(t), and spherical Bessel functions
+of the ﬁrst kind are denoted jl(t), all with standard normalization conventions [33];
+
+√−1 (never to be confused with an index);
+
+• i =
+• “log sampling” means that the argument of the input signal is qn = q0 exp(n∆), where
+
+n = 0, 1, 2, ... and ∆ is the linear spacing between grid points; and
+
+– 3 –
+
+• we use the convention that when calculations require discrete evaluations, for example as
+in the case of discrete Fourier transforms, we index our vectors, while when evaluations
+are performed analytically we omit the index.
+
+In this section we begin by reviewing SPT (§2.1); the reader who is already experienced
+with SPT may skip directly to §2.2. §2.2 describes our main result: a rearrangement of the
+mode-coupling integral that allows P22 and related integrals to be computed in order N log N
+operations. The P13 integral is simpler than P22, but brute-force computation of P13 is in fact
+slower than the FAST-PT method for P22, so we describe our fast approach to P13 in §2.3.
+Finally, in §2.4 we describe our numerical treatment of the cancellation of infrared divergences
+in P22 and P13.
+
+1-loop Standard Perturbation Theory
+
+2.1
+When ﬂuctuations in the density ﬁeld are small, δ(k) (cid:28) 1, non-linear structure formation in
+the universe can be modeled by solving the cosmological ﬂuid equations using perturbation
+theory (see Ref. [8] for a comprehensive review of Eulerian perturbation theory). For this
+paper we only sketch out the most basic elements of perturbation theory, focusing on the
+integrals we evaluate. The matter ﬁeld written as a perturbative expansion in Fourier space
+is
+
+δ(k) = δ(1)(k) + δ(2)(k) + δ(3)(k) + ... ,
+
+(2.3)
+
+where the ﬁrst order contribution δ(1)(k) is the linear matter ﬁeld and each higher-order term
+represent non-linear contributions. Non-linear eﬀects manifest themselves as mode-couplings
+in Fourier space, consequently each δ(n)(k) is a convolution integral over n copies of the linear
+ﬁeld δ(1)(q) with a kernel Fn(q1, ..., qn):
+
+(cid:90) d3q1
+
+D(k − n(cid:88)
+
+j=1
+
+δ(n)(k) =
+
+(2π)3 ...
+
+d3qn
+(2π)3 δ3
+
+qj)Fn(q1, ..., qn)δ(1)(q1), ..., δ(1)(qn) ,
+
+(2.4)
+
+where δ3
+deﬁned as an ensemble average of the matter ﬁeld δ(k),
+
+D(k) is the three-dimensional Dirac delta function. The power spectrum P (k) is
+
+(cid:104)δ(k)δ(k(cid:48))(cid:105) = (2π)3δ3
+
+D(k + k(cid:48))P (k) .
+
+(2.5)
+
+The ﬁrst non-linear contribution to the power spectrum comes from ensemble averages taken
+up to O([δ(1)]4):
+
+(cid:104)δ(k)δ(k(cid:48))(cid:105) = (cid:104)δ(1)(k)δ(1)(k(cid:48))(cid:105) + (cid:104)δ(2)(k)δ(2)(k(cid:48))(cid:105) + 2(cid:104)δ(1)(k)δ(3)(k(cid:48))(cid:105) + ... ,
+
+(2.6)
+
+which deﬁnes the one-loop power spectrum
+
+P1-loop(k) = Plin(k) + P22(k) + P13(k) ,
+
+(2.7)
+
+where (cid:104)δ(2)(k)δ(2)(k(cid:48))(cid:105) = (2π)3δ3
+
+D(k+k(cid:48))P22(k) and 2(cid:104)δ(1)(k)δ(3)(k(cid:48))(cid:105) = (2π)3δ3
+
+D(k+k(cid:48))P13(k).
+
+– 4 –
+
+2.2 P22(k) type Convolution Integrals
+We ﬁrst focus on P22(k), leaving the evaluation of P13(k) to a later subsection. P22(k) is a
+convolution integral that takes two copies of the linear power spectrum Plin(k) as inputs:
+
+(cid:90) d3q
+(2π)3 Plin(q)Plin(|k − q|)|F2(q, k − q)|2 .
+
+P22(k) = 2
+
+The F2 kernel is
+
+(cid:18) q1
+
+(cid:19)
+
+F2(q1, q2) =
+
+=
+
++
+
+5
+7
+17
+21
+
+µ12
+
+1
+q2
+2
+P0(µ12) +
+1
+2
+
++
+
+q2
+q1
+
+(cid:18) q1
+
+q2
+
++
+
+µ2
+12
+
+(cid:19)
+
+2
+7
+q2
+q2
+
++
+
+P1(µ12) +
+
+P2(µ12) ,
+
+4
+21
+
+(2.8)
+
+(2.9)
+
+where we have deﬁned µ12 = q1 · q2/(q1q2) = ˆq1 · ˆq2, which is the cosine of the angle between
+q1 and q2. Squaring this and substituting into Eq. (2.8), we ﬁnd that the P22(k) power
+spectrum expanded in Legendre polynomials is
+
+(cid:90) d3q1
+
+(cid:104) 1219
+2 P1(µ12) +
+
+1470
+
+(2π)3
+q1q−1
+
+62
+35
+
+P22(k) = 2
+
++
+
+P0(µ12) +
+
+671
+1029
+2 P3(µ12) +
+
+P2(µ12) +
+1
+6
+
+P4(µ12) +
+
+(cid:105)
+32
+1715
+1q−2
+2 P0(µ12)
+q2
+
+q1q−1
+
+8
+35
+
+1q−2
+2 P2(µ12)
+q2
+
+1
+3
+
+(2.10)
+
+Plin(q1)Plin(q2) ,
+
+where we have deﬁned q2 = k − q1 and used the q1 ↔ q2 symmetry to combine terms.
+We note that the last Legendre component in Eq. (2.10) will eventually lead to a divergent
+expression in the FAST-PT framework. In §2.4 we discuss this type of divergence (which
+can appear in other contexts) and explicitly show the cancellation.
+
+Each Legendre component of Eq. (2.10) is a speciﬁc case of the general integral
+
+Jαβl(k) =
+
+2Pl(µ12)P (q1)P (q2) .
+
+1 qβ
+
+(2.11)
+
+(cid:90) d3q1
+
+(2π)3 qα
+
+Note that we have now omitted the subscript “lin” on the power spectrum and carry on
+our calculations for a general input power spectrum. For SPT calculations the input power
+spectrum should be Plin(k), however there are cases when a general power spectrum input is
+required, such as renormalization group equations. Our method of evaluation draws on several
+key insights from the literature. The ﬁrst is that the Legendre polynomial can be decomposed
+using the spherical harmonic addition theorem, and that in switching between real and Fourier
+space one may use the spherical expansion of a plane wave to achieve separation of variables;
+see the Appendix of Ref. [13]. The second is the fast Hankel transform [30, 31]. We also have
+to address a number of subtleties to make these ideas useful for the 1-loop SPT integrals.
+
+Our goal in this section is to develop an eﬃcient numerical algorithm to evaluate integrals
+of the form Eq. (2.11). Combining the results for the relevant values of (α, β, l) will then allow
+us to construct P22(k) or other similar functions. For instance, in terms of these components,
+Eq. (2.10) reads
+
+P22(k) = 2
+
+J0,0,0(k) +
+
+1470
+1
+J2,−2,0(k) +
+6
+
+1
+3
+
++
+
+J0,0,2(k) +
+
+671
+1029
+J2,−2,2(k) +
+
+32
+1715
+
+J0,0,4(k)
+
+62
+35
+
+J1,−1,1(k) +
+
+8
+35
+
+(cid:105)
+
+J1,−1,3(k)
+
+(2.12)
+
+.
+
+(cid:104) 1219
+
+– 5 –
+
+To evaluate Eq. (2.11) we ﬁrst Fourier transform to conﬁguration space and then expand the
+Legendre polynomials in spherical harmonics, using Eq. (A.1):
+
+Jαβl(r) =
+
+=
+
+(cid:90) d3k
+(cid:90) d3q1
+(2π)3 eik·rJαβl(k)
+d3q2
+(2π)3 ei(q2+q1)·rqα
+(cid:90) d3q1
+1 qβ
+l(cid:88)
+d3q2
+(2π)3 eiq1·reiq2·rqα
+1 qβ
+
+2l + 1
+
+(2π)3
+
+4π
+
+2 Pl(µ)P (q1)P (q2)
+
+=
+
+The q1 and q2 integrals can each be broken into a radial ((cid:82) ∞
+
+m=−l
+
+(2π)3
+
+S2 d2ˆq1)
+part; the angular parts do not depend on the power spectrum and can be evaluated analyti-
+cally using Eq. (A.4):
+
+0 dq1 q2
+
+lm(ˆq2)P (q1)P (q2) .
+
+2 Ylm(ˆq1)Y ∗
+
+1) and angular ((cid:82)
+(cid:90) ∞
+
+Jαβl(r) =
+
+4π(4π il)2
+
+(2π)6(2l + 1)
+
+Ylm(ˆr)Y ∗
+
+lm(ˆr)
+
+dq1 q2+α
+
+1
+
+jl(q1r)P (q1)
+
+dq2 q2+β
+
+2
+
+jl(q2r)P (q2).
+
+0
+
+(cid:90) ∞
+
+0
+
+(2.13)
+
+(2.14)
+
+l(cid:88)
+
+m=−l
+
+(cid:20)(cid:90) ∞
+
+0
+
+N−1(cid:88)
+
+n=0
+
+Additionally we make use of the orthogonality relation, Eq. (A.2), to eliminate the sum over
+m:
+
+Jαβl(r) =
+
+(−1)l
+4π4
+
+dq1qα+2
+
+1
+
+jl(q1r)P (q1)
+
+dq2qβ+2
+
+2
+
+jl(q2r)P (q2)
+
+.
+
+(2.15)
+
+(cid:21)(cid:20)(cid:90) ∞
+
+0
+
+(cid:21)
+
+N/2(cid:88)
+
+m=−N/2
+
+Equation (2.15) can be considered as one component of a correlation function. For instance,
+the correlation function ξ22(r) [the Fourier counterpart to P22(k)] is built from Eq. (2.15)
+with the same α, β, l combinations and pre-factors as in Eq. (2.10). Equation (2.15) is the
+product of two Hankel transforms (terms in brackets) with the relevant prefactor. We denote
+the bracketed terms in Eq. (2.15) as Iαl(r) and Iβl(r). To evaluate Iαl(r), we ﬁrst take the
+discrete Fourier transformation of the power spectrum (biased by a power of k):
+
+cm = Wm
+
+P (kn)
+
+kν
+n
+
+e−2πimn/N ↔ P (kn) =
+
+cmkν+iηm
+
+n
+
+,
+
+(2.16)
+
+where N is the size of the input power spectrum, ηm = m × 2π/(N ∆), m = −N/2,−N/2 +
+1, ..., N/2 − 1, N/2 and ∆ is the linear spacing, i.e. kn = k0 exp(n∆). For real power spec-
+trum the Fourier coeﬃcients obey c∗
+m = c−m. Here Wm is a window function that can be
+used to smooth the power spectrum.1 Using discrete FFTs allows a signiﬁcant reduction in
+computation time. However, these methods require that the function being transformed is
+(log-)periodic. In the case of FAST-PT, this procedure is equivalent to performing calcula-
+tions in a universe with a power spectrum, biased by a power-law in k, that is log-periodic.
+This universe has divergent power on large or small scales, depending on the choice of ν. Fig-
+ure 2.2 shows the resulting power spectrum, with a window function applied at the periodic
+
+1If no smoothing is desired, we would set Wm = 1 for all m except for W±N/2 = 1
+
+2 ensures that
+the counting of both m = ±N/2 in the second sum in Eq. (2.16) is the correct inverse transform. However,
+in our numerical implementation we always include a window function that goes smoothly to zero to prevent
+ringing in the interpolated P (k); see Appendix C.
+
+2 . The 1
+
+– 6 –
+
+Figure 1. Power spectra in the log-periodic universe: Top panel shows the windowed linear power
+spectrum, while the bottom panel shows the windowed linear power spectrum biased by k−ν (we
+choose ν = −2). In both panels grey lines indicate “satellite” power spectra, i.e. the contribution to
+the total power spectrum that arises due to the periodic assumption in a Fourier transform.
+
+should be ﬁnite, i.e.(cid:82) k
+should be ﬁnite, i.e. (cid:82) ∞
+
+boundaries. In order for perturbation theory to make sense, the large-scale density variance
+0 k(cid:48)2P (k(cid:48))dk(cid:48) should be ﬁnite, and the small-scale displacement variance
+k P (k(cid:48)) dk(cid:48) should be convergent. Since P (k)/kν is log-periodic, this
+means that FAST-PT will require biasing with −3 < ν < −1 (this paper chooses ν = −2).
+
+In most cases, suﬃciently far from the boundaries, the impact of the periodic nature
+of the P (k) is negligible. However, while P22(k) and P13(k) are well-behaved in standard
+methods with CDM power spectra, they are both inﬁnite in FAST-PT where the satellite
+features at extremely large scales (k → 0) produce inﬁnite displacements. This is the same
+inﬁnity found in power-law spectra and is of no physical concern: since displacement is not
+a physical observable, Galilean invariance guarantees that the divergent parts of P22(k) and
+P13(k) will cancel as long as the displacement gradient or strain is ﬁnite.
+In §2.4 we will
+address the numerical aspects of this cancellation and show how to perform a well-behaved
+1-loop SPT calculation in the FAST-PT framework.
+
+– 7 –
+
+10-2710-2310-1910-1510-1110-710-310110510910131017P(k)-20.00-15.00-10.00-5.000.005.0010.0015.00log(k)10-1010-910-810-710-610-510-410-310-210-1100101102P(k)/kνdk kα+2jl(kr)P (k)
+
+(cid:90) ∞
+
+Continuing our evaluation:
+
+0
+
+(cid:90) ∞
+N/2(cid:88)
+(cid:114) π
+(cid:114) π
+
+2
+
+m=−N/2
+
+cm
+
+N/2(cid:88)
+N/2(cid:88)
+
+m=−N/2
+
+2
+
+m=−N/2
+
+Iαl(r) =
+
+=
+
+=
+
+=
+
+dk kν+2+α+iηmjl(kr)
+
+0
+
+cmr−3−ν−α−iηm
+
+(cid:90) ∞
+
+0
+
+cmgαmr−3−ν−α−iηm2Qαm ,
+
+dt t3/2+ν+α+iηmJl+1/2(t)
+
+(2.17)
+
+2 + ν + α + iηm.
+
+spherical Bessel function, jν(z) =(cid:112)π/(2z) Jν+1/2(z) and performed the substitution t = kr.
+
+where in the third equality we have exchanged the Bessel function of the ﬁrst kind for a
+In the last equality we have evaluated the integral according to Eq. (B.1) and deﬁned gαm ≡
+2 , Qαm) and Qαm ≡ 3
+g(l + 1
+Strictly speaking, the convergence criteria for Eq. (2.17) are α < −1 − ν and α + l >
+−3 − ν. For ν = −2 we thus require (i) α < 1 and (ii) α + l > −1. All terms with α = 2
+violate (i), while the α = 2, l = 0 term also violates (ii). The violations of condition (i) can
+be cured if we apply an exponential cutoﬀ in the power spectrum to force the integral to
+converge, i.e. in Eq. (2.17) we insert a factor of e−k and take the limit as  → 0+; this yields
+the same result and is equivalent to smoothing out the “wiggles” in the Bessel functions at
+high k.2 The violation of condition (ii) comes from the low k’s and is more problematic: the
+physical result for I−2,0(r) is divergent, and this will be cured in §2.4. The ﬁnal result for the
+Jαβl(r) correlation component is then
+
+Jαβl(r) =
+
+=
+
+(−1)l
+4π4 Iαl(r)Iβl(r)
+(−1)l
+8π3
+
+N/2(cid:88)
+
+m=−N/2
+
+N/2(cid:88)
+
+n=−N/2
+
+cmcngαmgβn 2Qαm+Qβnr−6−2ν−α−β−iηm−iηn .
+
+(2.18)
+
+To obtain the power spectrum, we Fourier transform Eq. (2.18) back to k-space:
+
+Jαβl(kq) =
+
+dr 4πr2j0(kqr)Jαβl(r)
+
+N/2(cid:88)
+
+N/2(cid:88)
+
+(cid:90) ∞
+
+cmgαmcngβn2Qαm+Qβn
+
+dr r−5−2ν−α−β−i(ηm+ηn) sin(kqr)
+
+,
+
+0
+
+n=−N/2
+
+m=−N/2
+
+2This can be proven by inserting a factor of e−t
+
+kq
+(2.19)
+in Eq. (B.1) and taking the limit as  → 0+.
+Following Eq. (6.621.1) of [34], the integral can be expressed in terms of the hypergeometric function
+; µ + 1;−−2). The transformation formula, Eq. (9.132.2) of [34], can then be used to
+2F1( µ+κ+1
+express a hypergeometric function of large argument −−2 → −∞ in terms of functions of argument ap-
+proaching 0. Using limz→0 2F1(α, β; γ; z) = 1 and the Γ-function duplication formula suﬃces to prove this
+generalized version of Eq. (B.1).
+
+, µ+κ+2
+
+2
+
+2
+
+(cid:90) ∞
+
+0
+
+(−1)l
+2π2
+
+=
+
+– 8 –
+
+where in the ﬁrst equality homogeneity converts the 3-dimensional Fourier transform into a
+Bessel integral, and then we have used j0(z) = sin(z)/z. The integral over r can be evaluated
+using the f-function of Eq. (B.3) via the substitution t = kqr and leads to
+
+Jαβl(kq) =
+
+(−1)l
+2π2
+
+N/2(cid:88)
+
+N/2(cid:88)
+
+m=−N/2
+
+n=−N/2
+
+cmgαmcngβn2Qhk−p−2+iτh
+
+q
+
+fh ,
+
+(2.20)
+
+where we have deﬁned fh = f (p−iτh), p = −5−2ν−α−β, τh = ηm+ηn, and Qh = Qαm+Qβn.
+Note that τh (and hence fh) and Qh depend only on the sum m + n.
+In what follows, we will transform a double summation over m and n into a discrete
+convolution, indexed by h, such that h = m + n ∈ {−N,−N + 1, ..., N − 1, N}. This leads to:
+
+Jαβl(kq) =
+
+=
+
+=
+
+m=−N/2
+
+n=−N/2
+
+N/2(cid:88)
+
+N/2(cid:88)
+π2 22+2ν+α+β(cid:88)
+
+(−1)l
+2π2 23+2ν+α+β
+(−1)l
+
+(−1)l
+π2 22+2ν+α+βk−p−2
+(−1)l
+π2 22+2ν+α+βk−p−2
+
+q
+
+q
+
+h
+
+(cid:88)
+
+h
+
+cmgαmcngβn fhk−p−2+iτh
+
+q
+
+2iτh
+
+[cmgαm ⊗ cngβn]hfh2iτhk−p−2+iτh
+
+q
+
+(2.21)
+
+Chfh2iτh exp(iτh log k0) exp(iτhq∆)
+
+=
+
+IFFT[Chfh2iτh] ,
+
+h Ahkiτh
+
+the sum over m is written as a discrete convolution (cid:80)
+actually an inverse discrete Fourier transform, i.e. (cid:80)
+
+where in the second equality we have replaced n = h− m and in the third and fourth equality
+m cmgαmch−mgβ,h−m = [cmgαm ⊗
+cngβn]h = Ch. Also, due to the log sampling of kq the ﬁnal sum over h in Eq. (2.21) is
+h Ah exp(i2πhq/[2N ]) 3,
+and can thus be evaluated quickly using an FFT. Equation (2.21) is the main analytical result
+of this work, it allows one to evaluate P22(k) type integrals quickly, scaling with N log N.
+
+q = (cid:80)
+
+Since in FAST-PT P (k)/kν is log-periodic, there are discontinuities in the power spec-
+trum at kmin = k0 and kmax = k0eN ∆. This means that when Fourier-space methods are
+applied, the series of Eq. (2.16) will exhibit ringing; the FAST-PT user has several options for
+controlling this behavior. The power spectrum can be windowed in such a way that the edges
+of the array are smoothly tapered to zero (of course, this must be done outside the k-range
+that contributes signiﬁcantly to the mode-coupling integrals). The location of the onset of
+the tapering is controlled by the user. The Fourier coeﬃcients cm can also be windowed so
+that the highest frequencies are damped. The functional form of our window function is pre-
+sented in Appendix C. We have also written the code in such a way that the user can easily
+implement their own window function. One can also zero pad the input array, so that at
+both ends of the input array zeros are added to one’s choosing. Finally, the contributions of
+the mode-coupling integrals from the large-scale satellite power spectrum (k < kmin) heavily
+contaminate P22(k) at k < 2kmin (range restricted by the triangle inequality); therefore we
+recommend zero-padding by a factor of ≥ 2.
+
+3In the last two lines of Eq. (2.21) a shift, exp(iτh log k0), in the Fourier transform appears. In practice,
+our code does not compute this shift which also appears in the initial Fourier transform and thus cancels.
+Additionally, to conform to Python Fourier conventions we drop the positive end point in the ﬁnal FFT.
+
+– 9 –
+
+2.3 P13(k) type Convolution Integrals
+The P13(k) integral does not share the same form as P22(k), since the wavenumber structure
+is diﬀerent: it describes a correction to the propagator for Fourier mode k due to interaction
+with all other modes q. The structure of P13(k) is thus P (k) times an integral over the power
+in all other modes:
+
+P13(k) =
+
+k3
+
+252(2π)2 Plin(k)
+
+where
+
+(cid:90) ∞
+
+0
+
+dr r2Plin(kr)Z(r) ,
+
+(2.22)
+
+(2.23)
+
+(2.24)
+
+3
+
+Z(r) =
+
+12
+
+r4 − 158
+
+r2 + 100 − 42r2 +
+r5 (7r2 + 2)(r2 − 1)3 log
+(cid:90) ∞
+and r = q/k. Upon making the substitution r = e−s, Eq. (2.22) becomes
+(cid:90) ∞
+(cid:90) −∞
+
+252(2π)2 Plin(k)
+
+252(2π)2 Plin(k)
+
+ds e−3sPlin(elog k−s)Z(e−s)
+
+dr r2Plin(kr)Z(r)
+
+P13(k) =
+
+0
+
+−∞
+
+=
+
+k3
+
+k3
+
+k3
+
+r + 1
+|r − 1| ,
+
+=
+
+252(2π)2 Plin(k)
+
+∞
+
+ds G(s)F (log k − s) ,
+
+where in the ﬁnal line we reveal the integral as a continuous integral with the following
+deﬁnitions G(s) ≡ e−3sZ(e−s) and F (s) ≡ Plin(es). In the discrete domain we have ds → ∆,
+log kn = log k0 + n∆, and sm = log k0 + m∆, so that the discrete form is
+
+(cid:90) −∞
+
+∞
+
+N−1(cid:88)
+
+m=0
+
+ds G(s)F (log k − s) → ∆
+
+GD(m)FD(n − m) ,
+
+(2.25)
+
+where in the ﬁnal line we deﬁne the discrete functions GD(m) ≡ G(sm) and FD(m) ≡ F (m∆),
+so that we have
+
+P13(kn) =
+
+k3
+n
+
+252(2π)2 Plin(kn)∆[GD ⊗ FD][n] .
+
+(2.26)
+
+Thus P13(k), which at ﬁrst appears to involve order N 2 steps (an integral over N samples at
+each of N output values kn) can in fact be computed for all output kn in N log N steps.
+
+2.4 Regularization
+As mentioned above, we need to regularize the divergent portion in P22(k) with P13(k).
+In standard calculations in a ΛCDM universe, the suppression of power on large scales
+[P (k) ∝ kn, n > −1] controls this divergence, allowing the numerical evaluation of each
+term separately. The relevant cancellation will then occur upon addition of the terms, as long
+as suﬃcient numerical precision has been achieved. However, because the FAST-PT method
+relies on FFTs, the “true” underlying power spectrum is log-periodic, leading to non-vanishing
+power on inﬁnitely large (and small) scales. These divergences are thus numerically realized
+and must be analytically removed before evaluation. Physically the divergences are due to
+the artiﬁcial breaking of local Galilean invariance when the 1-loop SPT power is split into
+
+– 10 –
+
+P22(k) and P13(k): a long-wavelength (q (cid:28) k) velocity perturbation displaces small-scale
+structure without aﬀecting its evolution, but since the perturbative expansion terms δ(n) are
+deﬁned with respect to a stationary background, each term in perturbation theory shows a
+divergence even when the physically relevant sum does not. This fact is well-known in the
+context of P22 + P13 [35] and has been generalized to higher orders [36, 37].
+
+We construct our regularization scheme so that it preserves the 1-loop contribution to
+
+power spectrum, i.e.
+
+P22(k) + P13(k) = P22,reg(k) + P13,reg(k) ,
+
+(2.27)
+
+where the subscript “reg" stands for regularization, by subtracting out the contribution to
+P13(k) from small q = kr in Eq. (2.22), and adding it to the J2,−2,0(k) contribution in P22(k)
+to obtain a regularized P22,reg(k). We ﬁrst expand the kernel in Eq. (2.22) in a Laurent series
+around small r:
+
+r2Z(r) = −168 +
+
+928
+5
+
+r2 − 4512
+35
+
+r4 +
+
+(2.28)
+If P13(k) were dominated by contributions from large-scale modes (i.e. r (cid:28) 1), as occurs when
+there is an infrared divergence, then we could make the replacement r2Z(r) → −168 and ﬁnd
+that P13(k) approaches
+P13(k) → − 168 k3
+
+(cid:90) d3q
+
+(cid:90) ∞
+
+k2Plin(k)
+
+r8 + ... .
+
+(2.29)
+
+Plin(q)
+
+r6 +
+
+.
+
+2656
+1155
+
+416
+21
+
+drPlin(kr) = − 1
+3
+
+252(2π)2 Plin(k)
+
+0
+
+(2π)3
+
+q2
+
+We then subtract this oﬀ from the kernel Z(r) so that
+
+Zreg(r) = Z(r) +
+
+168
+r2 =
+
+12
+r4 +
+
+The regularized version of P13(k) is
+
+10
+
+r2 + 100 − 42r2 +
+(cid:90) ∞
+(cid:90) ∞
+
+0
+
+k3
+
+k3
+
+252(2π)2 Plin(k)
+
+252(2π)2 Plin(k)
+
+−∞
+
+P13,reg(k) =
+
+=
+
+3
+
+r5 (7r2 + 2)(r2 − 1)3 log
+
+r + 1
+|r − 1| .
+
+(2.30)
+
+dr r2Plin(kr)Zreg(r)
+
+ds e3sPlin(elog k+s)Zreg(es) ,
+
+(2.31)
+
+which can be evaluated numerically in the same manner that was presented in § 2.3. To
+regularize J2,−2,0(k) we take the power that we subtracted from P13(k)
+
+∆P (k) = P13(k) − P13,reg(k) = − k2
+3
+
+P (k)
+
+Plin(q)
+
+,
+
+(2.32)
+
+and add it to J2,−2,0(k). To do this, we ﬁrst take the Fourier transform of Eq. (2.32):
+
+(cid:90) d3q
+(cid:90) d3q2
+
+(2π)3
+
+q2
+
+∆ξ(r) =
+
+(cid:90) d3q1
+(2π)3 eiq1·r∆P (q1) = − 1
+3
+= − 1
+12π4
+
+(cid:90) d3q1
+(cid:20)(cid:90) ∞
+(2π)3 eiq1·rq2
+dq1 q4
+
+1Plin(q1)
+
+1Plin(q1)j0(q1r)
+
+(2π)3
+
+Plin(q2)
+
+(cid:21)(cid:20)(cid:90) ∞
+
+q2
+2
+
+(cid:21)
+
+0
+
+dq2 Plin(q2)
+
+.
+
+(2.33)
+
+0
+
+– 11 –
+
+Since J2,−2,0(r) appears in ξ22(r) with a factor of 1
+3 – see Eq. (2.12) – it follows that 3∆ξ(r)
+should be added to J2,−2,0(r) if we want to preserve the sum P22(k) + P13(k) in the regular-
+ization process. This leads to a regularized J2,−2,0(r):
+
+J[2,−2,0 reg](r) = J2,−2,0(r) + 3∆ξ(r)
+
+(cid:20)(cid:90) ∞
+
+0
+
+=
+
+1
+4π4
+
+(cid:21)(cid:26)(cid:90) ∞
+
+0
+
+dq1 q4
+
+1Plin(q1)j0(q1r)
+
+dq2 Plin(q2)[j0(q2r) − 1]
+
+(2.34)
+
+.
+
+(cid:27)
+
+The left bracket of Eq. (2.34) proceeds in the same manner as presented in §2.2. The right
+bracket in Eq. (2.34) requires some additional work:
+
+(cid:20) sin(q2r)
+
+q2r
+
+(cid:21)
+
+− 1
+
+(2.35)
+
+dq2 Plin(q2)[j0(q2r) − 1]
+
+(cid:90) ∞
+
+cn
+
+0
+
+dq2 qν+iηn
+
+2
+
+cnr−1−ν−iηngreg
+
+n
+
+,
+
+0
+
+n=−N/2
+
+(cid:90) ∞
+N/2(cid:88)
+N/2(cid:88)
+(cid:18) sin z
+
+n=−N/2
+
+I−2,0,reg =
+
+=
+
+=
+
+(cid:90) ∞
+
+0
+
+(cid:19)
+
+where the integral may be evaluated by substituting z = kr and ﬁnding:
+
+greg
+n (Qreg
+
+n ) =
+
+dz zν+iηn
+
+− 1
+
+z
+
+= Γ(Qreg
+
+n ) sin
+
+πQreg
+n
+2
+
+= f (Qreg
+n )
+
+(2.36)
+
+n = ν + iηn.4 The last equality uses Eq. (B.3), and ensures that greg
+
+and Qreg
+n ) can be
+evaluated using the same numerical machinery used for the Jαβl(k) integrals. The ﬁnal result
+for J[2,−2,0,reg](k) is completely analogous to the method in § 2.2, with the only exception
+that gn is replaced by greg
+n and the factor 2Qh is replaced by 2Q−2,n in Eq. (2.20). FAST-PT
+allows the user to specify which case is desired.
+
+n (Qreg
+
+3 Performance
+
+We now discuss the results from the FAST-PT algorithm. Unless otherwise noted, results
+are based on the input linear power spectrum generated by the Boltzman solver CAMB [38],
+assuming a ﬂat ΛCDM cosmology corresponding to the recent Planck results [39]. Timing
+results were obtained on a MacBook Pro Retina laptop computer, with a 2.5 GHz Intel Core
+i5 processor and running OS X version 10.10.3. We used Python version 2.7.10, numpy 1.8.2,
+and scipy 0.15.1.
+
+1-loop Results
+
+3.1
+To test our method we evaluated the 1-loop SPT correction to the power spectrum, P22(k) +
+P13(k). We sample the power spectrum for 3000 k−points from log10 kmin = −4 to log10 kmax =
+2 and we additionally pad our input signal with 500 zeros at both ends of the array. A typical
+4This integral is valid for its range of convergence, −3 < ν < −1. A straightforward way to prove this is to
+insert a factor of e−z, with  small and positive, into the integrand; then expanding sin z = (eiz + e−iz)/(2i)
+n + 1). Taking the limit of  → 0+
+leads to a sum of three Γ-functions, two with Γ(Qreg
+causes the latter to drop out and the remaining two to give Eq. (2.36).
+
+n ) and one with Γ(Qreg
+
+– 12 –
+
+run for a sample of this size takes FAST-PT a total time ∼ 0.25 seconds on a laptop. We
+recommend that FAST-PT users sample the input power spectrum on a grid larger than
+desired and then trim the output to the desired range to avoid wrapping eﬀects. We take this
+approach and present our results on a grid from kmin = 0.003 to kmax = 50. The top panel
+Fig. 2 plots our FAST-PT results, while the bottom panel plots the ratio of our FAST-PT
+calculations to a conventional method.5 We observe that our new method can recover the
+1-loop power spectrum to less than a percent accuracy. The noise observed in the bottom
+panel of Fig. 2 is due to noise in the input power spectrum from CAMB; any integration
+method must interpolate this noise, and this results in noise in the output spectrum P22 + P13
+which diﬀers depending on the method. At high k, the noise in P22 +P13 is larger than (and of
+opposite sign to) the noise in Plin(k), which is a phenomenon common to diﬀusion problems
+and is the correct mathematical solution to SPT, where re-normalization or re-summation
+techniques are not used (see §3.2). The sharp spike around k = 0.1h/Mpc is due to the zero
+crossing of the 1-loop power spectrum, where ratios of corrections suﬀer from a “0/0” ambigu-
+ity. We conclude that diﬀerences between FAST-PT results and those from our conventional
+method are negligible on the scales of interest.
+
+Fig. 3 plots estimated run time versus grid size. A solid black line in the left panel plots
+the average recurring time (i.e. the time of execution after initialization of the FAST-PT
+class) for 100 runs. The grey band covers the area enclosed by ± one standard deviation.
+The right panel plots the average initialization time for 100 runs, i.e. the time to initialize the
+FAST-PT python-class and evaluate all functions that only depend on grid size (for example
+gαn). The total time for one one-loop evaluation is the addition of the black line in the right
+and left panels. Run time can vary across machines, so Fig. 3 serves only as an estimate.
+
+3.2 Renormalization Group Flow
+The renormalization group (RGPT) method of [23, 24] provides a more accurate model for the
+power spectrum than SPT [40–42], providing signiﬁcant improvement to both the structure
+of the BAO feature and the broadband power at smaller scales (higher k). The RG evolution
+equation is
+
+dP (k, λ)
+
+dλ
+
+= G2[P (k, λ), P (k, λ)] ,
+
+(3.1)
+
+where G2[P, P ] is the standard 1-loop correction to the power spectrum, i.e. P22(k) + P13(k)
+with the caveat that the input power spectrum need not be the linear power spectrum. The
+parameter λ is a "coupling" strength parameter proportional to the growth factor squared.
+One can imagine that Eq. (3.1) represents a time-evolution of the power spectrum (in an
+Einstein-deSitter universe) starting at P (k, λ = 0) = Plin(k), moving forward in time by
+a small step, using perturbation theory to update the power spectrum, and then using the
+updated power spectrum as the initial condition for the next step, iterating until one reaches
+λ = 1.
+
+However, despite the potential advantages of the RG approach, it can be quite numeri-
+cally intensive. Eq. (3.1) is a stiﬀ equation and becomes unstable when the integration step
+
+5The “conventional” method is a ﬁxed-grid 2D integration code. Here P22 was computed by putting k
+on the z-axis and writing q in cylindrical coordinates. The azimuthal integral is trivial. We sample the
+integrand logarithmically in the radial direction q⊥, and stretch the vertical direction according to qz/k =
+1 + sinh(20υ)/[2 sinh(20)], with υ > −1. This samples half of space (so the result must be doubled) and by
+uniformly sampling in υ, it places higher resolution near q ≈ k, which is important to correctly sample the
+contribution to P22 from advection by very long-wavelength modes. The P13 integral was log-sampled in r.
+
+– 13 –
+
+Figure 2. FAST-PT 1-loop power spectrum results versus those computed using a conventional
+ﬁxed-grid method. The top panel shows FAST-PT results for P22(k) + P13(k) (the dashed line is for
+negative values). The bottom panel plots the ratio between FAST-PT and the conventional method.
+
+Figure 3. Estimate of FAST-PT execution time to number of grid points scaling. The left panel
+plots the average one-loop evaluation time, after initialization of the FAST-PT class. The right panel
+plots the average time required for initialization of FAST-PT class for 100 runs. For a sample of grid
+points, the error is computed by taking the standard deviation of 100 runs.
+
+size is too large, and it requires an evaluation of the 1-loop SPT kernel at every step. Conven-
+tional computational methods are thus extremely time consuming. The speed of FAST-PT
+
+– 14 –
+
+0.010.101.0010.0010-210-1100101102103P22(k)+P13(k) [Mpc/h]30.010.101.0010.00k [h/Mpc]0.9900.9951.0001.0051.010ratio to conventional method50010001500200025003000number of grid points0.000.010.020.030.040.050.060.070.08time [seconds]average of execution time50010001500200025003000number of grid points0.000.010.020.030.040.050.06average time to initializemakes this calculation signiﬁcantly more feasible. We have compared our RG ﬂow results with
+those obtained from the Copter code [40, 43], a publicly available code written in C++.
+We have found that for RG ﬂow our code can obtain results in substantially less time. For
+instance, on a 200 point grid, from kmin = 0.01 to kmax = 10, our FAST-PT RG ﬂow results
+take ∼ 5 seconds, while Copter RG ﬂow results take over 5 minutes. In Appendix D we
+explain our integration routine, as well as document RG-ﬂow run times for various grid sizes.
+A FAST-PT user must consider the stiﬀ nature of Eq. (3.1) when choosing a step size for
+the integration; we recommend that they consult Appendix D.
+
+The left hand panel of Fig. 4 shows our renormalization group and SPT results compared
+to linear theory. In our analysis we performed two renormalization group runs: one to kmax =
+5 hMpc−1 and another to kmax = 50 hMpc−1. Our results are consistent with the plots found
+in [23] (note that in our runs we include the BAO feature). The right hand panel of Fig. 4
+plots the eﬀective power law index as a function of k, neﬀ = d log P/d log k. Here we see two
+characteristic features of RG evolution, the damping of the BAO and neﬀ approaching a ﬁxed
+point value of ∼ −1.4.
+
+Figure 5 shows the eﬀect of a boundary condition within our numerical algorithm. We
+integrate Eq. (3.1) for some kmin and kmax. The kmax boundary does not allow for power to
+continuously ﬂow from larger to smaller scales, as would occur for inﬁnite boundary conditions.
+As a result power builds up at high-k causing the plateau observed in Fig. 5. The insert in
+Fig. 5 shows nneﬀ. We do see that before the onset of the plateau neﬀ does approach ∼ −1.4
+and this designates a region where RG results at ﬁnite kmax reproduce the asymptotic behavior
+as kmax → ∞.
+
+Figure 5 also shows another interesting feature, the removal of noise in the RG-framework.
+As mentioned earlier, linear power spectrum generated by CAMB contains low-level noise.
+This noise is most easily visualized through a derivative, for instance neﬀ. One can see that
+neﬀ for the linear power spectrum in Fig. 5 is noisy, particularly at large k. Under the RG
+evolution this noise is washed away, as seen in the RG neﬀ results. This is a result of the
+fact that noise in Plin(k) results in “negative” noise features in P13(k). Under the RG ﬂow,
+this feature causes noise initially present to be smeared away in the nonlinear regime. This
+is also what happens in the real universe, since features in the power spectrum at small ∆k
+correspond to correlations at large real-space scales ∼ 2π/∆k, which are smeared out by
+advection; this eﬀect is responsible for the familiar BAO peak smearing [44].
+
+4 Summary
+
+In this paper we have introduced FAST-PT, a simple code that can calculate power spec-
+trum in standard perturbation theory to 1-loop order. FAST-PT oﬀers the community an
+eﬃcient method to calculate convolution integrals such as those appearing in SPT and sim-
+ilar approaches. The code is modular and written in a high-level language (Python), but
+due to algorithmic improvements it is extremely fast. The keys to the algorithm are locality
+(expressing the conﬁguration-space mode coupling integral Jαβl in terms of the product of
+two integral transforms of the power spectrum); scale independence of the physics of gravity
+(hence simple behavior of power laws); and the FFT (which enables log-spaced data to be
+converted into a superposition of power laws and vice versa). The recurring cost of the 1-loop
+SPT calculations is presented in Fig. 3, for a linear power spectrum sampled on a 3000 point
+grid, one can expect to obtain results in ∼ 0.07 seconds. The time for RG results in tabulated
+
+– 15 –
+
+Figure 4. FAST-PT Renormalization group results for kmax = {5, 50}hMpc−1. Left panel shows
+Renormalization group results and SPT results compared to the linear power spectrum (see legend
+in right panel). Right panel shows neﬀ = d log P/d log k for Renormalization group, SPT, and linear
+theory.
+
+Figure 5. Renormalization group results out to kmax = 20hMpc−1. A plateau at high-k develops
+due to boundary conditions. Insert shows neﬀ(k) = d log P/d log k.
+
+in Tables 1 and 2. For a linear power spectrum sampled on 500 point grid from kmin = 0.001
+to kmax = 10, RG results are obtained in less than 10 seconds.
+
+We have demonstrated FAST-PT in the context of 1-loop SPT and the RG ﬂow. How-
+ever, we are working to extend the technique to other problems in cosmological perturbation
+
+– 16 –
+
+0.101.00k [h/Mpc]1.01.52.02.53.03.54.04.55.0P/Plinear0.101.00k [h/Mpc]3.02.52.01.51.00.50.00.5neff(k) linearSPT 1-loopRenormalization Group (kmax=5h/Mpc)Renormalization Group (kmax=50h/Mpc)0.000.010.101.0010.00k [h/Mpc]10-210-1100101102103104105P(k)LinearRenormalization Group0.0010.0100.1001.00010.000k3.02.52.01.51.00.50.00.5neff(k)theory. For instance, when the evolution of ﬂuctuation modes is given by a scale-dependent
+propagator, the time- and scale-dependence of each mode can no longer be separated [29].
+Such a scenario arises in the presence of massive neutrinos, where growth of structure is
+suppressed on small scales due to free-streaming [45]. Solving for nonlinear evolution in
+such a scenario can be done using a time-ﬂow approach [46], requiring many evaluations of
+mode-coupling integrals. It is similar to the RG ﬂow described above, but with some extra
+complications, particularly due to the scale dependence of the propagators (note that our Jαβl
+integrals include only power-law dependences on the magnitudes of q1 and q2), and the fact
+that the Green’s function solution for the bispectrum (needed to reduce the power spectrum
+solution to a mode-coupling integral) involves products of power spectra at unequal time.
+We are investigating the extent to which these complications can be grafted onto FAST-PT.
+Another potential future extension is to mode coupling of vector or tensor ﬁelds, as arise in
+the calculation of nonlinear intrinsic alignment correlations (e.g. [19, 20]). While ﬁelds of
+arbitrary spin introduce additional indices, the basic features of the FAST-PT framework
+apply to this case. An extension of the code to such ﬁelds will be presented in a future paper.
+Our Python code is publicly available at https://github.com/JoeMcEwen/FAST-PT and
+includes a user manual. We also provide Python scripts to reproduce 1-loop power spectrum,
+renormalization group results, and animations for renormalization group results.
+
+Acknowledgments
+
+JM is supported by NSF grant AST1516997. XF is supported by the Simons Foundation,
+and CH by the Simons Foundation, the US Department of Energy, the Packard Foundation,
+and NASA. JB is supported by a CCAPP Fellowship. JM thanks Ben Wibking for useful
+discussions concerning the numerical integration of stiﬀ equations and Chris Orban for help
+setting up Copter. We thank David Weinberg for general feedback on the FAST-PT project.
+
+References
+
+[1] DESI collaboration, M. Levi et al., The DESI Experiment, a whitepaper for Snowmass 2013,
+
+1308.0847.
+
+[2] K. S. Dawson, D. J. Schlegel, C. P. Ahn, S. F. Anderson, É. Aubourg, S. Bailey et al., The
+
+Baryon Oscillation Spectroscopic Survey of SDSS-III, Astron. J. 145 (Jan., 2013) 10,
+[1208.0022].
+
+[3] R. Laureijs, J. Amiaux, S. Arduini, J. . Auguères, J. Brinchmann, R. Cole et al., Euclid
+
+Deﬁnition Study Report, ArXiv e-prints (Oct., 2011) , [1110.3193].
+
+[4] Dark Energy Survey Collaboration, T. Abbott, F. B. Abdalla, S. Allam, J. Aleksic, A. Amara
+
+et al., The Dark Energy Survey: more than dark energy - an overview, ArXiv e-prints (Jan.,
+2016) , [1601.00329].
+
+[5] D. Spergel, N. Gehrels, J. Breckinridge, M. Donahue, A. Dressler, B. S. Gaudi et al.,
+
+Wide-Field InfraRed Survey Telescope-Astrophysics Focused Telescope Assets WFIRST-AFTA
+Final Report, ArXiv e-prints (May, 2013) , [1305.5422].
+
+[6] D. H. Weinberg, M. J. Mortonson, D. J. Eisenstein, C. Hirata, A. G. Riess and E. Rozo,
+
+Observational probes of cosmic acceleration, Phys. Rep. 530 (Sept., 2013) 87–255, [1201.2434].
+[7] V. Springel, C. S. Frenk and S. D. M. White, The large-scale structure of the Universe, Nature
+
+440 (Apr., 2006) 1137–1144, [astro-ph/0604561].
+
+– 17 –
+
+[8] F. Bernardeau, S. Colombi, E. Gaztañaga and R. Scoccimarro, Large-scale structure of the
+
+Universe and cosmological perturbation theory, Phys. Rep. 367 (Sept., 2002) 1–248,
+[astro-ph/0112551].
+
+[9] M. Crocce and R. Scoccimarro, Nonlinear evolution of baryon acoustic oscillations,
+
+Phys. Rev. D 77 (Jan., 2008) 023533, [0704.2783].
+
+[10] N. S. Sugiyama and D. N. Spergel, How does non-linear dynamics aﬀect the baryon acoustic
+
+oscillation?, J. Cosmo. Astropart. Phys. 2 (Feb., 2014) 042, [1306.6660].
+
+[11] J. Yoo, N. Dalal and U. Seljak, Supersonic relative velocity eﬀect on the baryonic acoustic
+
+oscillation measurements, J. Cosmo. Astropart. Phys. 7 (July, 2011) 018, [1105.3732].
+
+[12] J. Yoo and U. Seljak, Signatures of ﬁrst stars in galaxy surveys: Multitracer analysis of the
+
+supersonic relative velocity eﬀect and the constraints from the BOSS power spectrum
+measurements, Phys. Rev. D 88 (Nov., 2013) 103520, [1308.1401].
+
+[13] Z. Slepian and D. J. Eisenstein, On the signature of the baryon-dark matter relative velocity in
+
+the two- and three-point galaxy correlation functions, Mon. Not. R. Astron. Soc. 448 (Mar.,
+2015) 9–26, [1411.4052].
+
+[14] J. Blazek, J. E. McEwen and C. M. Hirata, Streaming velocities and the baryon-acoustic
+
+oscillation scale, ArXiv:151003554B (Oct., 2015) , [1510.03554].
+
+[15] P. McDonald, Clustering of dark matter tracers: Renormalizing the bias parameters,
+
+Phys. Rev. D 74 (Nov., 2006) 103512, [astro-ph/0609413].
+
+[16] P. McDonald and A. Roy, Clustering of dark matter tracers: generalizing bias for the coming
+
+era of precision LSS, J. Cosmo. Astropart. Phys. 8 (Aug., 2009) 020, [0902.0991].
+
+[17] R. Scoccimarro, Redshift-space distortions, pairwise velocities, and nonlinearities, Phys. Rev. D
+
+70 (Oct., 2004) 083007, [astro-ph/0407214].
+
+[18] Z. Vlah, U. Seljak, P. McDonald, T. Okumura and T. Baldauf, Distribution function approach
+
+to redshift space distortions. Part IV: perturbation theory applied to dark matter, J. Cosmo.
+Astropart. Phys. 11 (Nov., 2012) 009, [1207.0839].
+
+[19] C. M. Hirata and U. Seljak, Intrinsic alignment-lensing interference as a contaminant of
+
+cosmic shear, Phys. Rev. D 70 (Sept., 2004) 063526, [astro-ph/0406275].
+
+[20] J. Blazek, Z. Vlah and U. Seljak, Tidal alignment of galaxies, J. Cosmo. Astropart. Phys. 8
+
+(Aug., 2015) 015, [1504.02510].
+
+[21] N. S. Sugiyama, Using Lagrangian Perturbation Theory for Precision Cosmology, Astrophys. J.
+
+788 (June, 2014) 63, [1311.0725].
+
+[22] M. Crocce and R. Scoccimarro, Renormalized cosmological perturbation theory, Phys. Rev. D
+
+73 (Mar., 2006) 063519, [astro-ph/0509418].
+
+[23] P. McDonald, Dark matter clustering: A simple renormalization group approach, Phys. Rev. D
+
+75 (Feb., 2007) 043514, [astro-ph/0606028].
+
+[24] P. McDonald, What the ”simple renormalization group” approach to dark matter clustering
+
+really was, ArXiv e-prints (Mar., 2014) , [1403.7235].
+
+[25] D. Baumann, A. Nicolis, L. Senatore and M. Zaldarriaga, Cosmological non-linearities as an
+
+eﬀective ﬂuid, J. Cosmo. Astropart. Phys. 7 (July, 2012) 051, [1004.2488].
+
+[26] J. J. M. Carrasco, M. P. Hertzberg and L. Senatore, The eﬀective ﬁeld theory of cosmological
+
+large scale structures, Journal of High Energy Physics 9 (Sept., 2012) 82, [1206.2926].
+
+[27] E. Pajer and M. Zaldarriaga, On the renormalization of the eﬀective ﬁeld theory of large scale
+
+structures, J. Cosmo. Astropart. Phys. 8 (Aug., 2013) 037, [1301.7182].
+
+– 18 –
+
+[28] M. P. Hertzberg, Eﬀective ﬁeld theory of dark matter and structure formation: Semianalytical
+
+results, Phys. Rev. D 89 (Feb., 2014) 043521, [1208.0839].
+
+[29] B. Audren and J. Lesgourgues, Non-linear matter power spectrum from Time Renormalisation
+
+Group: eﬃcient computation and comparison with one-loop, J. Cosmo. Astropart. Phys. 10
+(Oct., 2011) 037, [1106.2607].
+
+[30] J. D. Talman, Numerical fourier and bessel transforms in logarithmic variables, Journal of
+
+computational physics 29 (1978) 35–48.
+
+[31] A. J. S. Hamilton, Uncorrelated modes of the non-linear power spectrum, Mon. Not. R. Astron.
+
+Soc. 312 (Feb., 2000) 257–284, [astro-ph/9905191].
+
+[32] M. Schmittfull, Z. Vlah and P. McDonald, Fast Large Scale Structure Perturbation Theory
+
+using 1D FFTs, 1603.04405.
+
+[33] M. Abramowitz and I. A. Stegun, Handbook of mathematical functions: with formulas, graphs,
+
+and mathematical tables. No. 55. Courier Corporation, 1964.
+
+[34] I. S. Gradshteyn and I. M. Ryzhik, Table of integrals, series and products. 1994.
+[35] E. T. Vishniac, Why weakly non-linear eﬀects are small in a zero-pressure cosmology, Mon.
+
+Not. R. Astron. Soc. 203 (Apr., 1983) 345–349.
+
+[36] B. Jain and E. Bertschinger, Self-similar Evolution of Gravitational Clustering: Is N = -1
+
+Special?, Astrophys. J. 456 (Jan., 1996) 43, [astro-ph/9503025].
+
+[37] R. Scoccimarro and J. Frieman, Loop Corrections in Nonlinear Cosmological Perturbation
+
+Theory, Astrophys. J. Supp. 105 (July, 1996) 37, [astro-ph/9509047].
+
+[38] A. Lewis, A. Challinor and A. Lasenby, Eﬃcient Computation of Cosmic Microwave
+
+Background Anisotropies in Closed Friedmann-Robertson-Walker Models, Astrophys. J. 538
+(Aug., 2000) 473–476, [astro-ph/9911177].
+
+[39] Planck Collaboration, P. A. R. Ade, N. Aghanim, M. Arnaud, M. Ashdown, J. Aumont et al.,
+
+Planck 2015 results. XIII. Cosmological parameters, ArXiv:50201589P (Feb., 2015) ,
+[1502.01589].
+
+[40] J. Carlson, M. White and N. Padmanabhan, Critical look at cosmological perturbation theory
+
+techniques, Phys. Rev. D 80 (Aug., 2009) 043531, [0905.0479].
+
+[41] L. M. Widrow, P. J. Elahi, R. J. Thacker, M. Richardson and E. Scannapieco, Power spectrum
+
+for the small-scale Universe, Mon. Not. R. Astron. Soc. 397 (Aug., 2009) 1275–1285,
+[0901.4576].
+
+[42] C. Orban and D. H. Weinberg, Self-similar bumps and wiggles: Isolating the evolution of the
+
+BAO peak with power-law initial conditions, Phys. Rev. D 84 (Sept., 2011) 063501,
+[1101.1523].
+
+[43] J. Carlson, “Copter: Cosmological perturbation theory.” Astrophysics Source Code Library,
+
+Apr., 2013.
+
+[44] H.-J. Seo and D. J. Eisenstein, Improved Forecasts for the Baryon Acoustic Oscillations and
+
+Cosmological Distance Scale, Astrophys. J. 665 (Aug., 2007) 14–24, [astro-ph/0701079].
+[45] D. Blas, M. Garny, T. Konstandin and J. Lesgourgues, Structure formation with massive
+
+neutrinos: going beyond linear theory, J. Cosmo. Astropart. Phys. 11 (Nov., 2014) 039,
+[1408.2995].
+
+[46] M. Pietroni, Flowing with time: a new approach to non-linear cosmological perturbations, J.
+
+Cosmo. Astropart. Phys. 10 (Oct., 2008) 036, [0806.0971].
+
+[47] V. Alexiades, G. Amiez and P.-A. Gremaud, Super-time-stepping acceleration of explicit
+
+schemes for parabolic problems, Communications in numerical methods in engineering 12
+(1996) 31–42.
+
+– 19 –
+
+A Mathematical Identities
+
+In this work we have used a number of common mathematical identities. These identities are
+easily found in any standard mathematical physics text, (e.g. [33]). However, to make our
+paper self-contained we list those relevant to our paper. In § 2.2 we used the following special
+function identities: the addition theorem
+
+l(cid:88)
+
+Pl(ˆq1 · ˆq2) =
+
+4π
+
+Ylm(ˆq1)Y ∗
+
+lm(ˆq2);
+
+2l + 1
+
+m=−l
+
+the special case thereof,
+
+l(cid:88)
+the orthonormality relation (cid:90)
+
+m=−l
+
+Ylm(θ, φ)Y ∗
+
+lm(θ, φ) =
+
+2l + 1
+
+4π
+
+;
+
+d2ˆk Ylm(ˆk)Y ∗
+
+l(cid:48)m(cid:48)(ˆk) = δll(cid:48)δmm(cid:48) ;
+
+S2
+
+(A.1)
+
+(A.2)
+
+(A.3)
+
+(cid:90)
+
+S2
+
+(cid:90) ∞
+
+0
+
+and the expansion/decomposition of a plane wave:
+
+d2ˆq Y ∗
+
+lm(ˆq)eiq·r = 4πiljl(qr)Y ∗
+
+lm(ˆr) ↔ eiq·r = 4π
+
+(cid:88)
+
+l
+
+l(cid:88)
+
+m=−l
+
+iljl(qr)
+
+Y ∗
+lm(ˆq)Ylm(ˆr) .
+
+(A.4)
+
+B Γ-function identities and evaluations
+
+We make extensive use of the following integral (see pg. 486 of Ref. [33]):
+
+dt tκJµ(t) = 2κ Γ [(µ + κ + 1)/2]
+Γ [(µ − κ + 1)/2]
+
+= 2κg(µ, κ) , (cid:60)κ < 1/2 , (cid:60)(κ + µ) > −1 ,
+
+(B.1)
+
+where we deﬁne the Γ-function ratio:
+
+A second useful integral is
+
+f (ρ) ≡
+
+dt tρ−1 sin t = Γ(ρ) sin
+
+(cid:90) ∞
+
+0
+
+g(µ, κ) =
+
+Γ [(µ + κ + 1)/2]
+Γ [(µ − κ + 1)/2]
+
+.
+
+(cid:19)
+
+(cid:18) 1
+
+2
+
+, ρ − 1
+2
+
+(B.2)
+
+(B.3)
+
+√
+
+π
+2
+
+πρ
+2
+
+=
+
+2ρg
+
+for −1 < (cid:60)ρ < 1. The second equality is Eq. (3.761.4) of Ref. [34]. The last expression is an
+evaluation of the integral Eq. (B.1) and the relation
+
+(cid:114) πt
+
+2
+
+sin t =
+
+J1/2(t).
+
+(B.4)
+
+We use the second or third expressions to deﬁne f (ρ) via analytic continuation to values of ρ
+outside the domain of convergence of the integral.
+
+– 20 –
+
+∞(cid:88)
+
+m=1
+
+The numerical evaluation of g(µ, σ) in FAST-PT uses the scipy gamma function for
+most values. However, when the argument to the Γ-function has a large complex value
+numerical overﬂows may occur. Therefore when |(cid:61)σ| > 200 we use an asymptotic form for
+our evaluations [Eq. (6.1.40) of Ref. [33]]:
+
+log Γ(z) ≈ (z − 1/2) log z − z +
+
+1
+2
+
+log 2π +
+
+B2m
+
+2m(2m − 1)z2m−1 ,
+
+(B.5)
+
+for z → ∞ in | arg z| < π. Here B2m are the Bernoulli numbers; we ﬁnd that only the ﬁrst two
+30 are necessary at |(cid:61)σ| > 200 to achieve an error of < 10−13 in
+terms B2 = 1
+log Γ(z). To avoid overﬂows, the logarithms are diﬀerenced to give log g(µ, κ) and this result
+is exponentiated.
+
+6 and B4 = − 1
+
+The function f in Eq. (B.3) may be numerically evaluated using a Γ-function routine,
+but we prefer to use our routines for g. This is because f itself is well-behaved near ρ = 0
+(the Γ function has a simple pole and the sine function has a single zero), but the Γ-function
+expression in Eq. (B.3) is ill-behaved. In contrast, our implementation of the function g is
+well-behaved at ρ = 0.
+
+C Mitigation of Edge Eﬀects
+
+Fourier methods are susceptible to ringing eﬀects due to discontinuities in the input signal.
+To mitigate ringing we smoothly tapper the array edges of our input power spectrum and
+Fourier coeﬃcients cm with a window function deﬁned to have continuous ﬁrst and second
+derivatives:
+
+
+
+x−xmin
+xleft−xmin
+1
+xmax−xright
+
+xmax−x
+
+W (x) =
+
+(cid:16)
+(cid:16)
+
+− 1
+
+2π sin
+
+2π x−xmin
+xleft−xmin
+
+− 1
+
+2π sin
+
+2π xmax−x
+xmax−xright
+
+(cid:17)
+
+x < xleft
+
+xleft < x < xright
+x > xright
+
+,
+
+(C.1)
+
+(cid:17)
+
+where xleft and xright are input parameters that determine the position of the tapering. For
+a typical run we taper the power spectrum at log k = log kmin + 0.2 and log kmax − 0.2. We
+dampen the high frequency Fourier modes by applying the same window function to cm. In
+this case the position where the tapering begins is at an m = 0.75× N/2, where N is the size
+of the input array.
+
+Fourier analysis assumes the input signal to be periodic. This often leads a a wrap
+around eﬀect in our results, i.e. the leakage from low-k to high-k and/or vice versa. To
+alleviate a wrap-around eﬀect we zero-pad our input power spectrum. For an input power
+spectrum sampled on a k-grid of a few thousand points, we add ∼ 500 zeros to both ends.
+Wrap-around eﬀects can also be mitigated by using an input power spectrum sampled over a
+larger k-range than desired and then trimming on output (we recommend this approach).
+
+D RG-ﬂow Integration
+
+Numerical integration of Eq. (3.1) will quickly develop instabilities when using a simple inte-
+gration routine (e.g. Euler integration). These instabilities are highly sensitive to kmax and the
+linear grid spacing ∆. For kmax ≤ 1 we have found that a fourth order Runge-Kutta (RK4)
+
+– 21 –
+
+∆ log k
+0.0921
+0.046
+0.0092
+0.0046
+
+grid points
+
+run time [seconds]
+
+50
+100
+500
+1000
+
+0.36
+0.42
+0.72
+1.30
+
+Table 1. Stable RK4 runs for kmin = 10−3 and kmax = 1 and ∆λ = 0.1.
+
+∆ log k
+0.018
+0.009
+0.0046
+
+grid points
+
+run time [seconds]
+
+500
+1000
+2000
+
+8.27
+15.1
+33
+
+Table 2.
+parameters: µ = 0.1, ∆λCFL = 0.001, Ns = 10.
+
+Stable STS runs for kmin = 10−3 and kmax = 10. Results were obtained using STS
+
+method will produce stable results. However, for kmax > 1, stable RK4 results require an in-
+tegration step ∆λ greater than 10−3, decreasing rapidly with increasing kmax. An integration
+step this small will increase computation time substantially. To decrease computation time
+we have implemented the super time step (STS) method of [47]. Super time step methods
+are a class of integrators developed to solve parabolic equations, often for diﬀusion problems.
+They belong to the family of Runge-Kutta-Chebyshev methods and have the advantage that
+they can decrease the computation time by increasing the stability region. For each integra-
+tion step ∆λ, the STS method takes Ns inner Euler steps δλj, where j = 1, 2, ..., Ns, such
+
+that ∆λ =(cid:80)
+
+j δλj. The δλj are chosen by
+
+(cid:20)
+
+δλj = ∆λCFL
+
+(µ − 1) cos
+
+π(2j − 1)
+
+2Ns
+
+(cid:21)−1
+
++ (1 + µ)
+
+,
+
+(D.1)
+
+where ∆λCFL is the usual Courant-Friedrichs-Lewy stability step, µ is a damping factor
+(related to a ratio of eigenvalues) and is between 0 and 1. Equation (3.1) is not a parabolic
+partial diﬀerential equation; it is an integro-diﬀerential equation, which behaves as a diﬀusion
+equation under certain limiting circumstances. As such we do not have a rigorous theory for
+selecting ∆λCFL and µ, and we chose their values by numerical experiment. For kmax = 10
+and 2000 grid points we have chosen ∆λCFL = 0.001, µ = 0.1, and Ns = 10. A FAST-PT
+user has the option to specify ∆λCLF, µ, and Ns. In tables 1 and 2 we document RG-ﬂow
+run times for various grid sizes. These tables should serve as guidance when choosing the
+integration routine and/or routine parameters.
+
+– 22 –
+
+

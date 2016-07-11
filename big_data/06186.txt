@@ -1,0 +1,1549 @@
+The Multiscale Laplacian Graph Kernel
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+0
+2
+
+ 
+ 
+]
+L
+M
+
+.
+t
+a
+t
+s
+[
+ 
+ 
+
+1
+v
+6
+8
+1
+6
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Risi Kondor
+Department of Computer Science and Department of Statistics, University of Chicago
+
+RISI@CS.UCHICAGO.EDU
+
+Horace Pan
+Department of Computer Science, University of Chicago
+
+HOPAN@UCHICAGO.EDU
+
+Abstract
+
+Many real world graphs, such as the graphs of
+molecules, exhibit structure at multiple different
+scales, but most existing kernels between graphs
+are either purely local or purely global in charac-
+ter. In contrast, by building a hierarchy of nested
+subgraphs, the Multiscale Laplacian Graph ker-
+nels (MLG kernels) that we deﬁne in this pa-
+per can account for structure at a range of dif-
+ferent scales. At the heart of the MLG construc-
+tion is another new graph kernel, called the Fea-
+ture Space Laplacian Graph kernel (FLG kernel),
+which has the property that it can lift a base ker-
+nel deﬁned on the vertices of two graphs to a ker-
+nel between the graphs. The MLG kernel applies
+such FLG kernels to subgraphs recursively. To
+make the MLG kernel computationally feasible,
+we also introduce a randomized projection pro-
+cedure, similar to the Nystr¨om method, but for
+RKHS operators.
+
+1. Introduction
+
+There is a wide range of problems in applied machine
+learning from web data mining (Inokuchi et al., 2003) to
+protein function prediction (Borgwardt et al., 2005) where
+the input space is a space of graphs. A particularly im-
+portant application domain is chemoinformatics, where the
+graphs capture the structure of molecules. In the pharam-
+ceutical industry, for example, machine learning algorithms
+are regularly used to screen candidate drug compounds
+for safety and efﬁcacy against speciﬁc diseases (Kubinyi,
+2003).
+
+Because kernel methods neatly separate the issue of data
+representation from the statistical learning component, it is
+natural to formulate graph learning problems in the kernel
+paradigm. Starting with (G¨artner, 2002), a number of dif-
+ferent graph kernels have been appeared in the literature
+
+Copyright 2016 by the author(s).
+
+(for an overview, see (Vishwanathan et al., 2010)). In gen-
+eral, a graph kernel k(G1,G2) must satisfy the following
+three requirements:
+(a) The kernel should capture the right notion of similar-
+ity between G1 and G2. For example, if G1 and G2 are
+social networks, then k might capture to what extent
+clustering structure, degree distribution, etc. match up
+between them. If, on the other hand, G1 and G2 are
+molecules, then we are probably more interested in
+what functional groups are present in both, and how
+they are arranged relative to each other.
+
+(b) The kernel is usually computed from the adjacency
+matrices A1 and A2 of the two graphs, but (unless
+the vertices are explicitly labeled), it must be invari-
+ant to their ordering. In other words, writing the ker-
+nel explicitly in terms of A1 and A2, we must have
+k(A1, A2) = k(A1, P A2P ⊤) for any permutation ma-
+trix P .
+
+(c) The kernel should be efﬁciently computable. The time
+complexity of many graph kernels is O(n3), where n is
+the number of vertices of the larger of the two graphs.
+However, when dealing with large graphs, we might
+only be able to afford O(n2) or even O(n) complexity.
+On the other hand, in chemoinformatics applications,
+n might only be on the order of a 100, permitting the
+use of more expensive kernels.
+
+Of these three requirements, the second one (permutation
+invariance) has proved to be the central constraint around
+which much of the graph kernels literature is organized.
+
+In combinatorics, any function φ(A) that is invariant to re-
+ordering the vertices (i.e., φ(P AP ⊤) = φ(A) for any per-
+mutation matrix P ) is called a graph invariant (Mikkonen,
+2007). The permutation invariance requirement effectively
+stipulates that graph kernels must be built out of graph in-
+variants. In general, efﬁciently computable graph invari-
+ants offered by the mathematics literature tend to fall in
+one of two categories:
+(a) Local invariants, which can often be reduced to simply
+counting some local properties, such as the number of
+triangles, squares, etc. that appear in G as subgraphs.
+(b) Spectral invariants, which can be expressed as func-
+
+The Multiscale Laplacian Graph Kernel
+
+tions of the eigenvalues of the adjacency matrix or the
+graph Laplacian.
+
+Correspondingly, while different graph kernels are moti-
+vated in very different ways from random walks (G¨artner,
+2002) through shortest paths (Borgwardt & Kriegel, 2005;
+Feragen et al., 2013) to Fourier transforms on the symmet-
+ric group (Kondor & Borgwardt, 2008), ultimately most
+graph kernels also reduce to computing a function of the
+two graphs that is either purely local or purely spectral.
+For example all kernels based on the “subgraph counting”
+idea (e.g., (Shervashidze et al., 2009)) are local. On the
+other hand, most of the random walk based kernels are re-
+ducable to a spectral form involving the eigenvalues of ei-
+ther the two graphs individually, or their Kronecker product
+(Vishwanathan et al., 2010) and therefore are really only
+sensitive to the large scale structure of graphs.
+
+In practice, it would be desirable to have a kernel that is
+inbetween these two extremes, in the sense that it can take
+structure into account at multiple different scales. A ker-
+nel between molecules, for example, must be sensitive to
+the overall large-scale shape of the graphs (whether they
+are more like a chain, a ring, a chain that branches, etc.),
+but also to what smaller structures (e.g., functional groups)
+are present in the graphs, and how they are related to the
+global structure (e.g., whether a particular functional group
+is towards the middle or one of the ends of the chain).
+
+For the most part, such a multiscale graph kernel has
+been missing from the literature. One notable exception is
+the Weisfeiler–Lehman kernel (Shervashidze et al., 2011),
+which uses a combination of message passing and hashing
+to build summaries of the local neighborhood vertices at
+different scales. However, in practice, the message pass-
+ing step is usually only iterated a relatively small number
+of times, so the Weisfeiler–Lehman kernel is still mostly
+local. Moreover, the hashing step is somewhat ad-hoc and
+does not give rise to well behaved, local summaries: per-
+turbing the edges by a small amount leads to completely
+different hash features.
+
+In this paper we present a new graph kernel, the Multi-
+scale Laplacian Graph Kernel (MLG kernel), which, we
+believe, is the ﬁrst kernel in the literature that can truly
+compare structure in graphs simultaneously at multiple dif-
+ferent scales. We begin by deﬁning a simpler graph kernel,
+called the Feature Space Laplacian Graph Kernel (FLG ker-
+nel) that only operates at a single scale (Section 2). The
+FLG kernel combines two sources of information: a partial
+labeling of the nodes in terms of vertex features, and topo-
+logical information about the graph supplied by its Lapla-
+cian. An important property of the the FLG kernel is that
+it can work with vertex labels provided implicitly, in terms
+of a “base kernel” on the vertices. Crucially, this makes it
+possible to apply the FLG kernel recursively.
+
+The Multiscale Laplacian Graph Kernel (MLG kernel),
+which is the central object of the paper and is deﬁned in
+Section 3, uses exactly this recursive property of the FLG
+kernel to build a hierarchy of subgraph kernels that are not
+only sensitive to the topological relationships between in-
+dividual vertices, but also between subgraphs of increasing
+sizes. Each kernel is deﬁned in terms of the preceding ker-
+nel in the hierarchy.
+
+Efﬁcient computability is a major concern in our paper,
+and recursively deﬁned kernels, especially on combinato-
+rial data structures, can be very expensive. Therefore, in
+Section 4 we describe a strategy based on a combination
+of linearizing each level of the kernel (relative to a given
+dataset) and a randomized low rank projection, that reduces
+every stage of the kernel computation to simple operations
+involving small matrices, leading to a very fast algorithm.
+Finally, section 5 presents experimental comparisons of our
+kernel with competing methods.
+
+2. Laplacian Graph Kernels
+Let G be a weighted undirected graph with vertex set V =
+{v1, . . . , vn} and edge set E. Recall that the graph Lapla-
+cian of G is an n × n matrix LG, with
+−wi,j
+Pj : {vi,vj}∈E wi,j
+
+if {vi, vj} ∈ E
+if i = j
+otherwise,
+
+0
+
+LGi,j =
+
+
+where wi,j is the weight of edge {vi, vj}. The graph Lapla-
+cian is positive semi-deﬁnite, and in terms of the adjacency
+matrix A and the weighted degree matrix D, it can be ex-
+pressed as L = D− A.
+Spectral graph theory tells us that the low eigenvalue eigen-
+vectors of LG (the “low frequency modes”) are informative
+about the overall shape of G. One way of seeing this is to
+note that for any vector z ∈ Rn
+z⊤LG z = X{i,j}∈E
+
+wi,j (zi − zj)2,
+
+so the low eigenvalue eigenvectors are the smoothest func-
+tions on G, in the sense that they vary the least between
+adjacent vertices. An alternative interpretation emerges if
+we use G to construct a Gaussian graphical model (Markov
+Random Field or MRF) over n variables x1, . . . , xn with
+clique potentials φ(xi, xj) = e−wi,j (xi−xj)2/2 for each
+edge and ψ(xi) = e−ηx2
+i /2 for each vertex. The joint dis-
+tribution of x = (x1, . . . , xn)⊤ is then
+
+p(x) ∝(cid:16) Y{vi,vj}∈E
+
+e−wi,j (xi−xj )2/2(cid:17)(cid:16)Yvi∈V
+
+e−ηx2
+
+i /2(cid:17) =
+
+e−x
+
+⊤(L+ηI) x/2,
+
+(1)
+
+The Multiscale Laplacian Graph Kernel
+
+showing that the covariance matrix of x is (LG + ηI)−1.
+Note that
+the ψ factors were only added to ensure
+that the distribution is normalizable, and η is typically
+just a small constant “regularizer”: LG actually has a
+zero eigenvalue eigenvector (namely the constant vector
+n−1/2(1, 1, . . . , 1)⊤), so without adding ηI we would not
+be able to invert it. In the following we will call LG + ηI
+the regularized Laplacian, and denote it simply by L.
+
+Both the above views suggest that if we want deﬁne a ker-
+nel between graphs that is sensitive to their overall shape,
+comparing the low eigenvalue eigenvectors of their Lapla-
+cians is a good place to start. Following the MRF route,
+given two graphs G1 and G2 of n vertices, we can de-
+ﬁne the kernel between them to be a kernel between the
+corresponding distributions p1 = N (0, L−1
+1 ) and p2 =
+N (0, L−1
+2 ). Speciﬁcally, we use the Bhattacharyya kernel
+k(p1, p2) =Z pp1(x)pp2(x) dx,
+
+(2)
+
+because for Gaussian distributions it can be computed in
+closed form (Jebara & Kondor, 2003), giving
+
+2 L1 + 1
+
+k(p1, p2) = (cid:12)(cid:12)(cid:0) 1
+1 (cid:12)(cid:12)1/4 (cid:12)(cid:12)L−1
+(cid:12)(cid:12)L−1
+
+2 L2(cid:1)−1(cid:12)(cid:12)1/2
+2 (cid:12)(cid:12)1/4 .
+
+1
+
+and L−1
+
+1 or L−1
+2
+
+If some of the eigenvalues of L−1
+are zero or very
+close to zero, along certain directions in space the two dis-
+tributions in (2) become very ﬂat, leading to vanishingly
+small kernel values (unless the “ﬂat” directions of the two
+Gaussians are perfectly aligned). To remedy this problem,
+similarly to (Kondor & Jebara, 2003), we “soften” (or reg-
+ularize) the kernel by adding some small constant γ times
+the identity to L−1
+2 . This leads to what we call the
+Laplacian Graph Kernel.
+Deﬁnition 1. Let G1 and G2 be two graphs of n vertices
+with (regularized) Laplacians L1 and L2, respectively. We
+deﬁne the Laplacian graph kernel (LG kernel) with pa-
+rameter γ between G1 and G2 as
+2 S−1
+1 + 1
+|S1|1/4 |S2|1/4
+2 + γI.
+
+kLG(G1,G2) = (cid:12)(cid:12)(cid:0) 1
+
+2 (cid:1)−1(cid:12)(cid:12)1/2
+
+1 + γI and S2 = L−1
+
+where S1 = L−1
+
+2 S−1
+
+(3)
+
+,
+
+By virtue of (2), the LG kernel is guaranteed to be positive
+semi-deﬁnite, and because the value of the overlap integral
+(2) is largely determined by the extent to which the sub-
+spaces spanned by the largest eigenvalue eigenvectors of
+L−1
+are aligned, it effectively captures similarity
+between the overall shapes of G1 and G2. However, the LG
+kernel does suffer from three major limitations:
+1. It assumes that both graphs have exactly the same num-
+
+and L−1
+
+1
+
+2
+
+ber of vertices.
+
+2. It is only sensitive to the overall structure of the two
+graphs, and not to how the two graphs compare at more
+local scales.
+
+3. It is not invariant to permuting the vertices.
+Our goal for the rest of this paper is to overcome each of
+these limitations, while retaining the LG kernel’s attractive
+spectral interpretation.
+
+2.1. Feature space LG kernel
+
+In the probabilistic view of the LG kernel, every graph
+generates random vectors x = (x1, . . . , xn)⊤ according
+to (1), and the kernel between two graphs is determined
+by comparing the corresponding distributions. The invari-
+ance problem arises because the ordering of the variables
+x1, . . . , xn is arbitrary: even if G1 and G2 are topologically
+the same, kLG(G1,G2) might be low if their vertices happen
+to be numbered differently.
+
+One of the central ideas of this paper is to address this
+issue by transforming from the “vertex space variables”
+x1, . . . , xn to “feature space variables” y1, . . . , ym, where
+
+yi =Pj ti,j (xj), and each ti,j only depends on j through
+
+local and reordering invariant properties of vertex vj.
+If
+we then compute an analogous kernel to the LG kernel, but
+now between the distributions of the y’s rather than the x’s,
+the resulting kernel will be permutation invariant.
+
+In the simplest case, each ti,j is linear, i.e., ti,j(xj ) =
+φi(vj ) · xj, where (φ1, . . . , φm) is a collection of m lo-
+cal (and permutation invariant) vertex features. For exam-
+ple, φi(vj ) may be the degree of vertex vj, or the value
+of hβ(vj , vj), where h is the diffusion kernel on G with
+length scale parameter β (c.f., (Alexa et al., 2009)). In the
+chemoinformatics setting, the φi’s might be some way of
+encoding what type of atom is located at vertex vj.
+The linear transform of a multivariate normal random vari-
+able is multivariate normal. In particular, in our case, let-
+ting U = (φi(vj))i,j, we have E(y) = 0 and Cov(y, y) =
+U Cov(x, x)U⊤= U L−1U⊤, leading to the following ker-
+nel, which is the workhorse of the present paper.
+Deﬁnition 2. Let G1 and G2 be two graphs with regularized
+Laplacians L1 and L2, respectively, γ ≥ 0 a parameter,
+and (φ1, . . . , φm) a collection of m local vertex features.
+Deﬁne the corresponding feature mapping matrices
+
+[U1]i,j = φi(vj )
+
+[U2]i,j = φi(v′j )
+
+(where vj is the j’th vertex of G1 and v′j is the j’th vertex
+of G2). The corresponding Feature space Laplacian graph
+kernel (FLG kernel) is
+
+kFLG(G1,G2) = (cid:12)(cid:12)(cid:0) 1
+
+2 S−1
+
+2 S−1
+1 + 1
+|S1|1/4 |S2|1/4
+
+2 (cid:1)−1(cid:12)(cid:12)1/2
+
+,
+
+(4)
+
+where S1 = U1L−1
+
+1 U⊤1 + γI and S2 = U2L−1
+
+2 U⊤2 + γI.
+
+The Multiscale Laplacian Graph Kernel
+
+Since the φ1, . . . , φm vertex features, by deﬁnition, are lo-
+cal and invariant to vertex renumbering, the FLG kernel is
+permutation invariant. Moreover, because the distributions
+p1 and p2 now live in the space of features rather than the
+space deﬁned by the vertices, there is no problem with ap-
+plying the kernel to two graphs with different numbers of
+vertices.
+
+Similarly to the LG kernel, the FLG kernel also captures
+information about the global shape of graphs. However,
+whereas, intuitively, the former encodes information such
+as “G is an elongated graph with vertex number i towards
+one and and vertex number j at the other”, the FLG kernel
+can capture information more like “G is elongated with low
+degree vertices at one end and high degree vertices at the
+other”. The major remaining shortcoming of the FLG ker-
+nel is that it cannot take into account structure at multiple
+different scales.
+
+2.2. The “kernelized” LG kernel
+
+The key to boosting kFLG to a multiscale kernel is that it
+itself can be “kernelized”, i.e., it can be computed from
+just the inner products between the feature vectors of the
+vertices (which we call the base kernel) without having to
+know the actual φi(vj ) features values.
+Deﬁnition 3. Given a collection φ = (φ1, . . . , φm)⊤ of lo-
+cal vertex features, we deﬁne the corresponding base ker-
+nel κ between two vertices v and v′ as the dot product of
+their feature vectors: κ(v, v′) = φ(v) · φ(v′).
+Note that in this deﬁnition v and v′ may be two vertices
+of the same graph, or of two different graphs. We ﬁrst
+show that, similarly to the Representer Theorem for other
+kernel methods (Sch¨olkopf & Smola, 2002), to compute
+kFLG(G1,G2) one only needs to consider the subspace of
+Rm spanned by the feature vectors of their vertices.
+Proposition 1. Let G1 and G2 be two graphs with vertex
+sets V1 = {v1 . . . vn1} and V2 = {v′1 . . . v′n2}, and let
+{ξ1, . . . , ξp} be an orthonormal basis for the subspace
+W = span(cid:8)φ(v1), . . . , φ(vn1 ), φ(v′1), . . . , φ(v′n2 )(cid:9).
+
+Then, (4) can be rewritten as
+
+kFLG(G1,G2) = (cid:12)(cid:12)(cid:0) 1
+
+2 S−1
+
+2 S−1
+1 + 1
+|S1|1/4 |S2|1/4
+
+2 (cid:1)−1(cid:12)(cid:12)1/2
+
+,
+
+(5)
+
+where [S1]i,j = ξ⊤i S1ξj and [S2]i,j = ξ⊤i S2ξj.
+words, S1 and S2 are the projections of S1 and S2 to W .
+
+In other
+
+Proof. The proposition hinges on the fact that (4) is invari-
+ant to rotation. In particular, if we extend {ξ1, . . . , ξp} to
+an orthonormal basis {ξ1, . . . , ξm} for the whole of Rm,
+let O = [ξ1, . . . , ξm] (the change of basis matrix) and set
+˜S1 = O⊤S1O, and ˜S2 = O⊤S2O, then (4) can equivalently
+be written as
+
+kFLG(G1,G2) = (cid:12)(cid:12)(cid:0) 1
+
+2
+
+˜S−1
+
+2 (cid:1)−1(cid:12)(cid:12)1/2
+˜S−1
+1 + 1
+2
+| ˜S1|1/4 | ˜S2|1/4
+
+.
+
+(6)
+
+However, in the {ξ1, . . . , ξm} basis ˜S1 and ˜S2 take on a
+special form. Writing S1 in the outer product form
+
+S1 =
+
+n1Xa,b=1
+
+φ(va)[L−1
+
+1 ]a,b φ(vb)⊤ + γI
+
+n1Xa,b=1
+
+hξi, φ(v1,a)i [L−1
+
+and considering that for i > p, hφ(va), ξii = 0 shows that
+˜S1 splits into a direct sum ˜S1 = S1 ⊕ bS1 of two matrices:
+a p× p matrix S1 whose (i, j) entry is
+ξ⊤i S1ξj =
+1 ]a,bhφ(v1,b), ξji + γδi,j,
+(7)
+where δi,j is the Kronecker delta; and an (n− p)× (n− p)
+dimensional matrix bS1 = γIn−p (where In−p denotes the
+n− p dimensional identity matrix). Naturally, ˜S2 decom-
+poses into S2⊕bS2 in an analogous way.
+Recall that for any pair of square matrices M1 and M2,
+| M1⊕ M2 | = |M1| · |M2| and (M1 ⊕ M2)−1 = M−1
+1 ⊕
+M−1
+2 (cid:1) ⊕ γ−1In−p(cid:1)−1(cid:12)(cid:12)1/2
+kFLG(G1,G2) = (cid:12)(cid:12)(cid:0)(cid:0) 1
+(cid:12)(cid:12)S1⊕ γIn−k(cid:12)(cid:12)1/4 (cid:12)(cid:12)S2 ⊕ γIn−k(cid:12)(cid:12)1/4 =
+⊕ γIn−p(cid:12)(cid:12)1/2
+(cid:12)(cid:12)(cid:0) 1
+2 (cid:1)−1
+(cid:12)(cid:12)S1⊕ γIn−k(cid:12)(cid:12)1/4 (cid:12)(cid:12)S2⊕ γIn−k(cid:12)(cid:12)1/4 =
+2 (cid:1)−1(cid:12)(cid:12)1/2
+γ(n−p)/4 γ(n−p)/4(cid:12)(cid:12)(cid:0) 1
+(cid:12)(cid:12)S1(cid:12)(cid:12)1/4 (cid:12)(cid:12)S2(cid:12)(cid:12)1/4
+
+2 . Applying this to (6) then gives
+2 S−1
+
+γ(n−p)/2
+
+1 + 1
+
+1 + 1
+
+2 S−1
+
+2 S−1
+
+1 + 1
+
+2 S−1
+
+.
+
+2 S−1
+
+2 S−1
+
+Similarly to kernel PCA (Mika et al., 1999) or the Bhat-
+tacharyya kernel, the easiest way to get a basis for W as
+required by (5) is to compute the eigendecomposition of
+the joint Gram matrix of the vertices of the two graphs.
+Proposition 2. Let G1 and G be as in Proposition 1, V =
+{v1, . . . , vn1+n2} be the union of their vertex sets (where it
+is assumed that the ﬁrst n1 vertices are {v1, . . . , vn1} and
+the second n2 vertices are (cid:8)v′1, . . . , v′n2(cid:9)), and deﬁne the
+joint Gram matrix K ∈ R(n1+n2)×(n1+n2) as
+Ki,j = κ(vi, vj) = φ(vi)⊤φ(vj).
+
+Let u1, . . . , up be (a maximal orthonormal set of) the
+non-zero eigenvalue eigenvectors of K with corresponding
+eigenvalues λ1, . . . , λp. Then the vectors
+
+ξi =
+
+1
+√λi
+
+n1+n2Xℓ=1
+
+[ui]ℓ φ(vℓ)
+
+(8)
+
+form an orthonormal basis for W . Moreover, deﬁning Q =
+[λ1/2
+p up] ∈ Rp×p and setting Q1 = Q1:n1, :
+
+1 u1, . . . , λ1/2
+
+The Multiscale Laplacian Graph Kernel
+
+and Q2 = Qn1+1:n2, : (the ﬁrst n1 and remaining n2 rows
+of Q, respectively), the matrices S1 and S2 appearing in
+(5) can be computed as
+
+1 Q1 + γI,
+
+S2 = Q⊤2 L−1
+
+2 Q2 + γI.
+
+(9)
+
+S1 = Q⊤1 L−1
+Proof. For i 6= j,
+1
+pλiλj
+
+ξ⊤i ξj =
+
+n1+n2Xk=1
+
+n1+n2Xℓ=1
+
+[ui]k φ(vk)⊤φ(vℓ)
+
+[uj]ℓ =
+
+|
+
+κ(vk,vℓ)
+
+{z
+
+}
+
+(λiλj)−1/2 u⊤i Kuj = (λj/λi)1/2u⊤i uj = 0,
+
+while for i = j, ξ⊤i ξj = λ−1
+i u⊤i Kui = u⊤i ui = 1, show-
+ing that {ξ1, . . . , ξp} is an orthonormal set. At the same
+time, p = rank(K) = dim(W ) and ξ1, . . . , ξp ∈ W , prov-
+ing that {ξ1, . . . , ξp} is an orthonormal basis for W .
+To derive the form of S1, simply plug (8) into (7):
+
+[ui]k φ(vk)⊤φ(va)
+
+|
+
+κ(vk,va)
+
+{z
+
+·
+
+}
+
+1 ]a,b φ(vb)⊤φ(vℓ)
+
+[uj]ℓ + γδi,j =
+
+ξ⊤i S1ξj =
+
+1
+
+pλiλj
+· [L−1
+|
+
+n1Xk=1
+
+n1Xℓ=1
+
+nXa,b=1
+
+κ(vb,vℓ)
+
+{z
+
+}
+
+(λiλj)−1/2 u⊤i KL−1Kuj + γδi,j =
+
+(λiλj)1/2 u⊤i L−1uj + γδi,j,
+
+and similarly for S2.
+
+As in other kernel methods, the signiﬁcance of Propositions
+1 and 2 is not just that they show show how kFLG(G1,G2)
+can be efﬁciently computed when φ is very high dimen-
+sional, but that they also make it clear that the FLG kernel
+can really be induced from any base kernel, regardless of
+whether it corresponds to actual ﬁnite dimensional feature
+vectors or not. For completeness, we close this section with
+this generalized deﬁnition of the FLG kernel.
+Deﬁnition 4. Let G1 and G2 be two graphs. Assume that
+each of their vertices comes from an abstract vertex space
+V and that κ : V × V → R is a symmetric positive semi-
+deﬁnite kernel on V. The generalized FLG kernel induced
+from κ is then deﬁned as
+
+FLG(G1,G2) = (cid:12)(cid:12)(cid:0) 1
+
+kκ
+
+2 S−1
+
+2 S−1
+1 + 1
+|S1|1/4 |S2|1/4
+
+2 (cid:1)−1(cid:12)(cid:12)1/2
+
+where S1 and S2 are as deﬁned in Proposition 2.
+
+,
+
+(10)
+
+3. Multiscale Laplacian Graph Kernels
+
+By a multiscale graph kernel we mean a kernel that is able
+to capture similarity between graphs not just based on the
+topological relationships between their individual vertices,
+but also the topological relationships between subgraphs.
+The key property of the FLG kernel that allows us to build
+such a kernel is that it can be applied recursively. In broad
+terms, the construction goes as follows:
+
+1. Given a graph G, divide it into a large number of small
+(typically overlapping) subgraphs and compute the FLG
+kernel between any two subgraphs.
+
+2. Each subgraph is attached to some vertex of G (for ex-
+ample, its center), so we can reinterpret the FLG kernel
+as a new base kernel between the vertices.
+
+3. We now divide G into larger subgraphs, compute the
+new FLG kernel between them induced from the new
+base kernel, and recurse L times.
+
+Finally, to compute the actual kernel between two graphs G
+and G′, we follow the same process for G′ and then compute
+kFLG(G,G′) induced from their top level base kernels. The
+following deﬁnitions formalize this construction.
+Deﬁnition 5. Let G be a graph with vertex set V , and κ
+a positive semi-deﬁnite kernel on V . Assume that for each
+v ∈ V we have a nested sequence of L neighborhoods
+
+v ∈ N1(v) ⊆ N2(v) ⊆ . . . ⊆ NL(v) ⊆ V,
+
+(11)
+
+and for each Nℓ(v), let Gℓ(v) be the corresponding in-
+duced subgraph of G. We deﬁne the Multiscale Laplacian
+Subgraph Kernels (MLS kernels), K1, . . . , KL : V × V →
+R as follows:
+1. K1 is just the FLG kernel kκ
+
+FLG induced from the base
+
+kernel κ between the lowest level subgraphs:
+
+K1(v, v′) = kκ
+
+FLG(G1(v), G1(v′)).
+
+2. For ℓ = 2, 3, . . . , L, the MLS kernel Kℓ is the FLG ker-
+
+nel induced from Kℓ−1 between Gℓ(v) and Gℓ(v′):
+
+Kℓ(v, v′) = k
+
+Kℓ−1
+FLG (Gℓ(v), Gℓ(v′)).
+
+Deﬁnition 5 deﬁnes the MLS kernel as a kernel between
+different subgraphs of the same graph G. However, if two
+graphs G1 and G2 share the same base kernel, the MLS ker-
+nel can also be used to compare any subgraph of G1 with
+any subgraph of G2. This is what allows us to deﬁne an
+L + 1’th FLG kernel, which compares the two full graphs.
+Deﬁnition 6. Let G be a collection of graphs such that
+all their vertices are members of an abstract vertex space
+V endowed with a symmetric positive semi-deﬁnite kernel
+κ : V × V → R. Assume that the MLS kernels K1, . . . , KL
+are deﬁned as in Deﬁnition 5, both for pairs of subgraphs
+within the same graph and across pairs of different graphs.
+We deﬁne the Multiscale Laplacian Graph Kernel (MLG
+kernel) between any two graphs G1,G2 ∈ G as
+
+K(G1,G2) = kKL
+
+FLG(G1,G2).
+
+Deﬁnition 6 leaves open the question of how the neighbor-
+hoods N1(v), . . . , NL(v) are to be deﬁned. In the simplest
+case, we set Nℓ(v) to be the ball Br(v) (i.e., the set of ver-
+tices at a distance at most r from v), where r = r0ηℓ−1 for
+some η > 1. The η = 2 case is particularly easy, because
+we can then construct the neighborhoods as follows:
+
+The Multiscale Laplacian Graph Kernel
+
+1. For ℓ = 1, ﬁnd each N1(v) = Br0(v) separately.
+2. For ℓ = 2, 3, . . . , L, for each v ∈ G set
+
+Nℓ(v) = [w∈Nℓ−1(v)
+
+Nℓ−1(w).
+
+3.1. Computational complexity and caching
+
+Deﬁnitions 5 and 6 suggest a recurisve approach to com-
+puting the MLG kernel: computing K(G1,G2) ﬁrst requires
+computing KL(v, v′) between all(cid:0)n1+n2
+(cid:1) pairs of top level
+subgraphs across G1 and G2; each of these kernel evalua-
+tions requires computing KL−1(v, v′) between up to O(n2)
+level L− 1 subgraphs, and so on. Following this recursion
+blindly would require up to O(n2L+2) kernel evaluations,
+which is clearly infeasible.
+
+2
+
+The recursive strategy is wasteful because it involves eval-
+uating the same kernel entries over and over again in dif-
+ferent parts of the recursion tree. An alternative solution
+that requires only O(Ln2) kernel evaluations would be to
+ﬁrst compute K1(v, v′) for all (v, v′) pairs, then compute
+K2(v, v′) for all (v, v′) pairs, and so on. But this solution
+is also wasteful, because for low values of ℓ, if v and v′
+are relatively distant, then they will never appear together
+in any level ℓ+1 subgraph, so Kℓ(v, v′) is not needed at all.
+The natural compromise between these two approaches is
+to use a recursive “on demand” kernel computation strat-
+egy, but once some Kℓ(v, v′) has been computed, store it in
+a hash table indexed by (v, v′), so that Kℓ(v, v′) does not
+need to be recomputed from scratch.
+
+are distinct, but
+
+A further source of redundancy is that in many real world
+graph datasets certain subgraphs (e.g., functional groups)
+recur many times over. This leads to potentially large col-
+lections of kernel evaluations {Kℓ(v, v′1), . . . , Kℓ(v, v′z)}
+where v′1 . . . v′z
+the corresponding
+Gℓ(v′1), . . . , Gℓ(v′z) subgraphs are isomorphic (including
+the feature vectors), so the kernel values will all be the
+same. Once again, the solution is to maintain a hash ta-
+ble of all unique subgraphs seen so far, so that when a
+new subgraph is processed, our code can quickly determine
+whether it is identical to some other subgraph for which
+kernel evaluations have already been computed. Doing
+this process perfectly would require isomorphism testing,
+which is, of course, infeasible. In practice, a weak test that
+only detects a subset of isomorphic subgraph pairs already
+makes a large difference to performance.
+
+4. Linearized Kernels and Low Rank
+
+Approximation
+
+Even with caching, MLS and MLG kernels can be expen-
+sive to compute. The main reason for this is that they in-
+volve expressions like (3), where S1 and S2 are initially
+given in different bases. To ﬁnd a common basis for the
+
+two matrices via the method of Proposition 2 requires a
+potentially large number of lower level kernel evaluations,
+which require even lower level kernel evaluations, and so
+on. Unfortunately, this process has to be repeated anew
+for each {G1,G2} pair, because in all Kℓ(v, v′) evaluations
+where v is from one graph and v′ is from the other, the
+common basis will involve both graphs. Consequently, the
+cost of the basis computations cannot be amortized into a
+per-graph precomputation stage.
+
+In the previous section we saw that computing the MLG
+kernel between two graphs may involve O(Ln2) kernel
+evaluations. At the top levels of the hierarchy each Gℓ(v)
+might have Θ(n) vertices, so the cost of a single FLG ker-
+nel evaluation can be as high as O(n3). Somewhat pes-
+simistically, this means that the overall cost of computing
+kFLG(G1,G2) is O(Ln5). Given a dataset of M graphs,
+computing their Gram matrix requires repeating this for
+all {G1,G2} pairs, giving O(LM 2n5), which is even more
+problematic.
+
+The solution that we propose is to compute for each level
+ℓ = 1, 2, . . . , L + 1 a single joint basis for all subgraphs at
+the given level across all graphs G1, . . . ,GM . For concrete-
+ness, we go back to the deﬁnition of the FLG kernel.
+Deﬁnition 7. Let G = {G1, . . . ,GM} be a collection
+of graphs, V1, . . . , VM their vertex sets, and assume that
+V1, . . . , VM ⊆ V for some general vertex space V. Fur-
+ther, assume that κ : V × V → R is a positive semi-deﬁnite
+kernel on V, Hκ is its Reproducing Kernel Hilbert Space,
+and φ : V → Hκ is the corresponding feature map satisfy-
+ing κ(v, v′) = hφ(v), φ(v′)i for any v, v′ ∈ V. The joint
+vertex feature space of {G1, . . . ,GM} is then
+{φ(v)}(cid:21).
+
+WG = span(cid:20) M[i=1 [v∈Vi
+
+WG is just the generalization of the W space deﬁned in
+Proposition 1 from two graphs to M . In particular, for any
+{G,G′} pair (with G,G′ ∈ G) the corresponding W space
+will be a subspace of WG. The following generalization of
+Propositions 1 and 2 is then immediate.
+Proposition 3. Let N = PM
+
+i=1 | Vi |, V = (v1, . . . , vN )
+be the concatination of the vertex sets V1, . . . , VM , and K
+the corresponding Gram matrix
+
+Ki,j = κ(vi, vj) = hφ(vi), φ(vj)i .
+
+(12)
+
+Let u1, . . . , uP be a maximal orthonormal set of non-zero
+eigenvalue eigenvectors of K with corresponding eigenval-
+ues λ1, . . . , λP . Then the vectors
+
+ξi =
+
+1
+√λi
+
+NXℓ=1
+
+[ui]ℓ φ(vℓ)
+
+i = 1, . . . , P
+
+The Multiscale Laplacian Graph Kernel
+
+1 u1, . . . , λ1/2
+
+form an orthonormal basis for WG. Moreover, deﬁning
+Q = [λ1/2
+p up] ∈ RP×P , and setting Q1 to be
+the submatrix of Q composed of its ﬁrst |V1| rows; Q2 be
+the submatrix composed of the next |V2| rows, and so on,
+for any Gi,Gj ∈ G, the generalized FLG kernel induced
+from κ (Deﬁnition 4) can be expressed as
+
+kFLG(Gi,Gj) = (cid:12)(cid:12)(cid:0) 1
+
+2 S−1
+
+2 S−1
+i + 1
+|Si|1/4 |Sj|1/4
+
+j (cid:1)−1(cid:12)(cid:12)1/2
+
+,
+
+(13)
+
+where Si = Q⊤i L−1
+
+i Qi + γI and Sj = Q⊤j L−1
+
+j Qj + γI.
+
+The signiﬁcance of Proposition 3 is that S1, . . . , SM are
+now ﬁxed matrices that do not need to be recomputed for
+each kernel evaluation. Once we have constructed the joint
+basis {ξ1, . . . , ξP}, the Si matrix of each graph Gi can be
+computed independently, as a precomputation step, and in-
+dividual kernel evaluations reduce to just plugging them
+into (13). At a conceptual level, what Proposition 3 does
+it to linearize the kernel κ by projecting everything down
+to WG. In particular, it replaces the {φ(vi)} RKHS vectors
+with explicit ﬁnite dimensional feature vectors given by the
+corresponding rows of Q, just like we had in the “unkernel-
+ized” FLG kernel of Deﬁnition 2.
+
+FLG, kK2
+
+FLG, but also kK1
+
+For our multiscale kernels this is particularly important, be-
+cause linearizing not just kκ
+FLG, . . ., al-
+lows us to compute the MLG kernel level by level, without
+recursion. After linearizing the base kernel κ, we can at-
+tach explicit, ﬁnite dimensional vectors to each vertex of
+each graph. Then we compute compute kK1
+FLG between all
+pairs of lowest level subgraphs, and linearizing this kernel
+as well, each vertex effectively just gets an updated feature
+vector. Then we repeat the process for kK2
+FLG, and
+ﬁnally we compute the MLG kernel K(G1,G2).
+4.1. Randomized low rank approximation
+
+FLG . . . kKL
+
+The difﬁculty in the above approach of course is that at
+each level (12) is a Gram matrix between all vertices of all
+graphs, so storing it is already very costly, let along com-
+puting its eigendecomposition. Morever, P = dim(WG)
+is also very large, so managing the S1, . . . , SM matrices
+(each of which is of size P × P ) becomes infeasible. The
+natural alternative is to replace WG by a smaller, approxi-
+mate joint features space, deﬁned as follows.
+Deﬁnition 8. Let G, κ,Hκ and φ be deﬁned as in Deﬁni-
+tion 7. Let ˜V = (˜v1, . . . , ˜v ˜N ) be ˜N ≪ N vertices sampled
+from the joint vertex set V = (v1, . . . , vN ). Then the cor-
+responding subsampled vertex feature space is
+
+˜WG = span{ φ(˜v) | ˜v ∈ ˜V }.
+
+Similarly to before, we construct an orthonormal basis
+{ξ1, . . . , ξP} for ˜W by forming the (now much smaller)
+Gram matrix ˜Ki,j = κ(˜vi, ˜vj), computing its eigenvalues
+
+ℓ=1[ui]ℓ φ(˜vℓ).
+
+The resulting approximate FLG kernel is
+
+and eigenvectors, and setting ξi = 1√λi P ˜N
+j (cid:1)−1(cid:12)(cid:12)1/2
+˜S−1
+i + 1
+2
+| ˜Si|1/4 | ˜Sj|1/4
+
+kFLG(Gi,Gj ) = (cid:12)(cid:12)(cid:0) 1
+
+˜S−1
+
+2
+
+,
+
+(14)
+
+i
+
+j
+
+˜Qi + γI and ˜Sj = ˜Q⊤j L−1
+
+˜Qj + γI
+where ˜Si = ˜Q⊤i L−1
+are the projections of Si and Sj to ˜WG. We introduce a
+further layer of approximation by restricting ˜WG to be the
+space spanned by the ﬁrst ˜P < P basis vectors (ordered by
+descending eigenvalue), effectively doing kernel PCA on
+{φ(˜v)}˜v∈ ˜V , equivalently, a low rank approximation of ˜K.
+Assuming that vg
+j is the j’th vertex of Gg, in constrast to
+Proposition 2, now the j’th row of ˜Qs consists of the coor-
+dinates of the projection of φ(vg
+
+j ) onto ˜WG, i.e.,
+
+[ ˜Qg]j,i =
+
+1
+√λi
+
+˜NXℓ=1
+
+j ), φ(˜vN )(cid:11) =
+[ui]ℓ (cid:10)φ(vg
+˜NXℓ=1
+1
+√λi
+
+[ui]ℓ κ(vg
+
+j , ˜vN ).
+
+The above procedure is similar to the popular Nystr¨om ap-
+proximation for kernel matrices (Williams & Seeger, 2001;
+Drineas & Mahoney, 2005), except that in our case the ul-
+timate goal is not to approximate the Gram matrix (12) it-
+self, but the S1, . . . , SM matrices used to form the FLG
+kernel.
+In practice, we found that the eigenvalues of K
+usually drop off very rapidly, suggesting that W can be
+safely approximated by a surprisingly small dimensional
+subspace ( ˜P ∼ 10), and correspondingly the sample size
+˜N can be kept quite small as well (on the order of 100).
+The combination of these two factors makes computing the
+entire stack of kernels very fast, reducing the complexity
+of computing the Gram matrix for a dataset of M graphs of
+θ(n) vertices each to O(M L ˜N 2 ˜P 3 + M L ˜N 3 + M 2 ˜P 3).
+As an example, for the ENZYMES dataset, comprised of
+600 graphs, the FLG kernel between all pairs of graphs can
+be computed in about 2 minutes on a 16 core machine.
+
+Note that Deﬁnition 8 is noncommittal to the sampling dis-
+tribution used to select (˜v1, . . . , ˜v ˜N ): in our experiments
+we used uniform sampling without replacement. Also note
+that regardless of the approximations, S1, . . . , SM matri-
+ces are always positive deﬁnite, and this fact alone, by the
+deﬁnition of the Bhattacharyya kernel, guarantees that the
+resulting FLG, MLS and MLG kernels are positive semi-
+deﬁnite kernels. For a high level pseudocode of the result-
+ing algorithm, see the Supplementary Materials.
+
+The Multiscale Laplacian Graph Kernel
+
+Table1. Classiﬁcation Results (Accuracy ± Standard Deviation)
+
+Method
+Weisfeiler–Lehman Kernel (Shervashidze et al., 2009)
+Weisfeiler–Lehman Edge Kernel (Shervashidze et al., 2009)
+Shortest Path kernel (Borgwardt & Kriegel, 2005)
+GraphHopper Kernel (Feragen et al., 2013)
+Graphlet (Shervashidze et al., 2009)
+p–Random Walk Kernel (G¨artner et al., 2003)
+Multiscale Laplacian Graph Kernel (this paper)
+
+MUTAG
+84.5(±2.16)
+82.94(±2.33)
+85.5(±2.50)
+83.67(±2.03)
+82.00(±0.92)
+85.72(±0.74)
+86.83(±1.17)
+
+PTC
+
+60.35(±1.77)
+60.62(±1.96)
+59.53(±1.71)
+57.29(±2.13)
+55.88(±0.31)
+59.85(±0.95)
+61.79(±1.15)
+
+ENZYMES
+53.75(±1.37)
+52.00(±0.72)
+42.31(±1.37)
+68.93(±0.92)
+30.64(±0.26)1
+28.17(±0.76)
+36.95(±1.32)
+
+Table2. Summary of the datasets used in our experiments
+
+Dataset
+MUTAG
+PTC
+ENZYMES
+
+Size Nodes Edges Classes
+188
+344
+600
+
+38.9
+50.7
+124.3
+
+17.7
+46.7
+32.6
+
+2 (125 vs. 63)
+2 (192 vs. 152)
+6 (100 each)
+
+Wall clock time
+
+Table3. Runtime of MLG on different Datasets
+CPU time
+Dataset
+0min 5.68s
+MUTAG
+9min 9.53s
+PTC
+ENZYMES
+4min 41.18s
+
+0min 0.86s
+1min 11.18s
+0min 36.65s
+
+5. Experiments
+
+We compared the efﬁcacy of the MLG kernel with some
+of the top performing graph kernels from the literature:
+the Weisfeiler–Lehman
+the Weisfeiler–Lehman Kernel,
+Edge Kernel
+the Shortest
+Path Kernel (Borgwardt & Kriegel, 2005), the GraphHop-
+per Kernel (Feragen et al., 2013),
+the Graphlet Kernel
+(Shervashidze et al., 2009), and the p-random Walk Kernel
+(G¨artner et al., 2003), on standard benchmark datasets(2).
+
+(Shervashidze et al., 2009),
+
+We perform classiﬁcation using a binary C-SVM solver
+(Chang & Lin, 2011) to test our kernel method. We tuned
+the SVM slack parameter through 10-fold cross-validation
+using 9 folds for training and 1 for testing, repeated 10
+times. All experiments were done on a 16 core Intel E5-
+2670 @ 2.6GHz processor with 32 GB of memory. Our
+prediction accuracy and standard deviations are shown in
+Table 1 and runtimes in Table 4.
+
+For the Weisfeiler–Lehman kernels, we report the best pre-
+diction accuracy for h ∈ {1, 2, 3, 4, 5}. For the p-random
+walk kernel, we report the best score for p ∈ {5, 6, 7, 8}.
+For the Graphlets kernel, we sampled graphlets of size
+5 as outlined in (Shervashidze et al., 2009). To tune the
+parameters of the MLG kernel we performed a param-
+eter sweep over all combinations of (γ, l, n) for γ ∈
+{0.01, 0.05, 0.1, 0.25, 0.5, 1, 5, 10, 20}, l ∈ {1, 2, 3, 4, 5},
+and n ∈ {1, 2, 3, 4, 5}, where l is the number of levels and
+n is the neighborhood size.
+
+1As reported in (Shervashidze et al., 2009)
+
+We achieve the highest scores for MUTAG and PTC
+but perform relatively poorly on ENZYMES. The re-
+sults shown for the MLG kernel use (η, γ, l, n) values
+of (5, 0.1, 1, 2), (10, 0.1, 1, 4) and (0.25, 0.1, 1, 2) for MU-
+TAG, PTC, and ENZYMES respectively. For MUTAG and
+PTC, the other kernel methods use the given node labels,
+where as we used the vertex degrees as labels, which is es-
+sentially a handicap. Our results suggests that structural
+information was enough for decent classiﬁcation on those
+datasets and that our kernel does a good job of capturing
+structural similarity. However, for ENZYMES, the node
+labels are essential and accordingly, kernels that make ex-
+tensive use of node labels(GraphHopper and Weisfeiler–
+Lehman) perform the best on it.
+
+For all three datasets, our MLG kernel computed the Gram
+matrix in no more than 2 minutes. The Weisfeiler–Lehman
+and shortest path kernels took less than 15 seconds on each
+dataset. Graphlets, GraphHopper, and the p-Random Walk
+took around 7 minutes, 14 minutes and 4 hours to complete
+in the worst cases. While the other kernel implementations
+were supplied by their authors in Matlab, ours is in C++
+and takes advantage of multithreading so the runtimes are
+not directly comparable. After the review process is com-
+plete, we will make our implementation publicly available
+in source code format.
+
+6. Conclusions
+
+In this paper we have proposed two new graph kernels: (1)
+The FLG kernel, which is a very simple single level ker-
+nel that combines information attached to the vertices with
+the graph Laplacian; (2) The MLG kernel, which is a mul-
+tilevel, recursively deﬁned kernel that captures topological
+relationships between not just individual vertices, but also
+subgraphs. Clearly, designing kernels that can optimally
+take into account the multiscale structure of actual chemi-
+cal compounds is a challenging task that will require further
+work and domain knowledge. However, it is encouraging
+that even just “straight out of the box”, tuning only one
+or two parameters, such as the number of levels, the MLG
+kernel performed on par with, or even slightly better than
+the other well known kernels in the literature. Beyond just
+graphs, the general idea of multiscale kernels is of interest
+
+The Multiscale Laplacian Graph Kernel
+
+for other types of data as well (such as images) that have
+multiresolution structure, and the way that the MLG kernel
+chains together local spectral analysis at multiple scales is
+potentially applicable to these domains as well, which will
+be the subject of further research.
+
+Acknowledgements
+
+This work was completed in part with computing resources
+provided by the University of Chicago Research Comput-
+ing Center.
+
+The Multiscale Laplacian Graph Kernel
+
+References
+Alexa, Marc, Kazhdan, Michael, and Guibas, Leonidas. A
+Concise and Provably Informative Multi-Scale Signa-
+ture Based on Heat Diffusion. In Processing of Eu-
+rographics Symposium on Geometry Processing, vol-
+ume 28, 2009.
+
+Borgwardt, K. M., Ong, C. S., Sch¨onauer, S., Vish-
+wanathan, S. V. N., Smola, A. J., and Kriegel, H.-P.
+Protein function prediction via graph kernels. In Pro-
+ceedings of Intelligent Systems in Molecular Biology
+(ISMB), Detroit, USA, 2005.
+
+Borgwardt, Karsten M. and Kriegel, Hans Peter. Shortest-
+path kernels on graphs.
+the
+5th IEEE International Conference on Data Min-
+ing(ICDM) 2005), 27-30 November 2005, Houston,
+Texas, USA, pp. 74–81, 2005.
+
+In Proceedings of
+
+Chang, Chih-Chung and Lin, Chih-Jen. Libsvm: A library
+for support vector machines. ACM Transactions on
+Intelligent Systems and Technology, 3, 2011.
+
+Drineas, P. and Mahoney, M. W. On the Nystr¨om method
+for approximating a Gram matrix for improved kernel-
+based learning.
+Journal of Machine Learning Re-
+search, 6:2153–2175, 2005.
+
+Feragen, Aasa, Kasenburg, Niklas, Petersen, Jens, de Brui-
+jne, Marleen, and Borgwardt, Karsten M. Scalable
+kernels for graphs with continuous attributes. In Ad-
+vances in Neural Information Processing Systems 26:
+27th Annual Conference on Neural Information Pro-
+cessing Systems 2013. Proceedings of a meeting held
+December 5-8, 2013, Lake Tahoe, Nevada, United
+States., pp. 216–224, 2013.
+
+G¨artner, T. Exponential and geometric kernels for graphs.
+In NIPS*02 workshop on unreal data, volume Princi-
+ples of modeling nonvectorial data, 2002.
+
+G¨artner, Thomas, Flach, Peter, and Wrobel, Stefan. On
+graph kernels: Hardness results and efﬁcient alterna-
+tives.
+In Computational Learning Theory and Ker-
+nel Machines, 16th Annual Conference on Compu-
+tational Learning Theory and 7th Kernel Workshop,
+COLT/Kernel 2003, Washington, DC, USA, August
+24-27, 2003, Proceedings, pp. 129–143, 2003.
+
+Inokuchi, Akihiro, Washio, Takashi, and Motoda, Hiroshi.
+Complete mining of frequent patterns from graphs:
+Mining graph data. Machine Learning, 50(3):321–
+354, 2003.
+
+Jebara, Tony and Kondor, Risi. Bhattacharyya and ex-
+pected likelihood kernels. In Sch¨olkopf, B. and War-
+muth, M. (eds.), Proceedings of the Annual Confer-
+
+ence on Computational Learning Theory and Ker-
+nels Workshop (COLT/KW), number 2777 in Lecture
+Notes in Computer Science, pp. 57–71, Heidelberg,
+Germany, 2003. Springer-Verlag.
+
+Kondor, Risi and Borgwardt, Karsten. The skew spectrum
+of graphs. In Proceedings of the International Con-
+ference on Machine Learning (ICML), pp. 496–503.
+ACM, 2008.
+
+Kondor, Risi and Jebara, Tony. A kernel between sets of
+vectors. In Proceedings of the International Confer-
+ence on Machine Learning (ICML), 2003. (Best stu-
+dent paper award. Google Scholar citations: 137).
+
+Kubinyi, H. Drug research: myths, hype and reality. Na-
+ture Reviews: Drug Discovery, 2(8):665–668, August
+2003.
+
+Mika, S., Sch¨olkopf, B., Smola, A. J., M¨uller, K.-R.,
+Scholz, Matthias, and R¨atsch, G. Kernel PCA and
+de-noising in feature spaces. In Kearns, M. S., Solla,
+S. A., and Cohn, D. A. (eds.), Advances in Neural In-
+formation Processing Systems 11, pp. 536–542. MIT
+Press, 1999.
+
+Mikkonen, T. The ring of graph invariants — graphic val-
+
+ues. 2007.
+
+Sch¨olkopf, Bernhard and Smola, Alexander J. Learning
+
+with Kernels. MIT Press, 2002.
+
+Shervashidze, Nino, Vishwanathan, S. V. N., Petri, Tobias,
+Mehlhorn, Kurt, and Borgwardt, Karsten M. Efﬁcient
+graphlet kernels for large graph comparison. In Pro-
+ceedings of the Twelfth International Conference on
+Artiﬁcial Intelligence and Statistics, AISTATS 2009,
+Clearwater Beach, Florida, USA, April 16-18, 2009,
+pp. 488–495, 2009.
+
+Shervashidze, Nino, Schweitzer, Pascal, van Leeuwen,
+Erik Jan, Mehlhorn, Kurt, and Borgwardt, Karsten M.
+Weisfeiler-lehman graph kernels.
+jmlr, 12:2539–
+2561, November 2011.
+
+Vishwanathan, S. V. N., Borgwardt, Karsten, Kondor, Risi,
+and Schraudolph, Nicol. On graph kernels. Journal of
+Machine Learning Research (JMLR), 11, 2010.
+
+Williams, C. and Seeger, M. Using the Nystr¨om method
+to speed up kernel machines. In Advances in Neural
+Information Processing Systems (NIPS), 2001.
+
+The Multiscale Laplacian Graph Kernel
+
+Algorithm 1 The fast MLG algorithm (high level overview)
+
+INPUT: A collection of graphs G = {G1, . . . ,GM} with joint vertex set V , a base kernel κ : V × V → R,
+
+a system of nested subgraphs v ∈ N1(v) ⊆ N2(v) ⊆ . . . ⊆ NL(v) for each vertex v ∈ V , and
+smoothing parameters η and γ.
+
+Sample {˜v1, . . . , ˜v ˜N} from V
+Compute the subsampled Gram matrix ˜K, with elements ˜Ki,j = κ(˜vi, ˜vj)
+Compute a basis {ξ1, . . . , ξ ˜P} for the approximate joint feature space ˜W from K
+For each ( v ∈ V ) { φ(v) ← the projection of φκ(v) to ˜Wκ }
+For ( ℓ = 1 to L ) {
+
+For each ( v ∈ V ) {
+Lv ← the Laplacian of Gℓ(v)
+Uv ← [φ(w1), . . . , φ(w|Gℓ(v)|)]⊤, where (w1, . . . , w|Gℓ(v)|) are the vertices of Gℓ(v)
+Sv ← Uv(Lv + ηI)−1U⊤v + γI
+}Sample {˜v1, . . . , ˜v ˜N} from V
+Compute the subsampled Gram matrix ˜K ∈ R
+
+˜N× ˜N , with elements
+
+˜Ki,j = kFLG(Gℓ(˜vi), G(˜vj )) = (cid:12)(cid:12)(cid:0) 1
+
+˜v2 (cid:1)−1(cid:12)(cid:12)1/2
+2 S−1
+˜v1 + 1
+|S ˜v1|1/4 |S ˜v2|1/4
+Compute a basis {ξ1, . . . , ξ ˜P} for the approximate joint feature space ˜Wκ from K
+For each ( v ∈ V ) { φ(v) ← the projection of φκ(v) to ˜Wκ }
+
+2 S−1
+
+}
+For ( i = 1 to M ) {
+
+Li ← the Laplacian of Gi
+Ui ← [φ(v1), . . . , φ(v|Vi|)]⊤, where (v1, . . . , v|Vi|) are the vertices of Gi
+Si ← Ui(Li + ηI)−1U⊤i + γI
+
+}
+Compute the MLG Gram matrix G ∈ RM×M , with elements
+Gi,j = K(Gi,Gj) = (cid:12)(cid:12)(cid:0) 1
+
+2 S−1
+
+2 S−1
+i + 1
+|Si|1/4 |Sj|1/4
+
+j (cid:1)−1(cid:12)(cid:12)1/2
+
+OUTPUT: the MLG Gram matrix G
+
+Table4. Runtime for Computing Gram Matrix
+PTC
+5.24s
+5.42s
+0.39s
+
+MUTAG
+
+2.04s
+2.06s
+0.10s
+58.4s
+
+Method
+Weisfeiler–Lehman Kernel
+Weisfeiler–Lehman Edge Kernel
+Shortest Path kernel
+GraphHopper Kernel
+Graphlet
+p–Random Walk Kernel
+Multiscale Laplacian Graph Kernel
+
+1min 17.6s
+18min 28.5s
+
+0.86s
+
+6min 55.6s
+3min 3.7s
+3hr 42min
+1min 11.18s
+
+14 min 13.2s
+7min 22.6s
+38min 25.0s
+
+36.65s
+
+ENZYMES
+
+11.96s
+12.99s
+0.87s
+
+

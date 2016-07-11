@@ -1,0 +1,1115 @@
+In the Search of Optimal Concurrency
+
+Vincent Gramoli3 Petr Kuznetsov1 Srivatsan Ravi2
+
+1T´el´ecom ParisTech
+2Purdue University
+3University of Sydney
+
+Abstract
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+4
+
+ 
+
+ 
+ 
+]
+
+C
+D
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+4
+8
+3
+1
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Implementing a concurrent data structure typically begins with deﬁning its sequential speciﬁcation.
+However, when used as is, a nontrivial sequential data structure, such as a linked list, a search tree,
+or a hash table, may expose incorrect behavior:
+lost updates, inconsistent responses, etc. To ensure
+correctness, portions of the sequential code operating on the shared data must be “protected” from data
+races using synchronization primitives and, thus, certain schedules of the steps of concurrent operations
+must be rejected. But can we ensure that we do not “overuse” synchronization, i.e., that we reject a
+concurrent schedule only if it violates correctness?
+
+In this paper, we treat this question formally by introducing the notion of a concurrency-optimal
+implementation. A program’s concurrency is deﬁned here as its ability to accept concurrent schedules,
+i.e., interleavings of steps of its sequential implementation. An implementation is concurrency-optimal
+if it accepts all interleavings that do not violate the program’s correctness. We explore the concur-
+rency properties of search data structures which can be represented in the form of directed acyclic
+graphs exporting insert, delete and search operations. We prove, for the ﬁrst time, that pessimistic
+(e.g., based on conservative locking) and optimistic serializable (e.g., based on serializable transactional
+memory) implementations of search data-structures are incomparable in terms of concurrency. Specif-
+ically, there exist simple interleavings of sequential code that cannot be accepted by any pessimistic
+(and resp., serializable optimistic) implementation, but accepted by a serializable optimistic one (and
+resp., pessimistic). Thus, neither of these two implementation classes is concurrency-optimal.
+
+1 Introduction
+
+Building concurrent abstractions that eﬃciently exploit multi-processing abilities of modern hardware is a
+challenging task. One of the most important issues here is the need for synchronization, i.e., ensuring that
+concurrent processes resolve conﬂicts on the shared data in a consistent way. Indeed, using, as is, a data
+structure designed for conventional sequential settings in a concurrent environment may cause diﬀerent kinds
+of inconsistencies, and synchronization must be used to avoid them. A variety of synchronization techniques
+have been developed so far. Conventional pessimistic synchronization conservatively protects shared data
+with locks before reading or modifying it. Speculative synchronization, achieved using transactional memory
+(TM) or conditional instructions, such as CAS or LL/SC, optimistically executes memory operations with
+a risk of aborting them in the future. A programmer typically uses these synchronization techniques to
+“wrap” fragments of a sequential implementation of the desired abstraction (e.g., operations on the shared
+data structure) in a way that allows the resulting concurrent execution to “appear” locally sequential, while
+preserving a global correctness criterion.
+
+It is however diﬃcult to tell in advance which of the techniques will provide more concurrency, i.e.,
+which one would allow the resulting programs to process more executions of concurrent operations without
+data conﬂicts.
+Implementations based on TMs [5, 26], which execute concurrent accesses speculatively,
+may seem more concurrent than lock-based counterparts whose concurrent accesses are blocking. But TMs
+conventionally impose serializability [24] or even stronger properties [13] on operations encapsulated within
+transactions. This may prohibit certain concurrent scenarios allowed by a large class of dynamic data
+structures [9].
+
+In this paper, we reason formally about the “amount of concurrency” one can obtain by turning a
+sequential program into a concurrent one. To enable fair comparison of diﬀerent synchronization techniques,
+we (1) deﬁne what it means for a concurrent program to be correct regardless of the type of synchronization
+it uses and (2) deﬁne a metric of concurrency. These deﬁnitions allow us to compare concurrency properties
+oﬀered by serializable optimistic and pessimistic synchronization techniques, whose popular examples are,
+respectively, transactions and conservative locking.
+
+1
+
+Correctness Our novel consistency criterion, called locally-serializable linearizability, is an intersection
+of linearizability and a new local serializability criterion.
+Suppose that we want to design a concurrent implementation of a data type T (e.g., integer set), given its
+sequential implementation S (e.g., based on a sorted linked list). A concurrent implementation of T is locally
+serializable with respect to S if it ensures that the local execution of reads and writes of each operation
+is, in precise sense, equivalent to some execution of S. This condition is weaker than serializability since it
+does not require the existence of a single sequential execution that is consistent with all local executions. It
+is however suﬃcient to guarantee that executions do not observe an inconsistent transient state that could
+lead to fatal arithmetic errors, e.g., division-by-zero.
+In addition, for the implementation of T to “make sense” globally, every concurrent execution should be
+linearizable [3, 20]: the invocation and responses of high-level operations observed in the execution should
+constitute a correct sequential history of T . The combination of local serializability and linearizability gives
+a correctness criterion that we call LS-linearizability, where LS stands for “locally serializable”. We show
+that LS-linearizability, just like linearizability, is compositional [18, 20]: a composition of LS-linearizable
+implementations is also LS-linearizable.
+
+Concurrency metric We measure the amount of concurrency provided by an LS-linearizable implemen-
+tation as the set of schedules it accepts. To this end, we deﬁne a concurrency metric inspired by the analysis
+of parallelism in database concurrency control [16, 30] and transactional memory [10]. More speciﬁcally,
+we assume an external scheduler that deﬁnes which processes execute which steps of the corresponding
+sequential program in a dynamic and unpredictable fashion. This allows us to deﬁne concurrency provided
+by an implementation as the set of schedules (interleavings of reads and writes of concurrent sequential
+operations) it accepts (is able to eﬀectively process).
+
+Our concurrency metric is platform-independent and it allows for measuring relative concurrency of
+
+LS-linearizable implementations using arbitrary synchronization techniques.
+
+The combination of our correctness and concurrency deﬁnitions provides a framework to compare the
+
+concurrency one can get by choosing a particular synchronization technique for a speciﬁc data type.
+
+Measuring concurrency: pessimism vs. serializable optimism We explore the concurrency prop-
+erties of a large class of search concurrent data structures. Search data structures maintain data in the form
+of a rooted directed acyclic graph (DAG), where each node is a (cid:104)key, value(cid:105) pair, and export operations
+insert(key, value), delete(key), and ﬁnd (key) with the natural sequential semantics.
+
+A typical sequential implementation of these operations traverses the graph starting from the root in
+order to locate the “relevant” area corresponding to its key parameter. If the operation is insert or delete and
+the relevant area satisﬁes certain conditions, the operation updates it. The class includes many popular data
+structures, such as linked lists, skiplists, and search trees, implementing various abstractions like sets and
+multi-sets. Under reasonable assumptions on the representation of data, search structures are “concurrency-
+friendly”: high-level operations may commute (and, thus, proceed concurrently and independently) if their
+relevant sets are disjoint. To exploit this potential concurrency, various synchronization techniques can be
+employed.
+
+In this paper, we compare the concurrency properties of two classes of search-structure implementa-
+tions: pessimistic and serializable optimistic. Pessimistic implementations capture what can be achieved
+using classic conservative locks like mutexes, spinlocks, reader-writer locks.
+In contrast, optimistic im-
+plementations, however proceed speculatively and may roll back in the case of conﬂicts. Additionally,
+serializable optimistic techniques, e.g., relying on conventional TMs, like TinySTM [8] or NOrec [5] allow
+for transforming any sequential implementation of a data type to a LS-linearizable concurrent one.
+
+The main result of this paper is that synchronization techniques based on pessimism and serializable
+optimism, are not concurrency-optimal: we show that no one of their respective set of accepted concurrent
+schedules include the other.
+
+On the one hand, we prove, for the ﬁrst time, that there exist simple schedules that are not accepted
+by any pessimistic implementation, but accepted by a serializable optimistic implementation. Our proof
+technique, which is interesting in its own right, is based on the following intuitions: a pessimistic implemen-
+tation has to proceed irrevocably and over-conservatively reject a potentially acceptable schedule, simply
+because it may result in a data conﬂict thus leading the data structure to an inconsistent state. However,
+an optimistic implementation of a search data structure may (partially or completely) restart an operation
+depending on the current schedule. This way even schedules that potentially lead to conﬂicts may be
+optimistically accepted.
+
+On the other hand, we show that pessimistic implementations can be designed to exploit the semantics
+of the data type. In particular, they can allow operations updating disjoint sets of data items to proceed
+
+2
+
+independently and preserving linearizability of the resulting history, even though the execution is not seri-
+alizable. In such scenarios, pessimistic implementations carefully adjusted to the data types we implement
+can supersede the “semantic-oblivious” optimistic serializable implementations. Thus, neither pessimistic
+nor serializable optimistic implementations are concurrency-optimal.
+
+Our comparative analysis of concurrency properties of pessimistic and serializable optimistic imple-
+mentation suggests that combining the advantages of pessimism, namely its semantics awareness, and the
+advantages of optimism, namely its ability to restart operations in case of conﬂicts, enables implementations
+that are strictly better-suited for exploiting concurrency than any of these two techniques taken individ-
+ually. To the best of our knowledge, this is the ﬁrst formal analysis of the relative abilities of diﬀerent
+synchronization techniques to exploit concurrency in dynamic data structures and lays the foundation for
+designing concurrent data structures that are concurrency-optimal.
+
+Roadmap We deﬁne the class of concurrent implementations we consider in Section 2. In Section 3, we
+deﬁne the correctness criterion and our concurrency metric. Section 4 deﬁnes the class of search structures
+for which our concurrency lower bounds apply.
+In Section 5, we analyse the concurrency provided by
+pessimistic and serializabile optimistic synchronization techniques in exploiting concurrency w.r.t search
+structures. Sections 6 and 7 present the related work and concluding remarks respectively.
+
+2 Preliminaries
+
+Sequential types and implementations An type τ is a tuple (Φ, Γ, Q, q0, δ) where Φ is a set of op-
+erations, Γ is a set of responses, Q is a set of states, q0 ∈ Q is an initial state and δ ⊆ Q × Φ × Q × Γ is
+a sequential speciﬁcation that determines, for each state and each operation, the set of possible resulting
+states and produced responses [2].
+
+Any type τ = (Φ, Γ, Q, q0, δ) is associated with a sequential implementation IS . The implementation
+encodes states in Q using a collection of elements X1, X2, . . . and, for each operation of τ , speciﬁes a
+sequential read-write algorithm. Therefore, in the implementation IS , an operation performs a sequence of
+reads and writes on X1, X2, . . . and returns a response r ∈ Γ. The implementation guarantees that, when
+executed sequentially, starting from the state of X1, X2, . . . encoding q0, the operations eventually return
+responses satisfying δ.
+
+Concurrent implementations We consider an asynchronous shared-memory system in which a set of
+processes communicate by applying primitives on shared base objects [17].
+We tackle the problem of turning the sequential algorithm IS of type τ into a concurrent one, shared by n
+processes p1, . . . , pn (n ∈ N). The idea is that the concurrent algorithm essentially follows IS , but to ensure
+correct operation under concurrency, it replaces read and write operations on X1, X2, . . . in operations of
+IS with their base-object implementations.
+
+Throughout this paper, we use the term operation to refer to high-level operations of the type. Reads
+and writes implemented by a concurrent algorithm are referred simply as reads and writes. Operations on
+base objects are referred to as primitives.
+
+We also consider concurrent implementation that execute portions of sequential code speculatively, and
+restart their operations when conﬂicts are encountered. To account for such implementations, we assume
+that an implemented read or write may abort by returning a special response ⊥. In this case, we say that
+the corresponding (high-level) operation is aborted.
+
+Therefore, our model applies to all concurrent algorithms in which a high-level operation can be seen
+as a sequence of reads and writes on elements X1, X2, . . . (representing the state of the data structure),
+with the option of aborting the current operation and restarting it after. Many existing concurrent data
+structure implementations comply with this model as we illustrate below.
+
+Executions and histories An execution of a concurrent implementation is a sequence of invocations
+and responses of high-level operations of type τ , invocations and responses of read and write operations,
+and invocations and responses of base-object primitives. We assume that executions are well-formed : no
+process invokes a new read or write, or high-level operation before the previous read or write, or a high-level
+operation, resp., returns, or takes steps outside its operation’s interval.
+Let α|pi denote the subsequence of an execution α restricted to the events of process pi. Executions α
+and α(cid:48) are equivalent if for every process pi, α|pi = α(cid:48)|pi. An operation π precedes another operation π(cid:48) in
+an execution α, denoted π →α π(cid:48), if the response of π occurs before the invocation of π(cid:48). Two operations
+are concurrent if neither precedes the other. An execution is sequential if it has no concurrent operations.
+
+3
+
+A sequential execution α is legal if for every object X, every read of X in α returns the latest written value
+of X. An operation is complete in α if the invocation event is followed by a matching (non-⊥) response or
+aborted; otherwise, it is incomplete in α. Execution α is complete if every operation is complete in α.
+of operations, reads and writes, except for the reads and writes that return ⊥ (the abort response).
+
+The history exported by an execution α is the subsequence of α reduced to the invocations and responses
+
+High-level histories and linearizability A high-level history ˜H of an execution α is the subsequence
+of α consisting of all invocations and responses of non-aborted operations. A complete high-level history ˜H
+is linearizable with respect to an object type τ if there exists a sequential high-level history S equivalent
+to H such that (1) → ˜H⊆→S and (2) S is consistent with the sequential speciﬁcation of type τ . Now a
+high-level history ˜H is linearizable if it can be completed (by adding matching responses to a subset of
+incomplete operations in ˜H and removing the rest) to a linearizable high-level history [3, 20].
+
+Optimistic and pessimistic implementations Note that in our model an implementations may, under
+certain conditions, abort an operation: some read or write return ⊥, in which case the corresponding
+operation also returns ⊥. Popular classes of such optimistic implementations are those based on “lazy
+synchronization” [15, 18] (with the ability of returning ⊥ and re-invoking an operation) or transactional
+memory (TM ) [5, 26].
+In the subclass of pessimistic implementations, no execution includes operations that return ⊥. Pes-
+simistic implementations are typically lock-based or based on pessimistic TMs [1]. A lock provides exclusive
+(resp., shared) access to an element X through synchronization primitives lock(X) (resp., lock-shared(X)),
+and unlock(X) (resp., unlock-shared(X)). A process releases the lock it holds by invoking unlock(X) or
+unlock-shared(X). When lock(X) invoked by a process pi returns, we say that pi holds a lock on X (until pi
+returns from the subsequent lock(X)). When lock-shared(X) invoked by pi returns, we say that pi holds a
+shared lock on X (until pi returns from the subsequent lock-shared(X)). At any moment, at most one pro-
+cess may hold a lock on an element X. Note that two processes can hold a shared lock on X at a time. We
+assume that locks are starvation-free: if no process holds a lock on X forever, then every lock(X) eventually
+returns. Given a sequential implementation of a data type, a corresponding lock-based concurrent one is
+derived by inserting the synchronization primitives (lock and unlock) to protect read and write accesses to
+the shared data.
+
+3 Correctness and concurrency metric
+
+In this section, we deﬁne the correctness criterion of locally serializable linearizability and introduce the
+framework for comparing the relative abilities of diﬀerent synchronization technique in exploiting concur-
+rency.
+
+3.1 Locally serializable linearizability
+Let H be a history and let π be a high-level operation in H. Then H|π denotes the subsequence of H
+consisting of the events of π, except for the last aborted read or write, if any. Let IS be a sequential
+implementation of an object of type τ and ΣIS , the set of histories of IS .
+Deﬁnition 1 (LS-linearizability). A history H is locally serializable with respect to IS if for every high-
+
+level operation π in H, there exists S ∈ ΣIS such that H|π = S|π.
+A history H is LS-linearizable with respect to (IS , τ ) (we also write H is (IS, τ )-LSL) if: (1) H is locally
+serializable with respect to IS and (2) the corresponding high-level history ˜H is linearizable with respect to
+τ .
+
+Observe that local serializability stipulates that the execution is witnessed sequential by every operation.
+Two diﬀerent operations (even when invoked by the same process) are not required to witness mutually
+consistent sequential executions.
+
+A concurrent implementation I is LS-linearizable with respect to (IS, τ ) (we also write I is (IS , τ )-
+LSL) if every history exported by I is (IS , τ )-LSL. Throughout this paper, when we refer to a concurrent
+implementation of (IS , τ ), we assume that it is LS-linearizable with respect to (IS , τ ).
+
+4
+
+Compositionality We deﬁne the composition of two distinct object types τ1 and τ2 as a type τ1 × τ2 =
+(Φ, Γ, Q, q0, δ) as follows: Φ = Φ1∪ Φ2, Γ = Γ1∪ Γ2,1 Q = Q1× Q2, q0 = (q01, q02), and δ ⊆ Q× Φ× Q× Γ is
+2), r) ∈ δ if and only if for i ∈ {1, 2}, if π ∈ Φi then (qi, π, q(cid:48)
+1q(cid:48)
+such that ((q1, q2), π, (q(cid:48)
+3−i.
+Every sequential implementation IS of an object O1 × O2 of a composed type τ1 × τ2 naturally induces
+two sequential implementations IS1 and IS2 of objects O1 and O2, respectively. Now a correctness criterion
+Ψ is compositional if for every history H on an object composition O1 × O2, if Ψ holds for H|Oi with
+respect to ISi, for i ∈ {1, 2}, then Ψ holds for H with respect to IS = IS1 × IS2. Here, H|Oi denotes the
+subsequence of H consisting of events on Oi.
+
+i, r) ∈ δi ∧ q3−i = q(cid:48)
+
+Theorem 1. LS-linearizability is compositional.
+Proof. Let H, a history on O1 × O2, be LS-linearizable with respect to IS . Let each H|Oi, i ∈ {1, 2},
+be LS-linearizable with respect to ISi. Without loss of generality, we assume that H is complete (if H is
+incomplete, we consider any completion of it containing LS-linearizable completions of H|O1 and H|O1).
+Let ˜H be a completion of the high-level history corresponding to H such that ˜H|O1 and ˜H|O2 are
+linearizable with respect to τ1 and τ2, respectively. Since linearizability is compositional [18, 20], ˜H is
+linearizable with respect to τ1 × τ2.
+π be any two sequential histories of IS1 and IS2 such that
+H|π|Oj = Sj
+π|π, for j ∈ {1, 2} (since H|O1 and H|O2 are LS-linearizable such histories exist). We construct
+π, j ∈ {1, 2}. Since each Sj
+a sequential history Sπ by interleaving events of S1
+acts on a distinct component Oj of O1 × O2, every such Sπ is a sequential history of IS . We pick one Sπ
+that respects the local history H|π, which is possible, since H|π is consistent with both S1|π and S2|π.
+Thus, for each π, we obtain a history of IS that agrees with H|π. Moreover, the high-level history of H
+
+π so that Sπ|Oj = Sj
+
+π and S2
+
+Now let, for each operation π, S1
+
+π and S2
+
+π
+
+is linearizable. Thus, H is LS-linearizable with respect to IS .
+
+Note that LS-linearizability is not non-blocking [18, 20]: local serializability may prevent an operation
+in a ﬁnite LS-linearizable history from having a completion, e.g., because, it might read an inconsistent
+system state caused by a concurrent incomplete operation.
+
+LS-linearizability versus other criteria LS-linearizability is a two-level consistency criterion which
+makes it suitable to compare concurrent implementations of a sequential data structure, regardless of
+synchronization techniques they use. It is quite distinct from related criteria designed for database and
+software transactions, such as serializability [24, 29] and multilevel serializability [28, 29].
+
+For example, serializability [24] prevents sequences of reads and writes from conﬂicting in a cyclic way,
+establishing a global order of transactions. Reasoning only at the level of reads and writes may be overly
+conservative: higher-level operations may commute even if their reads and writes conﬂict [27]. Consider
+an execution of a concurrent list-based set depicted in Figure 3. We assume here that the set initial state
+is {1, 3, 4}. Operation contains(5) is concurrent, ﬁrst with operation insert(2) and then with operation
+insert(5). The history is not serializable:
+insert(5) sees the eﬀect of insert(2) because R(X1) by insert(5)
+returns the value of X1 that is updated by insert(2) and thus should be serialized after it. But contains(5)
+misses element 2 in the linked list, but must read the value of X4 that is updated by insert(5) to perform
+the read of X5, i.e., the element created by insert(5). However, this history is LSL since each of the three
+local histories is consistent with some sequential history of LL.
+
+Multilevel serializability [28,29] was proposed to reason in terms of multiple semantic levels in the same
+execution. LS-linearizability, being deﬁned for two levels only, does not require a global serialization of
+low-level operations as 2-level serializability does. LS-linearizability simply requires each process to observe
+a local serialization, which can be diﬀerent from one process to another. Also, to make it more suitable
+for concurrency analysis of a concrete data structure, instead of semantic-based commutativity [27], we use
+the sequential speciﬁcation of the high-level behavior of the object [20].
+
+Linearizability [3, 20] only accounts for high-level behavior of a data structure, so it does not imply LS-
+linearizability. For example, Herlihy’s universal construction [17] provides a linearizable implementation
+for any given object type, but does not guarantee that each execution locally appears sequential with
+respect to any sequential implementation of the type. Local serializability, by itself, does not require any
+synchronization between processes and can be trivially implemented without communication among the
+processes. Therefore, the two parts of LS-linearizability indeed complement each other.
+
+1Here we treat each τi as a distinct type by adding index i to all elements of Φi, Γi, and Qi.
+
+5
+
+Figure 1: Three search structures, a binary tree, a linked list and a skip list, whose k-relevant set has grey
+nodes and whose k-relevant path is indicated with a dashed arrow
+
+3.2 Concurrency metric
+
+To characterize the ability of a concurrent implementation to process arbitrary interleavings of sequential
+code, we introduce the notion of a schedule. Intuitively, a schedule describes the order in which complete
+high-level operations, and sequential reads and writes are invoked by the user. More precisely, a schedule is
+an equivalence class of complete histories that agree on the order of invocation and response events of reads,
+writes and high-level operations, but not necessarily on the responses of read operations or of high-level
+operations. Thus, a schedule can be treated as a history, where responses of read and high-level operations
+are not speciﬁed.
+
+We say that an implementation I accepts a schedule σ if it exports a history H such that complete(H)
+exhibits the order of σ, where complete(H) is the subsequence of H that consists of the events of the
+complete operations that returned a matching response. We then say that the execution (or history)
+exports σ. A schedule σ is (IS , τ )-LSL if there exists an (IS , τ )-LSL history exporting σ.
+
+An (IS , τ )-LSL implementation is therefore concurrency-optimal if it accepts all (IS , τ )-LSL schedules.
+
+4 Search data structures
+In this section, we introduce a class D of dictionary-search data structures (or simply search structures),
+inspired by the study of dynamic databases undertaken by Chaudhri and Hadzilacos [4].
+
+Data representation At a high level, a search structure is a dictionary that maintains data in a directed
+acyclic graph (DAG) with a designated root node (or element). The vertices (or nodes) of the graph are
+key-value pairs and edges specify the traversal function, i.e, paths that should be taken by the dictionary
+operations in order to ﬁnd the nodes that are going to determine the eﬀect of the operation. Keys are
+natural numbers, values are taken from a set V and the outgoing edges of each node are locally labelled.
+By a light abuse of notation we say that G contains both nodes and edges. Key values of nodes in a DAG G
+are related by a partial order ≺G that additionally deﬁnes a property PG specifying if there is an outgoing
+edge from node with key k to a node with key k(cid:48) (we say that G respects PG).
+
+If G contains a node a with key k, the k-relevant set of G, denoted Vk(G), is a plus all nodes b, such
+that G contains (b, a) or (a, b). If G contains no nodes with key k, Vk(G) consists of all nodes a of G with
+the smallest k ≺G k(cid:48) plus all nodes b, such that (b, a) is in G. The k-relevant graph of G, denoted Rk(G),
+is the subgraph of G that consists of all paths from the root to the nodes in Vk(G).
+Sequential speciﬁcation At a high level, every data structure in D exports a sequential speciﬁcation
+with the following operations:
+
+• insert(k, v) checks whether a node with key k is already present and, if so, returns false, otherwise it
+creates a node with key k and value v, links it to the graph (making it reachable from the root) and
+returns true;
+
+• delete(k) checks whether a node with key k is already present and, if so, unlinks the node from the
+
+graph (making it unreachable from the root) and returns true, otherwise it returns false;
+
+• ﬁnd (k) returns the pointer to the node with key k or false if no such node is found.
+
+Traversals For each operation op ∈ {insert(k, v), delete(k), ﬁnd (k)}k∈N,v∈V , each search structure is
+parameterized by a (possibly randomized) traverse function τop. Given the last visited node a and the
+DAG of already visited nodes Gop, the traverse function τop returns a new node b to be visited, i.e.,
+accessed to get its key and the list of descendants, or ∅ to indicate that the search is complete.
+
+6
+
+k'k'k'Find, insert and delete operations
+Intuitively, the traverse function is used by the operation op to
+explore the search structure and, when the function returns ∅, the sub-DAG Gop explored so far contains
+enough information for operation op to complete.
+
+If op = ﬁnd(k), Gop either contains a node with key k or ensures that the whole graph does not contain
+k. As we discuss below, in sorted search structures, such as sorted linked-lists or skiplists, we can stop as
+soon as all outgoing edges in Gop belong to nodes with keys k(cid:48) ≥ k. Indeed, the remaining nodes can only
+contain keys greater than k, so Gop contains enough information for op to complete.
+An operation op = insert(k, v), is characterized by an insert function µ(k,v) that, given a DAG G and
+a new node (cid:104)k, v(cid:105) /∈ G, returns the set of edges from nodes of G to (cid:104)k, v(cid:105) and from (cid:104)k, v(cid:105) to nodes of G so
+that the resulting graph is a DAG containing (cid:104)k, v(cid:105) and respects PG.
+
+An operation op = delete(k), is characterized by a delete function νk that, given a DAG G, gives the
+set of edges to be removed and a set of edges to be added in G so that the resulting graph is a DAG that
+respects PG.
+
+Sequential implementations We make the following natural assumptions on the sequential implemen-
+tation of a search structure:
+
+• Traverse-update Every operation op starts with the read-only traverse phase followed with a write-
+only update phase. The traverse phase of an operation op with parameter k completes at the latest
+when for the visited nodes Gop contains the k-relevant graph. The update phase of a ﬁnd (k) operation
+is empty.
+
+• Proper traversals and updates For all DAGs Gop and nodes a ∈ Gop, the traverse function τop(a, Gop)
+returns b such that (a, b) ∈ G. The update phase of an insert(k) or delete(k) operation modiﬁes
+outgoing edges of k-relevant nodes.
+
+• Non-triviality There exist a key k and a state G such that (1) G contains no node with key k, (2)
+If G(cid:48) is the state resulting after applying insert(k, v) to G, then there is exactly one edge (a, b) in G(cid:48)
+such that b has key k, and (3) the shortest path in G(cid:48) from the root to a is of length at least 2.
+
+The non-triviality property says that in some cases the read-phase may detect the presence of a given key
+only at the last step of a traverse-phase. Moreover, it excludes the pathological DAGs in which all the
+nodes are always reachable in one hop from the root. Moreover, the traverse-update property and the fact
+that keys are natural numbers implies that every traverse phase eventually terminates. Indeed, there can
+be only ﬁnitely many vertices pointing to a node with a given key, thus, eventually a traverse operation
+explores enough nodes to be sure that no node with a given key can be found.
+
+In Figure 1, we describe few data structures in D. A sorted
+Examples of search data structures
+linked list maintains a single path, starting at the root sentinel node and ending at a tail sentinel node,
+and any traversal with parameter k simply follows the path until a node with key k(cid:48) ≥ k is located. The
+traverse function for all operations follows the only path possible in the graph until the two relevant nodes
+are located.
+
+A skiplist [25] of n nodes is organized as a series of O(log n) sorted linked lists, each specifying shortcuts
+of certain length. The bottom-level list contains all the nodes, each of the higher-level lists contains a
+sublist of the lower-level list. A traversal starts with the top-level list having the longest “hops” and goes
+to lower lists with smaller hops as the node with smallest key k(cid:48) ≥ k get closer.
+
+A binary search tree represents data items in the form of a binary tree. Every node in the tree stores
+a key-value pair, and the left descendant of a non-leaf node with key k roots a subtree storing all nodes
+with keys less than k, while the right descendant roots a subtree storing all nodes with keys greater than k.
+Note that, for simplicity, we do not consider rebalancing operations used by balanced trees for maintaining
+the desired bounds on the traverse complexity. Though crucial in practice, the rebalancing operations are
+not important for our comparative analysis of concurrency properties of synchronization techniques.
+
+Non-serializable concurrency There is a straightforward LSL implementation of any data structure in
+D in which updates (inserts and deletes) acquire a lock on the root node and are thus sequential. Moreover,
+they take exclusive locks on the set of nodes they are about to modify (k-relevant sets for operations with
+parameter k).
+
+A ﬁnd operation uses hand-over-hand shared locking [27]: at each moment of time, the operation holds
+shared locks on all outgoing edges for the currently visited node a. To visit a new node b (recall that b
+must be a descendant of a), it acquires shared locks on the new node’s descendants and then releases the
+
+7
+
+Algorithm 1 Abstract HOH-ﬁnd implementation of a search structure deﬁned by (τop, µinsert(k,v),
+νdelete(k)), op ∈ {insert(k, v), delete(k), ﬁnd(k)}, k ∈ N, v ∈ V .
+
+1: Shared variables:
+2:
+
+G, initially root
+
+(cid:66) Shared DAG
+
+35: delete(k):
+36:
+
+root.lock ()
+G ← ∅; a ← {root}
+
+37:
+
+38: while a (cid:54)= ∅ do
+
+39:
+
+40:
+
+41:
+
+42:
+
+43:
+
+44:
+
+45:
+
+46:
+
+47:
+
+48:
+
+49:
+
+50:
+
+51:
+
+52:
+
+if G contains node a with key k then
+
+∀(a, b) ∈ G: G ← G ∪ (a, b)
+last ← a
+a ← τdelete(k)(a, G)
+∀(last, b) ∈ G,
+remove a and all edges to/from a from G
+∀b such that ∃(b, c) ∈ νk(G, a), b.lock ()
+G ← G ∪ νk(G, a)
+∀b such that ∃(b, c) ∈ νk(G, a), b.unlock ()
+root.unlock ()
+return true
+
+else
+
+root.unlock ()
+return false
+
+(cid:66) Explore new edges
+
+(cid:66) Shortcut edges
+
+(cid:66) Explore new edges
+
+3: ﬁnd(k):
+4:
+
+G ← ∅; a ← {root}
+a.lock-shared()
+6: while a (cid:54)= ∅ do
+
+5:
+
+∀(a, b) ∈ G: b.lock-shared()
+∀(a, b) ∈ G: G ← G ∪ (a, b)
+last ← a
+a ← τﬁnd(k)(a, G)
+∀(last, b) ∈ G, b (cid:54)= a: b.unlock-shared()
+last.unlock-shared()
+
+if G contains a node with key k then
+
+return true
+
+else
+
+return false
+
+insert(k, v):
+root.lock ()
+G ← ∅; a ← {root}
+
+20: while a (cid:54)= ∅ do
+
+7:
+
+8:
+
+9:
+
+10:
+
+11:
+
+12:
+
+13:
+
+14:
+
+15:
+
+16:
+
+17:
+
+18:
+
+19:
+
+21:
+
+22:
+
+23:
+
+24:
+
+25:
+
+26:
+
+27:
+
+28:
+
+29:
+
+30:
+
+31:
+
+32:
+
+33:
+
+34:
+
+(cid:66) Explore new edges
+
+(cid:66) Link a to G
+
+if G contains no node with key k then
+
+∀(a, b) ∈ G: G ← G ∪ (a, b)
+last ← a
+a ← τinsert(k,v)(a, G)
+∀(last, b) ∈ G,
+a ← create-node(k, v)
+∀b such that ∃(b, c) ∈ µk(G, a), b.lock ()
+G ← G ∪ µ(k,v)(G, a)
+∀b such that ∃(b, c) ∈ µk(G, a), b.unlock ()
+root.unlock ()
+return true
+
+else
+
+root.unlock ()
+return false
+
+shared lock on a. Note that just before a ﬁnd(k) operation returns the result, it holds shared locks on the
+k-relevant set.
+
+This way updates always take place sequentially, in the order of their acquisitions of the root lock. A
+ﬁnd(k) operation is linearized at any point of its execution when it holds shared locks on the k-relevant set.
+Concurrent operations that do not contend on the same locks can be arbitrarily ordered in a linearization.
+The resulting HOH-ﬁnd implementation is described in Algorithm 1. The fact that the operations
+
+acquire (starvation-free) locks in the order they traverse the directed acyclic graph implies that:
+
+Theorem 2. The HOH-ﬁnd algorithm is a starvation-free LSL implementation of a search structure.
+
+Proof. Take any execution E of the algorithm. The subsequence of E consisting of the events of update
+operations is serializable (and, thus, locally serializable). Since a ﬁnd(k) operation protects its visited node
+and all its outgoing edges with a shared lock and a concurrent update with a key protect their k-relevant
+sets with an exclusive lock, ﬁnd(k) observes the eﬀects of updates as though they took place in a sequential
+execution—thus local serializability.
+
+Let H be the history of E. To construct a linearization of H, we start with a sequential history S that
+orders all update operations in H in the order in which they acquire locks on the root. By construction, S
+is legal. A ﬁnd(k) operation that returns true can only reach a node if a node with key k was reachable from
+the root at some point during its interval. Similarly, if ﬁnd(k) operation returns false, then it would only
+fail to reach a node if it was made unreachable from the root at some point during its interval. Thus, every
+successful (resp., unsuccessful) ﬁnd(k) operation op can be inserted in S after the latest update operation
+that does not succeed in the real-time order in E and after which a node k is reachable (resp., unreachable).
+By construction, the resulting sequential history is legal.
+
+As we show in Section 5, the implementation is however not (safe-strict) serializable.
+
+8
+
+insert(1)
+
+{1,2,3}
+
+R(r) R(X1)
+
+false
+
+insert(2)
+
+R(r) R(X1)R(X2)
+
+false
+
+insert(1)
+
+{1}
+
+R(r) R(X1) W (r)
+
+R(r) R(X1) W (r)
+
+insert(2)
+
+true
+
+true
+
+(a) σ
+
+(b) σ(cid:48)
+
+Figure 2: (a) a history of integer set (implemented as linked list or binary search tree) exporting schedule σ, with
+initial state {1, 2, 3} (r denotes the root node); (b) a history exporting a problematic schedule σ(cid:48), with initial state
+{3}, which should be accepted by any I ∈ P if it accepts σ
+
+5 Pessimism vs. serializable optimism
+
+In this section, we show that, with respect to search structures, pessimistic locking and optimistic synchro-
+nization providing safe-strict serializability are incomparable, once we focus on LS-linearizable implemen-
+tations.
+
+5.1 Classes P and SM
+
+A synchronization technique is a set of concurrent implementations. We deﬁne below a speciﬁc optimistic
+synchronization technique and then a speciﬁc pessimistic one.
+SM: serializable optimistic Let α denote the execution of a concurrent implementation and ops(α),
+the set of operations each of which performs at least one event in α. Let αk denote the preﬁx of α up to the
+last event of operation πk. Let Cseq(α) denote the set of subsequences of α that consist of all the events
+of operations that are complete in α. We say that α is strictly serializable if there exists a legal sequential
+execution α(cid:48) equivalent to a sequence in σ ∈ Cseq(α) such that →σ⊆→α(cid:48).
+
+This paper focuses on optimistic implementations that are strictly serializable and, in addition, guarantee
+that every operation (even aborted or incomplete) observes correct (serial) behavior. More precisely, an
+execution α is safe-strict serializable if (1) α is strictly serializable, and (2) for each operation πk, there
+exists a legal sequential execution α(cid:48) = π0 ··· πi · πk and σ ∈ Cseq(αk) such that {π0,··· , πi} ⊆ ops(σ) and
+∀πm ∈ ops(α(cid:48)) : α(cid:48)|m = αk|m.
+
+Safe-strict serializability captures nicely both local serializability and linearizability. If we transform a
+sequential implementation IS of a type τ into a safe-strict serializable concurrent one, we obtain an LSL
+implementation of (IS , τ ). Thus, the following lemma is immediate.
+
+Lemma 3. Let I be a safe-strict serializable implementation of (IS, τ ). Then, I is LS-linearizable with
+respect to (IS, τ ).
+
+Indeed, we make sure that completed operations witness the same execution of IS , and every operation
+that returned ⊥ is consistent with some execution of IS based on previously completed operations. Formally,
+SM denotes the set of optimistic, safe-strict serializable LSL implementations.
+P: deadlock-free pessimistic Assuming that no process stops taking steps of its algorithm in the
+middle of a high-level operation, at least one of the concurrent operations return a matching response [19].
+Note that P includes implementations that are not necessarily safe-strict serializable.
+
+5.2 Suboptimality of pessimistic implementations
+
+We show now that for any search structure, there exists a schedule that is rejected by any pessimistic
+implementation, but accepted by certain optimistic strictly serializable ones. To prove this claim, we
+derive a safe-strict serializable schedule that cannot be accepted by any implementation in P using the
+non-triviality property of search structures. It turns out that we can schedule the traverse phases of two
+insert(k) operations in parallel until they are about to check if a node with key k is in the set or not. If it is,
+both operations may safely return false (schedule σ). However, if the node is not in the set, in a pessimistic
+implementation, both operations would have to modify outgoing edges of the same node a and, if we want
+to provide local serializability, both return true, violating linearizability (schedule σ(cid:48)).
+conﬂict, by accepting the (correct) schedule σ and rejecting the (incorrect) schedule σ(cid:48).
+
+In contrast, an optimistic implementation may simply abort one of the two operations in case of such a
+
+Proof intuition. We ﬁrst provide an intuition of our results in the context of the integer set imple-
+mented as a sorted linked list or binary search tree. The set type is a special case of the dictionary which
+
+9
+
+ﬁnd(5)
+
+R(r) R(X1)R(X3)
+
+R(X4)R(X5)
+
+true
+
+insert(2)
+
+R(r) W (X1)
+
+true
+
+insert(5)
+
+R(r) R(X1)W (X4)
+
+true
+
+Figure 3: A concurrency scenario for a set, initially {1, 3, 4}, where value i is stored at node Xi: insert(2)
+and insert(5) can proceed concurrently with ﬁnd(5). The history is LS-linearizable but not serializable; yet
+accepted by HOH-ﬁnd. (Not all read-write on nodes is presented here.)
+
+stores a set of integer values, initially empty, and exports operations insert(v), remove(v), ﬁnd(v); v ∈ Z.
+The update operations, insert(v) and remove(v), return a boolean response, true if and only if v is absent
+(for insert(v)) or present (for remove(v)) in the set. After insert(v) is complete, v is present in the set, and
+after remove(v) is complete, v is absent in the set. The ﬁnd(v)} returns a boolean a boolean, true if and
+only if v is present in the set.
+An example of schedules σ and σ(cid:48) of the set is given in Figure 2. We show that the schedule σ depicted in
+Figure 2(a) is not accepted by any implementation in P. Suppose the contrary and let σ be exported by an
+execution α. Here α starts with three sequential insert operations with parameters 1, 2, and 3. The resulting
+“state” of the set is {1, 2, 3}, where value i ∈ {1, 2, 3} is stored in node Xi. Suppose, by contradiction,
+that some I ∈ P accepts σ. We show that I then accepts the schedule σ(cid:48) depicted in Figure 2(b), which
+starts with a sequential execution of insert(3) storing value 3 in node X1. We can further extend σ(cid:48) with a
+complete ﬁnd(1) (by deadlock-freedom of P) that will return false (the node inserted to the list by insert(1)
+is lost)—a contradiction since I is linearizable with respect to set.
+
+The formal proof follows.
+
+Theorem 4. Any abstraction in D has a strictly serializable schedule that is not accepted by any imple-
+mentation in P, but accepted by an implementation in SM.
+Proof. Consider the key k and the states G and G(cid:48) satisfying the conditions of the non-triviality property.
+Consider the schedule that begins with a serial sequence of operations bringing the search to state G
+(executed by a single process). Then schedule the traverse phases of two identical insert(k, v) operations
+executed by new (not yet participating) processes p1 and p2 concurrently so that they perform identical
+steps (assuming that, if they take randomized steps, their coin tosses return the same values). Such an
+execution E exists, since the traverse phases are read-only. But if we allow both insert operations to proceed
+(by deadlock-freedom), we obtain an execution that is not LS-linearizable: both operations update the data
+structure which can only happen in a successful insert. But, by the sequential speciﬁcation of D, since node
+with key k belongs to G, at least one of the two inserts must fail. Therefore, a pessimistic implementation,
+since it is not allowed to abort an operation, cannot accept the corresponding schedule σ.
+Now consider the serial sequence of operations bringing D to state G(cid:48) (executed by a single process)
+and extend it with traverse phases of two concurrent insert(k, v) operations executed by new processes p1
+and p2. The two traverse phases produce an execution E(cid:48) which is indistinguishable to p1 and p2 from E
+up to their last read operations. Thus, if a pessimistic implementation accepts the corresponding schedule
+σ, it must also accept σ(cid:48), violating LS-linearizability.
+
+Note, however, that an extension of E(cid:48)
+
+in which both inserts complete by returning false is LS-
+linearizable. Moreover, any progressive (e.g., using progressive opaque transactional memory) optimistic
+strictly serializable implementation using will accept σ(cid:48).
+
+5.3 Suboptimality of serializable optimism
+
+We show below that for any search structure, there exists a schedule that is rejected by any serializable
+implementation but accepted by a certain pessimistic one (HOH-ﬁnd, to be concrete).
+
+Proof intuition. We ﬁrst illustrate the proof in the context of the integer set. Consider a schedule
+σ0 of a concurrent set implementation depicted in Figure 3. We assume here that the set initial state is
+{1, 3, 4}. Operation ﬁnd(5) is concurrent, ﬁrst with operation insert(2) and then with operation insert(5).
+The history is not serializable: insert(5) sees the eﬀect of insert(2) because R(X1) by insert(5) returns the
+value of X1 that is updated by insert(2) and thus should be serialized after it. But ﬁnd(5) misses node with
+value 2 in the set, but must read the value of X4 that is updated by insert(5) to perform the read of X5, i.e.,
+the node created by insert(5). Thus, σ0 is not (safe-strict) serializable. However, this history is LSL since
+each of the three local histories is consistent with some sequential history of the integer set. However, there
+
+10
+
+exists an execution of our HOH-ﬁnd implementation that exports σ0 since there is no read-write conﬂict
+on any two consecutive nodes accessed.
+To extend the above idea to any search structure, we use the non-triviality property of data structures in
+D. There exist a state G(cid:48) in which there is exactly one edge (a, b) in G(cid:48) such that b has key k. We schedule a
+opf = ﬁnd(k) operation concurrently with two consecutive delete operations: the ﬁrst one, opd1, deletes one
+of the nodes explored by opf before it reaches a (such a node exists by the non-triviality property), and the
+second one, opd2 deletes the node with key k in G(cid:48). We make sure that opf is not aﬀected by opd1 (observes
+an update to some node c in the graph) but is aﬀected by opd2 (does not observe b in the graph). The
+resulting schedule is not strictly serialializable (though linearizable). But our HOH-ﬁnd implementation in
+P will accept it.
+Theorem 5. For any abstraction in D ∈ D, there exists an implementation in P that accepts a non-strictly
+serializable schedule.
+
+Proof. Consider the HOH-ﬁnd implementation described in Algorithm 1. Take the key k and the states G
+and G(cid:48) satisfying the conditions of the non-triviality property.
+Now we consider the following execution. Let opf = ﬁnd(k) be applied to an execution resulting in G(cid:48)
+(that contains a node with key k) and run opf until it reads the only node a = (k(cid:48), v(cid:48)) in G that points
+to a node b = (k, v) in state G(cid:48). Note that since Rk(G) = Rk(G(cid:48)), the operation cannot distinguish the
+execution from than one starting with G.
+The non-triviality property requires that the shortest path from the root to k to a in Rk(G) is of length
+at least two. Thus, the set of nodes explored by opf passed through at least one node c = (k(cid:48)(cid:48), v(cid:48)(cid:48)) in addition
+to a. Now we schedule two complete delete operations executed by another process: ﬁrst delc = delete(k(cid:48)(cid:48))
+which removes c, followed by delb = delete(k) which removes b. Now we wake up opf and let it read a, ﬁnd
+out that no node with key k is reachable, and return false
+
+Suppose, by contradiction, that the resulting execution is strictly serializable. Since opf has witnessed
+the presence of some node c on the path from the root to a in the DAG, opf must precede delc in any
+serializaton. Now delb aﬀected the response of opf , it must precede opf in any serialization. Finally, delc
+precedes delb in the real-time order and, thus must precede delb in any serialization. The resulting cycle
+implies a contradiction.
+
+Since any strictly serializable optimistic implementation only produces strictly serializable executions,
+from Theorem 5 we deduce that there is a schedule accepted by a pessimistic algorithm that no strictly
+serializable optimistic one can accept. Therefore, Theorems 4 and 5 imply that, when applied to search
+structures and in terms of concurrency, the strictly serializable optimistic approach is incomparable with
+pessimistic locking. As a corollary, none of these two techniques can be concurrency-optimal.
+
+6 Related work
+
+Sets of accepted schedules are commonly used as a metric of concurrency provided by a shared memory
+implementation. For static database transactions, Kung and Papadimitriou [22] use the metric to capture
+the parallelism of a locking scheme, While acknowledging that the metric is theoretical, they insist that
+it may have “practical signiﬁcance as well, if the schedulers in question have relatively small scheduling
+times as compared with waiting and execution times.” Herlihy [16] employed the metric to compare various
+optimistic and pessimistic synchronization techniques using commutativity of operations constituting high-
+level transactions. A synchronization technique is implicitly considered in [16] as highly concurrent, namely
+“optimal”, if no other technique accepts more schedules. By contrast, we focus here on a dynamic model
+where the scheduler cannot use the prior knowledge of all the shared addresses to be accessed. Also,
+unlike [16, 22], we require all operations, including aborted ones, to observe (locally) consistent states.
+
+Gramoli et al. [10] deﬁned a concurrency metric, the input acceptance, as the ratio of committed transac-
+tions over aborted transactions when TM executes the given schedule. Unlike our metric, input acceptance
+does not apply to lock-based programs.
+
+Optimal concurrency is related to the notion of permissiveness [12], originally deﬁned for transactional
+memory. In [12], a TM is deﬁned to be permissive with respect to serializability if it aborts a transaction
+only if committing it would violate serializability. Thus, an operation of a concurrent data structure
+may be aborted only if the execution of the encapsulated transaction is not serializable. In contrast, our
+framework for analyzing concurrency is independent of the synchronization technique and a concurrency-
+optimal implementation accepts all correct interleavings of reads and writes of sequential operations (not
+just high-level responses of the operations).
+
+11
+
+David et al. [6] devised a pragmatic methodology for evaluating performance of a concurrent data
+structure via a comparison with the performance of its sequential counterpart. The closer is the throughput
+of a concurrent algorithm is to that of its (inconsistent) sequential variant, the more “concurrent” the
+algorithm is. In contrast, the formalism proposed in this paper allows for relating concurrency properties
+of various concurrent algorithms.
+
+studied them in the context of dynamic databases.
+
+Our deﬁnition of search data structures is based on the paper by Chaudhri and Hadzilacos [4] who
+Safe-strict serializable implementations (SM) require that every transaction (even aborted and in-
+complete) observes “correct” serial behavior.
+It is weaker than popular TM correctness conditions like
+opacity [13] and its relaxations like TMS1 [7] and VWC [21], Unlike TMS1, we do not require the local
+serial executions to always respect the real-time order among transactions. Unlike VWC, we model transac-
+tional operations as intervals with an invocation and a response and does not assume unique writes (needed
+to deﬁne causal past in VWC). Though weak, SM still allows us to show that the resulting optimistic LSL
+implementations reject some schedules accepted by pessimistic locks.
+
+7 Concluding remarks
+
+In this paper, we presented a formalism for reasoning about the relative power of optimistic and pessimistic
+synchronization techniques in exploiting concurrency in search structures. We expect our formalism to have
+practical impact as the search structures are among the most commonly used concurrent data structures,
+including trees, linked lists, skip lists that implement various abstractions ranging from key-value stores to
+sets and multi-sets.
+Our results on the relative concurrency of P and SM imply that none of these synchronization techniques
+might enable an optimally-concurrent algorithm. Of course, we do not claim that our concurrency metric
+necessarily captures eﬃciency, as it does not account for other factors, like cache sizes, cache coherence
+protocols, or computational costs of validating a schedule, which may also aﬀect performance on multi-core
+architectures.
+In [11] we already described a concurrency-optimal implementation of the linked-list set
+abstraction that combines the advantages of P, namely the semantics awareness, with the advantages of
+SM, namely the ability to restart operations in case of conﬂicts. We recently observed empirically that
+this optimality can result in higher performance than state-of-the-art algorithms [14, 15, 23]. Therefore,
+our ﬁndings motivate the search for concurrency-optimal algorithms. This study not only improves our
+understanding of designing concurrent data structures, but might lead to more eﬃcient implementations.
+
+References
+
+[1] Y. Afek, A. Matveev, and N. Shavit. Pessimistic software lock-elision.
+
+In Proceedings of the 26th
+International Conference on Distributed Computing, DISC’12, pages 297–311, Berlin, Heidelberg, 2012.
+Springer-Verlag.
+
+[2] M. K. Aguilera, S. Frølund, V. Hadzilacos, S. L. Horn, and S. Toueg. Abortable and query-abortable
+
+objects and their eﬃcient implementation. In PODC, pages 23–32, 2007.
+
+[3] H. Attiya and J. Welch. Distributed Computing. Fundamentals, Simulations, and Advanced Topics.
+
+John Wiley & Sons, 2004.
+
+[4] V. K. Chaudhri and V. Hadzilacos. Safe locking policies for dynamic databases. J. Comput. Syst. Sci.,
+
+57(3):260–271, 1998.
+
+[5] L. Dalessandro, M. F. Spear, and M. L. Scott. NOrec: streamlining STM by abolishing ownership
+
+records. In PPOPP, pages 67–78, 2010.
+
+[6] T. David, R. Guerraoui, and V. Trigonakis. Asynchronized concurrency: The secret to scaling concur-
+rent search data structures. In Proceedings of the Twentieth International Conference on Architectural
+Support for Programming Languages and Operating Systems, ASPLOS ’15, Istanbul, Turkey, March
+14-18, 2015, pages 631–644, 2015.
+
+[7] S. Doherty, L. Groves, V. Luchangco, and M. Moir. Towards formally specifying and verifying trans-
+
+actional memory. Electron. Notes Theor. Comput. Sci., 259:245–261, Dec. 2009.
+
+[8] P. Felber, C. Fetzer, and T. Riegel. Dynamic performance tuning of word-based software transactional
+
+memory. In PPoPP, pages 237–246, 2008.
+
+12
+
+[9] V. Gramoli and R. Guerraoui. Democratizing transactional programming. Commun. ACM, 57(1):86–
+
+93, Jan 2014.
+
+[10] V. Gramoli, D. Harmanci, and P. Felber. On the input acceptance of transactional memory. Parallel
+
+Processing Letters, 20(1):31–50, 2010.
+
+[11] V. Gramoli, P. Kuznetsov, S. Ravi, and D. Shang. Brief announcement: A concurrency-optimal list-
+In Distributed Computing - 29th International Symposium, DISC 2015, Tokyo, Japan,
+
+based set.
+October 7-9, 2015.
+
+[12] R. Guerraoui, T. A. Henzinger, and V. Singh. Permissiveness in transactional memories. In DISC,
+
+pages 305–319, 2008.
+
+[13] R. Guerraoui and M. Kapalka. Principles of Transactional Memory,Synthesis Lectures on Distributed
+
+Computing Theory. Morgan and Claypool, 2010.
+
+[14] T. L. Harris. A pragmatic implementation of non-blocking linked-lists. In DISC, pages 300–314, 2001.
+
+[15] S. Heller, M. Herlihy, V. Luchangco, M. Moir, W. N. Scherer, and N. Shavit. A lazy concurrent
+
+list-based set algorithm. In OPODIS, pages 3–16, 2006.
+
+[16] M. Herlihy. Apologizing versus asking permission: optimistic concurrency control for abstract data
+
+types. ACM Trans. Database Syst., 15(1):96–124, 1990.
+
+[17] M. Herlihy. Wait-free synchronization. ACM Trans. Prog. Lang. Syst., 13(1):123–149, 1991.
+
+[18] M. Herlihy and N. Shavit. The art of multiprocessor programming. Morgan Kaufmann, 2008.
+
+[19] M. Herlihy and N. Shavit. On the nature of progress. In OPODIS, pages 313–328, 2011.
+
+[20] M. Herlihy and J. M. Wing. Linearizability: A correctness condition for concurrent objects. ACM
+
+Trans. Program. Lang. Syst., 12(3):463–492, 1990.
+
+[21] D. Imbs, J. R. G. de Mend´ıvil, and M. Raynal. Brief announcement: virtual world consistency: a new
+
+condition for stm systems. In PODC, pages 280–281, 2009.
+
+[22] H. T. Kung and C. H. Papadimitriou. An optimality theory of concurrency control for databases. In
+
+SIGMOD, pages 116–126, 1979.
+
+[23] M. M. Michael. High performance dynamic lock-free hash tables and list-based sets. In SPAA, pages
+
+73–82, 2002.
+
+[24] C. H. Papadimitriou. The serializability of concurrent database updates. J. ACM, 26:631–653, 1979.
+
+[25] W. Pugh. Skip lists: A probabilistic alternative to balanced trees. Commun. ACM, 33(6):668–676,
+
+1990.
+
+[26] N. Shavit and D. Touitou. Software transactional memory. In PODC, pages 204–213, 1995.
+
+[27] W. E. Weihl. Commutativity-based concurrency control for abstract data types. IEEE Trans. Comput.,
+
+37(12):1488–1505, 1988.
+
+[28] G. Weikum. A theoretical foundation of multi-level concurrency control. In PODS, pages 31–43, 1986.
+
+[29] G. Weikum and G. Vossen. Transactional Information Systems: Theory, Algorithms, and the Practice
+
+of Concurrency Control and Recovery. Morgan Kaufmann, 2002.
+
+[30] M. Yannakakis. Serializability by locking. J. ACM, 31(2):227–244, 1984.
+
+13
+
+

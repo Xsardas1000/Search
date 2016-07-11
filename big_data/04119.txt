@@ -1,0 +1,924 @@
+Exploratory Gradient Boosting for Reinforcement Learning in Complex Domains
+
+David Abel‡ Alekh Agarwal†
+
+Fernando Diaz† Akshay Krishnamurthy† Robert E. Schapire†
+
+‡Department of Computer Science, Brown University, Providence RI 02912
+
+† Microsoft Research, New York NY 10011
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+4
+1
+
+ 
+ 
+]
+I
+
+A
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+9
+1
+1
+4
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Abstract
+
+High-dimensional observations and complex real-
+world dynamics present major challenges in rein-
+forcement learning for both function approxima-
+tion and exploration. We address both of these
+challenges with two complementary techniques:
+First, we develop a gradient-boosting style, non-
+parametric function approximator for learning on
+Q-function residuals. And second, we propose an
+exploration strategy inspired by the principles of
+state abstraction and information acquisition un-
+der uncertainty. We demonstrate the empirical ef-
+fectiveness of these techniques, ﬁrst, as a prelimi-
+nary check, on two standard tasks (Blackjack and
+n-Chain), and then on two much larger and more
+realistic tasks with high-dimensional observation
+spaces. Speciﬁcally, we introduce two benchmarks
+built within the game Minecraft where the observa-
+tions are pixel arrays of the agent’s visual ﬁeld. A
+combination of our two algorithmic techniques per-
+forms competitively on the standard reinforcement-
+learning tasks while consistently and substantially
+outperforming baselines on the two tasks with high-
+dimensional observation spaces. The new func-
+tion approximator, exploration strategy, and evalua-
+tion benchmarks are each of independent interest in
+the pursuit of reinforcement-learning methods that
+scale to real-world domains.
+
+1 Introduction
+Many real-world domains have very large state spaces and
+complex dynamics, requiring an agent to reason over ex-
+tremely high-dimensional observations. For example, this
+is the case for the task in Figure 1, in which an agent must
+navigate to the highest location using only raw visual input.
+Developing efﬁcient and effective algorithms for such envi-
+ronments is critically important across a variety of domains.
+Even relatively straightforward tasks like the one above
+can cause existing approaches to ﬂounder; for instance, sim-
+ple linear function approximation cannot scale to visual in-
+put, while nonlinear function approximation, such as deep Q-
+learning [Mnih et al., 2015], tends to use relatively simple
+exploration strategies.
+
+Figure 1: Visual Hill Climbing: The agent is rewarded for
+navigating to higher terrain while receiving raw visual input.
+
+In this paper, we propose two techniques for scaling re-
+inforcement learning to such domains: First, we present a
+novel non-parametric function approximation scheme based
+on gradient boosting [Friedman, 2001; Mason et al., 2000],
+a method meant for i.i.d. data, here adapted to reinforcement
+learning. The approach seems to have several merits. Like
+the deep-learning based methods [Mnih et al., 2015] which
+succeed by learning good function approximations, it builds
+on a powerful learning system. Unlike the deep-learning ap-
+proaches, however, gradient boosting models are amenable to
+training and prediction on a single laptop as opposed to being
+reliant on GPUs. The model is naturally trained on residu-
+als, which was recently shown to be helpful even in the deep
+learning literature [He et al., 2015]. Furthermore, boosting
+has a rich theoretical foundation in supervised learning, the
+theory could plausibly be extended to reinforcement learning
+settings in future work.
+
+As our second contribution, we give a complementary ex-
+ploration tactic, inspired by the principle of information ac-
+quisition under uncertainty (IAUU), that improves over ε-
+uniform exploration by incentivizing novel action applica-
+tions. With its extremely simple design and efﬁcient use
+of data, we demonstrate how our new algorithm combining
+these techniques, called Generalized Exploratory Q-learning
+(GEQL), can be the backbone for an agent facing highly com-
+plex tasks with raw visual observations.
+
+We empirically evaluate our techniques on two standard
+RL domains (Blackjack [Sutton and Barto, 1998] and n-
+
+chain [Strens, 2000]) and on two much larger, more realis-
+tic tasks with high-dimensional observation spaces. Both of
+the latter tasks were built within the game Minecraft1 where
+observations are pixel arrays of the agent’s visual ﬁeld as in
+Figure 1. The Minecraft experiments are made possible by a
+new Artiﬁcial Intelligence eXperimentation (AIX) platform,
+which we describe in detail below. We ﬁnd that on the stan-
+dard tasks, our technique performs competitively, while on
+the two large, high-dimensional Minecraft tasks, our method
+consistently and quite substantially outperforms the baseline.
+
+2 Related Work
+Because the literature on reinforcement learning is so vast, we
+focus only on the most related results, speciﬁcally, on func-
+tion approximation and exploration strategies. For a more
+general introduction, see [Sutton and Barto, 1998].
+
+Function approximation is an important technique for scal-
+ing reinforcement-learning methods to complex domains.
+While linear function approximators are effective for many
+problems [Sutton, 1984], complex non-linear models for
+function approximation often demonstrate stronger perfor-
+mance on many challenging domains [Anderson, 1986;
+Tesauro, 1994]. Unlike recent approaches based on neu-
+ral network architectures [Mnih et al., 2015], we adopt
+gradient boosted regression trees [Friedman, 2001], a non-
+parametric class of regression models with competitive per-
+formance on supervised learning tasks. Although similar en-
+semble approaches to reinforcement learning have been ap-
+plied in previous work [Marivate and Littman, 2013], these
+assume a ﬁxed set of independently-trained agents rather than
+a boosting-style ensemble.
+
+Our work introduces the interleaving of boosting iterations
+and data collection. By its iterative nature, our approxima-
+tion resembles the ofﬂine, batch-style training of Fitted Q-
+Iteration [Ernst et al., 2005] in which a Q-learner is iteratively
+ﬁt to a ﬁxed set of data. Our algorithm differs in that, at each
+iteration, the current Q-function approximation guides subse-
+quent data collection, the results of which are used to drive the
+next update of the Q-function. This adaptive data collection
+strategy is critical, as the exploration problem is central to
+reinforcement learning, and, in experiments, our interleaved
+method signiﬁcantly outperforms Fitted Q-Iteration.
+
+Our other main algorithmic innovation is a new exploration
+strategy for reinforcement learning with function approxima-
+tion. Our approach is similar to some work on state abstrac-
+tion where the learning agent constructs and uses a compact
+model of the world [Dietterich, 2000; Li et al., 2006]. An
+important difference is that our algorithm uses the compact
+model for exploration only, rather than for both exploration
+and policy learning. Consequently, model compression does
+not compromise the expressivity of our learning algorithm,
+which can still learn optimal behavior, in contrast with typi-
+cal state-abstraction approaches.
+
+A number of other works propose exploration tac-
+tics for RL with function approximation.
+For example,
+Oh et al. [2015] train a model to predict the future state from
+the current state and a proposed action, and then use similarity
+
+1https://minecraft.net/
+
+of the predicted state to a memory bank to inform exploration
+decisions. Another approach is to learn a dynamics model
+and to then use either optimistic estimates [Xie et al., 2015]
+or uncertainty [Stadie et al., 2015] in the model to provide
+exploration bonuses (see also [Guez et al., 2012]). Lastly,
+there are some exploration strategies with theoretical guar-
+antees for domains with certain metric structure [Kakade et
+al., 2003], but this structure must be known a priori, and it is
+unclear how to construct such structure in general.
+
+consider
+
+standard
+
+3 The GEQL Algorithm
+In this section, we present our new model-free reinforcement-
+learning algorithm, Generalized Exploratory Q-Learning
+(GEQL), which includes two independent but complementary
+components: a new function-approximation scheme based
+on gradient boosting, and a new exploration tactic based on
+model compression.
+3.1 The setting
+discounted, model-free
+the
+We
+reinforcement-learning setting in which an agent
+inter-
+acts with an environment with the goal of accumulating high
+reward. At each time step t, the agent observes its state
+st ∈ S, which might be represented by a high-dimensional
+vector, such as the raw visual input in Figure 1. The agent
+then selects an action at ∈ A whose execution modiﬁes
+the state of the environment, typically by moving the agent.
+Finally, the agent receives some real-valued reward rt. This
+process either repeats indeﬁnitely or for a ﬁxed number
+of actions. The agent’s goal is to maximize its long-term
+t=1 γt−1rt, where γ ∈ (0, 1) is a
+This process is typically assumed to deﬁne a Markov deci-
+sion process (MDP), meaning that (1) the next state reached
+st+1 is a ﬁxed stochastic function that depends only on the
+previous state st and the action at that was executed; and
+(2) that the reward rt similarly depends only on st and at.
+
+discounted reward, (cid:80)∞
+
+pre-speciﬁed discount factor.
+
+For simplicity, we assume in our development that the
+states are in fact fully observable. However, in many real-
+istic settings, what the agent observes might not fully deﬁne
+the underlying state; in other words, the environment might
+only be a partially observable MDP. Nevertheless, in practice,
+it may often be reasonable to use observations as if they actu-
+ally were unobserved states, especially when the observations
+are rich and informative. Alternatively for this purpose, we
+could use a recent past window of observations and actions,
+or even the entire past history.
+3.2 Boosting-based Q-function approximation
+
+Our approach is based on Q-learning, a standard RL tech-
+nique. Recall that the optimal Q(cid:63) function is deﬁned, on
+state-action pair (s, a), to be the expected discounted reward
+of a trajectory that begins at state s, with a the ﬁrst action
+taken, and all subsequent actions chosen optimally (to maxi-
+mize the expected discounted reward). Under general condi-
+tions, this function satisﬁes, for all s, a,
+Q(cid:63)(s, a) = E[r + γ · max
+
+(1)
+
+a(cid:48) Q(cid:63)(s(cid:48), a(cid:48))]
+
+Algorithm 1 GEQL
+INPUT: Number of episodes T , discount factor γ,
+state-collapsing function φ, learning rate schedule αt.
+OUTPUT: Policy π.
+1: ˆQ(s, a) = 0 for all s ∈ S, a ∈ A.
+2: for t = 1, . . . , T do
+Set s1 to start state
+3:
+for i = 1, . . . , E do
+4:
+5:
+6:
+7:
+8:
+9:
+10: end for
+11: return π ˆQ where π ˆQ(s) = arg maxa ˆQ(s, a)
+
+Choose ai using ˆQ and IAUU exploration strategy
+Execute ai, observe ri, transition to si+1.
+end for
+Set h to minimize (2) over regressors in H
+ˆQ ← ˆQ + αth
+
+where r is the (random) reward and s(cid:48)
+is the (random)
+next state reached when action a is executed from state s.
+Like other function-approximation schemes, ours constructs
+a function ˆQ that approximates Q(cid:63) by attempting to ﬁt Eq. (1)
+on observed data.
+
+As shown in Algorithm 1, we build the function ˆQ iter-
+atively in a series of episodes using a gradient-boosting ap-
+proach. In each episode, we ﬁrst use ˆQ to guide the behavior
+of the agent, mainly choosing actions that seem most beneﬁ-
+cial according to ˆQ, but occasionally taking exploration steps
+in a way that will be described shortly. In this way, the agent
+observes a series of state-action-reward tuples (si, ai, ri).
+(For simplicity, we suppose each episode has ﬁxed length E,
+but the method can easily handle variable length episodes.)
+
+The next step is to use these observations to improve ˆQ.
+Speciﬁcally, the algorithm ﬁts a regressor h to the residuals
+between the current approximation and the observed one-step
+look-ahead, as is standard for boosting methods. That is, h :
+S × A → R is chosen to (approximately) minimize
+
+E−1(cid:88)
+
+i=1
+
+[h(si, ai) + ˆQ(si, ai)− (ri + γ max
+a(cid:48)
+
+ˆQ(si+1, a(cid:48)))]2 (2)
+
+over functions h in some class H of weak regressors. As
+a typical example, the weak regressors might be chosen to
+be regression trees, which are highly ﬂexible, effective, and
+efﬁciently trainable [Mohan et al., 2011]. Once h has been
+computed, it is added to the function approximator ˆQ, thus
+also updating how actions will be selected on future episodes.
+This function-approximation scheme has several important
+advantages over existing approaches. First, by using a non-
+linear base model, such as regression trees, the agent is able
+to learn a complex, non-parametric approximation to the Q(cid:63)
+function, which is crucial for settings with high-dimensional
+observations. At the same time, the training procedure is
+computationally efﬁcient as updates occur in batches and tra-
+jectories can be discarded after each update. Finally, by in-
+terleaving data collection using the learned policy induced by
+ˆQ with residual regression on the data so collected, we intu-
+itively improve the quality and informativeness of the dataset,
+
+thus enabling the agent to more effectively and accurately ap-
+proximate the optimal Q(cid:63) function.
+
+3.3 The IAUU exploration strategy
+
+The second novel component of the algorithm is an explo-
+ration technique that borrows ideas from the state-abstraction
+literature. The technique uses a state-collapsing function φ
+which maps each state s to one of m clusters, where m is
+relatively small. In GEQL, this function is trained by cluster-
+ing a large dataset of states, for instance, using the k-means
+algorithm (as in all our experiments), and associating each
+state s with the nearest cluster center. Ideally, an optimality-
+preserving compression would be used, such as those char-
+acterized by Li et al., [2006], but such abstractions are not
+always easily computable.
+
+The main idea of our technique is to keep track of how
+often each action has been taken from states in each of the
+clusters, and to choose exploratory steps that encourage the
+choice of actions that were taken less often in the current clus-
+ter. Thus, on each episode, for each of the m clusters c, and
+for each action a, we maintain a count M (c, a) of how often
+action a was taken from states s in cluster c, i.e., for which
+φ(s) = c. For each state s, this table induces a Gibbs distribu-
+tion over actions deﬁned by p(a|s) ∝ exp{−ρM (φ(s), a)}
+where ρ > 0 is a temperature parameter that controls the uni-
+formity of this distribution. In concert with the current func-
+tion approximator ˆQ, we use this distribution to deﬁne a ran-
+domized choice of actions at each step of the episode. Specif-
+ically, when in the current state s, with probability 1 − ε, we
+choose to act greedily, selecting the action a that maximizes
+ˆQ(s, a); and with probability ε, we take an exploration step,
+sampling a from p(a|s). We call this exploration strategy In-
+formation Acquisition Under Uncertainty or IAUU.
+
+This strategy shares some of the beneﬁts of the work on
+state abstraction without suffering from the drawbacks. The
+main advantage is that the state-collapsing function promotes
+applying infrequently-taken actions, thereby encouraging the
+agent to visit new regions of the state space. However, in
+contrast with the state-abstraction literature, the method re-
+mains robust to misspeciﬁcation of the state-collapsing func-
+tion since we use it only for exploration so that it does not
+compromise the agent’s ability to learn optimal behavior. Fi-
+nally, IAUU exploration adds minimal computational over-
+head as the space needed is O(m|A|) and the additional run-
+ning time per action remains O(|A|).
+
+The IAUU exploration tactic is not attached to the function
+approximation scheme, so it can also be used with Q-learning
+in the tabular setting, i.e., when ˆQ is maintained explicitly as
+a table. In this case, there are a number of modiﬁcations to the
+exploration strategy under which the convergence properties
+of Q-learning can be retained. One option is to modify the
+exploration distribution p(a|s) to mix in a vanishingly small
+amount of the uniform distribution. Another option is to only
+count exploration steps when updating the state-visitation ta-
+ble M. In both cases, each action is taken from each state
+inﬁnitely often, and this property sufﬁces to ensure conver-
+gence of Q-learning in the tabular setting.
+
+4 Experiments on Standard Benchmarks
+This section details our evaluation on the two standard rein-
+forcement learning benchmarks of Blackjack and n-Chain.
+4.1 Blackjack
+We conducted experiments on the Blackjack domain, im-
+plemented exactly as deﬁned in Section 5.1 of Sutton and
+Barto [1998]. In this experiment, we test the hypothesis that
+GEQL will improve over standard baselines even in fairly
+simple domains without high-dimensional visual input.
+In
+particular, Blackjack is fully observable, has low noise, low
+dimension, short episodes, and a small action space.
+
+Algorithms and Parameters: For GEQL, we used depth-
+2 regression trees as the weak regressors, ﬁt using Python’s
+scikit-learn package [Buitinck et al., 2013]. To test and iso-
+late the effectiveness of our incremental boosting approach
+(henceforth booster), we compared GEQL against three
+baseline function approximators:
+
+1. Q-learning with a linear approximator (linear)
+2. Q-learning with a Batch Boosted Regression approxi-
+
+mator, similar to Fitted Q-Iteration (batchboost)
+
+3. Q-learning with a Batch Random Forest Regression ap-
+
+proximator (forest).
+
+Each approximator used the same set of features for all ex-
+periments. The two batch-based regression approaches were
+trained after every 50 episodes. Similar to GEQL, we set the
+depth of the regression trees for each of the batch approaches
+to two. The batchboost and forest approximators used
+the same number of total trees as GEQL, but were trained
+in batch. That is, if we run for 500 episodes, then each tree
+based approach gets a total of 500 trees. For batchboost
+and forest, all the 500 trees are retrained on 50 episodes
+worth of data, while booster adds a new tree every episode.
+We ran all function approximators with -uniform explo-
+ration and with IAUU exploration. Across all experiments,
+we set 0 = 0.4, α0 = 0.15, γ = 0.95, and decayed
+so that, during episode t, t = 0/(1 + 0.04t), and αt =
+α0/(1 + 0.04t). The state clustering function used for IAUU
+was learned for each individual task by randomly sampling
+states via a random policy.
+
+Results: Figure 2 shows results from 100 trials run for
+500 episodes each. The results indicate that during these
+500 episodes, very minimal learning occurred for the lin-
+ear approximator, while the gradient-boosting approximator
+was able to learn to play far more effectively (yielding a
+statistically signiﬁcant improvement in performance). The
+two batch approximators demonstrated some learning, though
+the gradient-boosting approximator far outperformed both of
+them. However, the exploration tactic had a negligible ef-
+fect in this domain, likely due to the small action space (two
+actions), and short episodes (typically between one and two
+actions per episode). The brevity of each episode may also
+explain why the linear approximator learned so little in this
+many episodes.
+4.2 n-Chain
+We conducted experiments on the n-Chain domain from
+Strens [2000]. In this domain, there are n states numbered
+
+Figure 2: Blackjack: Running average per-episode re-
+ward with error band denoting 2 standard errors for IAUU
+runs (Legend:
+red: booster, blue:forest, green:
+batchboost, black: linear; solid: IAUU, dashed: uni-
+form).
+
+Figure 3: n-Chain: Running average per-episode reward
+(Legend: IAUU: solid, RMAX: dashed, Q-learning: dotted)
+
+0, . . . , n − 1, each with two actions available: applying the
+forward action in state i advances the agent to state i + 1,
+while the return action moves the agent to state 0. Applica-
+tions of the forward action provide zero reward in all states
+except transitions to state n − 1, which provides reward 100.
+Applications of the return action receive reward 2 for all tran-
+sitions. Both actions are also stochastic, so that with proba-
+bility 0.2, they have the opposite effect. This task poses a
+challenging exploration problem since the agent must avoid
+greedily taking the return action to learn optimal behavior by
+exploring all the way to the last state in the chain. We used
+n = 5, which is a typical setting for this task.
+
+Algorithms: As this is a tabular problem, we evaluated
+only tabular methods. We used a tabular Q-learner with uni-
+form exploration, IAUU exploration, and the RMAX algo-
+rithm [Brafman and Tennenholtz, 2003], which is a model
+based algorithm with strong sample complexity guarantees.
+Results: Figure 3 displays results from 5000 trials. Unsur-
+prisingly, RMAX signiﬁcantly outperformed the two tabular
+Q-learning strategies used here since it is designed to seek
+out all state-action applications helping it to quickly discover
+the high reward at the end of the chain. Q-Learning with -
+uniform exploration, on the other hand, will only discover the
+high reward in the last state of the chain with exponentially
+
+0100200300400500-0.6-0.5-0.4-0.3-0.2050100150200100150200250300350small probability since the agent will favor the greedy action
+and must repeatedly explore to advance down the chain. The
+IAUU exploration is between these two extremes; it general-
+izes to extremely large state spaces unlike RMAX, but pro-
+vides more effective exploration than -uniform.
+5 Experiments on Visual Domains
+This section describes our empirical evaluation on two highly
+challenging problems in which the agent must reason over
+raw RGB images. We used the Minecraft game platform to
+provide environments for the two tasks. Minecraft is a 3D
+blocks world in which the player can place blocks, destroy
+blocks, craft objects, and navigate the terrain. The size of the
+underlying state space grows exponentially with the number
+of blocks allowed in the world, which is typically on the or-
+der of millions, making planning and learning infeasible for
+tabular approaches. Moreover, there are day and night cycles
+and weather cycles that dramatically alter the visual world, as
+well as animals that roam the world, and underwater environ-
+ments. The size of the state space and these complex visual
+elements pose signiﬁcant challenges to learning from raw vi-
+sual inputs. Minecraft has previously been used in planning
+research [Abel et al., 2015], and has been advocated as a gen-
+eral artiﬁcial intelligence experimentation platform [Aluru et
+al., 2015].
+
+Our experimental results here are enabled by a recently de-
+veloped Artiﬁcial Intelligence eXperimentation (AIX) plat-
+form, designed for experimentation within Minecraft. AIX
+provides a ﬂexible and easy-to-use API to the Minecraft en-
+gine that allows for full control of an agent, including ac-
+tion execution and perception, as well as precise design of
+the Minecraft world the agent operates in (i.e. speciﬁc block
+placement, day and night cycles, etc.). For the Visual Grid
+World task, we hand crafted a grid world inspired by the clas-
+sical reinforcement learning task [Russell and Norvig, 1995],
+while the Visual Hill Climbing task was built by Minecraft’s
+random world generator. With AIX running, Minecraft runs
+around 30 frames per second, though our agents only execute
+around 2 actions per second.
+5.1
+Visual System: In a rich 3D world such as Minecraft, re-
+inforcement learning agents require additional preprocessing
+of raw RGB observation. We employ classical computer vi-
+sion techniques for preprocessing of the raw visual images
+from the Minecraft game. The input to the visual pipeline
+is a 320 × 240 image of the Minecraft agent’s view, with all
+distracting UI elements (such as the toolbar) removed.
+
+Implementation Details
+
+We use data from a ﬁve-minute random exploration of the
+Minecraft world (in which the agent takes a random action
+every time step). Speciﬁcally, for every 20th frame received
+from the game engine, the agent performs SURF key-point
+detection [Bay et al., 2008], and stores the set of key points
+in a dataset. After ﬁve minutes, the agent performs k-means
+clustering on the space of all key points to reduce the dimen-
+sionality of the key-point space of interest. This training is
+done ofﬂine before experiments are conducted. The same vi-
+sual system is used for all algorithms. The system is trained
+separately for each task.
+
+During the task, for each new frame the agent receives, it
+partitions the frame into a 3 × 3 grid. For each partition, the
+agent ﬁnds the key point that is most similar to each of the
+key-point centers, and computes its distance. This distance is
+used as a feature for that cell. The ultimate feature vector is
+the concatenation of each partition’s key-point distances (so
+if k = 10, there will be 10 features per 3 × 3 partitions for a
+total of 90 features plus a bias term).
+
+Occupancy Grid: Since the RGB image available to the
+vision system is based on the agent’s ﬁrst-person perspective
+(see Figure 1), the agent’s immediate surroundings are par-
+tially occluded. As immediate surroundings are crucial to
+decision making, we augment the agent with a 4 × 3 × 3
+occupancy grid of the cells the agent is touching. This occu-
+pancy grid contains a 1 if the corresponding cell adjacent to
+the agent contains a block that is solid (e.g. dirt, grass, stone,
+etc.) or water, and a 0 otherwise. These binary features, along
+with the key point distances from the vision system, comprise
+the state feature vector available to the agent.
+
+State-Collapsing Function: For the state-collapsing func-
+tion φ (see Section 3.3), we train another k-means instance
+that maps a given state object to a lower dimension. We let
+the Minecraft agent explore for another ﬁve minutes, saving
+every 20th frame. For each saved frame, the agent computes
+the feature vector as described above and concatenates the
+occupancy grid of the agent’s surrounding cells, storing these
+vectors in a data set. After ﬁve minutes, the agent performs
+k-means on the data set of features to reduce the feature space
+to a lower dimension. The training is also done ofﬂine before
+experiments are conducted, and all IAUU algorithms use the
+same state-collapsing function for each task.
+
+During learning, IAUU agents evaluate the state-collapsing
+function by mapping the current state’s feature vector to the
+nearest cluster center in this k-means instance.
+5.2 Visual Grid World
+The ﬁrst task we consider is the Visual Grid World task. Here,
+the environment consists of a 6 × 6 grid. The agent always
+starts at (0, 0) and must navigate to (5, 5) using only move-
+ments North, East, South, and West. There is no rotation (i.e.
+the agent is always facing North). At each state, the agent ob-
+serves the raw bitmap image of the agent’s view (Figure 4),
+which is preprocessed using the vision system and augmented
+with the occupancy grid. The reward function is the negation
+of the agent’s Euclidean distance away from the goal. For ex-
+ample, if the agent is a distance of 5 from the goal, the agent
+receives −5 reward. All transitions are deterministic. The op-
+timal policy will achieve a reward of roughly −31 for directly
+proceeding to the goal.
+
+function-approximation schemes
+
+Algorithms and Parameters: As in Blackjack, we
+used four
+(linear,
+batchboost, forest, and our interleaved gradient-
+boosting approach denoted as booster), and two ex-
+ploration strategies (-uniform and IAUU). Regression
+problems are solved after each episode for the linear and
+gradient approximators using data from only the most recent
+episode. The batchboost and forest approximators are
+completely retrained every ﬁve episodes, using only the most
+recent ﬁve episodes of data. As before, the depth and number
+
+Figure 4: Visual Grid World: The agent is rewarded for nav-
+igating to the blue pillar while receiving raw visual input.
+
+of trees in all tree-based methods is set to two and the total
+number of episodes (100). Other parameters are set as in the
+Blackjack experiment.
+
+Results: Figure 5 shows results from ﬁve trials for 100
+episodes, where each episode was at most 40 seconds.
+Results demonstrate that the gradient-boosting approxima-
+tor led to dramatically faster learning on this task than
+the linear approximator (statistically signiﬁcant at the 0.05
+level). booster also outperforms the two batch approx-
+imators with similar statistical signiﬁcance, apart from the
+batchboost baseline with uniform exploration (which still
+underperforms, though insigniﬁcantly). While the combina-
+tion of gradient boosting and IAUU exploration has the best
+average performance, the improvement over gradient boost-
+ing with -uniform is not statistically signiﬁcant. Due to the
+speed of the Minecraft engine, scaling these experiments is
+challenging. Nevertheless, these results clearly show that
+GEQL (booster with IAUU exploration) is a major im-
+provement over all previous baselines for this challenging
+task.
+
+Since we know the reward of the optimal policy in this
+case, we also checked the reward for the policy learned by
+booster at the end of 100 episodes. We found that the
+average rewards of booster with IAUU and uniform ex-
+plorations were −34.22 and −82.77 respectively. Note that
+the optimal policy gets a reward close to −31, while the best
+baseline of batchboost with uniform exploration picks up
+a reward around −119.5 in this task. Hence, we can conclude
+that GEQL learns a signiﬁcantly better policy than other base-
+lines on the task.
+
+5.3 Visual Hill Climbing
+The second task, which we call Visual Hill Climbing, is espe-
+cially difﬁcult. At its core, it is a variant of non-convex op-
+timization in a 3D environment. As with Visual Grid World,
+the state is the preprocessed raw RGB bitmap image of the
+agent’s view along with the occupancy grid. The agent must
+climb the highest hill it can ﬁnd by navigating a highly com-
+plex 3D world that includes animals, lakes, rivers, trees, cav-
+erns, clouds, pits, and a variety of different terrain types. An
+example snapshot of the agent’s task is pictured in Figure 1.
+This is an especially challenging exploration problem as the
+agent’s view is restricted to a ﬁnite horizon, and the agent
+
+Figure 5: Visual Grid World: Running average per-episode
+reward with error bands on IAUU versions, denoting 2 stan-
+dard errors (Legend: red: booster, blue:forest, green:
+batchboost, black: linear; solid: IAUU, dashed: uni-
+form).
+
+can only see in one direction at a time. Large hills may also
+be partially occluded by trees, animals, the agent’s own arm,
+and other hills. Scaling some hills involves steps with jumps
+larger than agent can make in one action, meaning the agent
+cannot scale the hill even if it gets there.
+
+The agent may move forward in the direction it is facing,
+turn left 90 degrees, turn right 90 degrees, jump up two units,
+or perform a combination that jumps up two units and then
+moves forward. The agent receives +N reward for increas-
+ing its elevation by N units, −N reward for decreasing its
+elevation by N units, and a small reward proportional to its
+current height relative to “sea level”. So, if the agent’s ini-
+tial elevation is 0, then if the agent reaches an elevation of
+10, it will receive an additional
+1000 reward. All transitions
+are deterministic, but the state is only partially observable, so
+repeated application of an action at a particular observation
+may result in dramatically different future observations.
+
+10
+
+Algorithms and Parameters: We used the same algo-
+
+rithms and parameter settings as for the Visual Grid World.
+
+Results: Figure 6 displays results from ten trials for 100
+episodes, where each episode was exactly 40 seconds. Again,
+results indicate that the gradient booster is able to learn a far
+better policy than any of the other approximators, and that
+the IAUU exploration tactic helps. Indeed, only for the gra-
+dient booster does non-negligible learning occur; given how
+complex this domain is, it is extremely promising that we can
+learn a reasonable policy at all (i.e. that the agent is able to
+learn a policy that leads to positive reward, suggesting that
+the agent is climbing a substantial amount).
+
+To visualize the performance of our agent better, we plot
+the elevation proﬁle of the policy learned by booster with
+IAUU exploration over time in Figure 7. We notice that while
+the agent barely increases its elevation in the initial quarter
+of the episodes, it is reliably reaching much better altitudes
+in the last quarter indicating that it does identify the key to
+succeeding at this task.
+
+020406080100-400-350-300-250-200-150-100Figure 7: Visual Hill Climbing Elevation Proﬁle: Elevation throughout an episode averaged over the episodes indicated in
+the range (i.e.
+the ﬁrst, second, third, and fourth 25 episodes) for booster (red) and forest (black), both with IAUU
+exploration. All elevations are with respect to the starting elevation. The elevation of an effective agent should go up.
+
+well as understand the gulf to human performance is a very
+exciting proposition for future work.
+
+Acknowledgement: We would like to thank Katja Hoff-
+man, Matthew Johnson, David Bignell, Tim Hutton, and other
+members of the AIX platform development team, without
+whose support this work would not be possible.
+References
+[Abel et al., 2015] David Abel, David Ellis Hershkowitz,
+Gabriel Barth-Maron, Stephen Brawner, Kevin O’Farrell,
+James MacGlashan, and Stefanie Tellex. Goal-based ac-
+In International Conference on Automated
+tion priors.
+Planning and Scheduling (ICAPS), 2015.
+
+[Aluru et al., 2015] Krishna Aluru, Stefanie Tellex, John
+Oberlin, and James MacGlashan. Minecraft as an experi-
+mental world for ai in robotics. In AAAI Fall Symposium,
+2015.
+
+[Anderson, 1986] Charles William Anderson. Learning and
+Problem Solving with Multilayer Connectionist Systems.
+PhD thesis, University of Massachusetts Amherst, 1986.
+
+[Bay et al., 2008] Herbert Bay, Andreas Ess, Tinne Tuyte-
+laars, and Luc Van Gool. Speeded-up robust features
+(surf). Computer Vision and Image Understanding, 2008.
+[Brafman and Tennenholtz, 2003] Ronen I Brafman and
+Moshe Tennenholtz. R-max-a general polynomial time al-
+gorithm for near-optimal reinforcement learning. Journal
+of Machine Learning Research, 2003.
+
+[Buitinck et al., 2013] Lars Buitinck, Gilles Louppe, Math-
+ieu Blondel, Fabian Pedregosa, Andreas Mueller, Olivier
+Grisel, Vlad Niculae, Peter Prettenhofer, Alexandre Gram-
+fort, Jaques Grobler, et al. Api design for machine learning
+software: experiences from the scikit-learn project. arXiv
+preprint arXiv:1309.0238, 2013.
+
+[Dietterich, 2000] Thomas G. Dietterich. Hierarchical rein-
+forcement learning with the maxq value function decom-
+position. Journal of Artiﬁcial Intelligence Research, 2000.
+[Ernst et al., 2005] Damien Ernst, Pierre Geurts, and Louis
+Wehenkel. Tree-based batch mode reinforcement learning.
+In Journal of Machine Learning Research, 2005.
+
+[Friedman, 2001] Jerome H Friedman. Greedy function ap-
+proximation: a gradient boosting machine. Annals of
+Statistics, 2001.
+
+Figure 6: Visual Hill Climbing: Running average per-
+episode reward with error bands on IAUU versions, denoting
+2 standard errors (Legend: red: booster, blue:forest,
+green: batchboost, black: linear; solid:
+IAUU,
+dashed: uniform).
+
+6 Discussion
+In this paper, we have described novel approaches to func-
+tion approximation as well as exploration in reinforcement
+learning, and evaluated it on challenging tasks implemented
+within Minecraft. The encouraging performance of our meth-
+ods suggests several other exciting avenues for future re-
+search. Empirically,
+the performance of gradient boost-
+ing coupled with its favorable computational properties ap-
+pears very promising, and it would be interesting to compare
+with more computationally-intensive deep-learning based ap-
+proaches in future work. Extending the existing theory of
+gradient boosting from supervised to reinforcement learning
+is also a natural question.
+
+In terms of exploration, while IAUU certainly improves
+over -uniform, it is still limited by the state-collapsing func-
+tion used, and can be suboptimal if the least-frequent action
+also happens to be bad. It remains challenging to ﬁnd better
+alternatives that are tractable for reinforcement learning with
+real-time decisions and high-dimensional observations.
+
+Finally, Minecraft provides an attractive framework to de-
+velop visual versions of standard RL tasks. We show two ex-
+amples here, but the opportunity to translate other tasks that
+stress and highlight various learning abilities of an agent, as
+
+020406080100-202461 - 25020406080-2024626 - 50020406080-2024651 - 75020406080-2024676 - 100020406080100-50050100150[Xie et al., 2015] Christopher Xie, Sachin Patil, Teodor
+Moldovan, Sergey Levine, and Pieter Abbeel. Model-
+reinforcement
+based
+parametrized
+physical models
+exploration.
+and
+arXiv:1509.06824, 2015.
+
+learning with
+optimism-driven
+
+[Guez et al., 2012] Arthur Guez, David Silver, and Peter
+Dayan. Efﬁcient bayes-adaptive reinforcement learning
+using sample-based search. In Advances in Neural Infor-
+mation Processing Systems (NIPS), 2012.
+
+[He et al., 2015] Kaiming He, Xiangyu Zhang, Shaoqing
+Ren, and Jian Sun. Deep residual learning for image recog-
+nition. arXiv:1512.03385, 2015.
+
+[Kakade et al., 2003] Sham Kakade, Michael Kearns, and
+John Langford. Exploration in metric state spaces. In In-
+ternational Conference on Machine Learning, 2003.
+
+[Li et al., 2006] Lihong Li, Thomas J Walsh, and Michael L.
+Littman. Towards a Uniﬁed Theory of State Abstraction
+for MDPs. International Symposium on Artiﬁcial Intelli-
+gence and Mathematics (ISAIM), 2006.
+
+[Marivate and Littman, 2013] Vukosi
+
+and
+Michael Littman.
+linearly com-
+bined reinforcement-learning agents. In AAAI Conference
+Late-Breaking Papers, 2013.
+
+An ensemble of
+
+Marivate
+
+[Mason et al., 2000] Llew Mason, Jonathan Baxter, Peter
+Bartlett, and Marcus Frean. Functional gradient tech-
+niques for combining hypotheses. In Advances in Large
+Margin Classiﬁers, 2000.
+
+[Mnih et al., 2015] Volodymyr Mnih, Koray Kavukcuoglu,
+David Silver, Andrei A Rusu, Joel Veness, Marc G Belle-
+mare, Alex Graves, Martin Riedmiller, Andreas K Fidje-
+land, Georg Ostrovski, et al. Human-level control through
+deep reinforcement learning. Nature, 2015.
+
+[Mohan et al., 2011] Ananth Mohan, Zheng Chen, and Kil-
+ian Q Weinberger. Web-search ranking with initialized
+gradient boosted regression trees. In Yahoo! Learning to
+Rank Challenge, 2011.
+
+[Oh et al., 2015] Junhyuk Oh, Xiaoxiao Guo, Honglak Lee,
+Richard L Lewis, and Satinder Singh. Action-conditional
+video prediction using deep networks in atari games.
+In Advances in Neural Information Processing Systems
+(NIPS), 2015.
+
+[Russell and Norvig, 1995] Stuart Russell and Peter Norvig.
+Artiﬁcial Intelligence A Modern Approach. Prentice-Hall,
+Englewood Cliffs, 1995.
+
+[Stadie et al., 2015] Bradly C Stadie, Sergey Levine, and
+Pieter Abbeel. Incentivizing exploration in reinforcement
+learning with deep predictive models. arXiv:1507.00814,
+2015.
+
+[Strens, 2000] Malcolm Strens. A bayesian framework for
+In International Conference on
+
+reinforcement learning.
+Machine Learning (ICML), 2000.
+
+[Sutton and Barto, 1998] Richard S Sutton and Andrew G
+Barto. Reinforcement learning: An introduction. MIT
+Press, 1998.
+
+[Sutton, 1984] Richard S. Sutton. Temporal Credit Assign-
+ment in Reinforcement Learning. PhD thesis, University
+of Massachusetts Amherst, 1984.
+
+[Tesauro, 1994] Gerald Tesauro.
+
+Td-gammon, a self-
+teaching backgammon program, achieves master-level
+play. Neural Computation, 1994.
+
+

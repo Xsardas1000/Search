@@ -1,0 +1,1559 @@
+Convolutional Neural Networks using Logarithmic Data Representation
+
+Daisuke Miyashita
+Stanford University, Stanford, CA 94305 USA
+Toshiba, Kawasaki, Japan
+Edward H. Lee
+Stanford University, Stanford, CA 94305 USA
+Boris Murmann
+Stanford University, Stanford, CA 94305 USA
+
+Abstract
+
+Recent advances in convolutional neural net-
+works have considered model complexity and
+hardware efﬁciency to enable deployment onto
+embedded systems and mobile devices.
+For
+example, it is now well-known that the arith-
+metic operations of deep networks can be en-
+coded down to 8-bit ﬁxed-point without signiﬁ-
+cant deterioration in performance. However, fur-
+ther reduction in precision down to as low as
+3-bit ﬁxed-point results in signiﬁcant losses in
+performance.
+In this paper we propose a new
+data representation that enables state-of-the-art
+networks to be encoded to 3 bits with negligi-
+ble loss in classiﬁcation performance. To per-
+form this, we take advantage of the fact that
+the weights and activations in a trained net-
+work naturally have non-uniform distributions.
+Using non-uniform, base-2 logarithmic repre-
+sentation to encode weights, communicate acti-
+vations, and perform dot-products enables net-
+works to 1) achieve higher classiﬁcation accura-
+cies than ﬁxed-point at the same resolution and
+2) eliminate bulky digital multipliers. Finally,
+we propose an end-to-end training procedure that
+uses log representation at 5-bits, which achieves
+higher ﬁnal test accuracy than linear at 5-bits.
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+7
+1
+
+ 
+ 
+]
+E
+N
+.
+s
+c
+[
+ 
+ 
+
+2
+v
+5
+2
+0
+1
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+1. Introduction
+Deep convolutional neural networks (CNN) have demon-
+strated state-of-the-art performance in image classiﬁcation
+
+DAISUKEM@STANFORD.EDU
+
+EDHLEE@STANFORD.EDU
+
+MURMANN@STANFORD.EDU
+
+(Krizhevsky et al., 2012; Simonyan & Zisserman, 2014;
+He et al., 2015) but have steadily grown in computational
+complexity. For example, the Deep Residual Learning (He
+et al., 2015) set a new record in image classiﬁcation accu-
+racy at the expense of 11.3 billion ﬂoating-point multiply-
+and-add operations per forward-pass of an image and 230
+MB of memory to store the weights in its 152-layer net-
+work.
+In order for these large networks to run in real-time ap-
+plications such as for mobile or embedded platforms, it is
+often necessary to use low-precision arithmetic and apply
+compression techniques. Recently, many researchers have
+successfully deployed networks that compute using 8-bit
+ﬁxed-point representation (Vanhoucke et al., 2011; Abadi
+et al., 2015) and have successfully trained networks with
+16-bit ﬁxed point (Gupta et al., 2015). This work in par-
+ticular is built upon the idea that algorithm-level noise tol-
+erance of the network can motivate simpliﬁcations in hard-
+ware complexity.
+Interesting directions point towards matrix factorization
+(Denton et al., 2014) and tensoriﬁcation (Novikov et al.,
+2015) by leveraging structure of the fully-connected (FC)
+layers. Another promising area is to prune the FC layer be-
+fore mapping this to sparse matrix-matrix routines in GPUs
+(Han et al., 2015b). However, many of these inventions
+aim at systems that meet some required and speciﬁc crite-
+ria such as networks that have many, large FC layers or ac-
+celerators that handle efﬁcient sparse matrix-matrix arith-
+metic. And with network architectures currently pushing
+towards increasing the depth of convolutional layers by set-
+tling for fewer dense FC layers (He et al., 2015; Szegedy
+et al., 2015), there are potential problems in motivating a
+one-size-ﬁts-all solution to handle these computational and
+memory demands.
+We propose a general method of representing and comput-
+
+Convolutional Neural Networks using Logarithmic Data Representation
+
+ing the dot products in a network that can allow networks
+with minimal constraint on the layer properties to run more
+efﬁciently in digital hardware.
+In this paper we explore
+the use of communicating activations, storing weights, and
+computing the atomic dot-products in the binary logarith-
+mic (base-2 logarithmic) domain for both inference and
+training. The motivations for moving to this domain are
+the following:
+
+• Training networks with weight decay leads to ﬁnal
+weights that are distributed non-uniformly around 0.
+• Similarly, activations are also highly concentrated
+near 0. Our work uses rectiﬁed Linear Units (ReLU)
+as the non-linearity.
+
+• Logarithmic representations can encode data with
+very large dynamic range in fewer bits than can ﬁxed-
+point representation (Gautschi et al., 2016).
+
+• Data representation in log-domain is naturally en-
+coded in digital hardware (as shown in Section 4.3).
+
+Our contributions are listed:
+
+• we show that networks obtain higher classiﬁcation
+accuracies with logarithmic quantization than linear
+quantization using traditional ﬁxed-point at equivalent
+resolutions.
+
+• we show that activations are more robust to quantiza-
+tion than weights. This is because the number of ac-
+tivations tend to be larger than the number of weights
+which are reused during convolutions.
+
+• we apply our logarithmic data representation on state-
+of-the-art networks, allowing activations and weights
+to use only 3b with almost no loss in classiﬁcation
+performance.
+
+• we generalize base-2 arithmetic to handle different
+√
+2 enables
+base. In particular, we show that a base-
+the ability to capture large dynamic ranges of weights
+and activations but also ﬁner precisions across the en-
+coded range of values as well.
+
+• we develop logarithmic backpropagation for efﬁcient
+
+training.
+
+2. Related work
+Reduced-precision computation. (Shin et al., 2016; Sung
+et al., 2015; Vanhoucke et al., 2011; Han et al., 2015a) ana-
+lyzed the effects of quantizing the trained weights for infer-
+ence. For example, (Han et al., 2015b) shows that convo-
+lutional layers in AlexNet (Krizhevsky et al., 2012) can be
+
+encoded to as little as 5 bits without a signiﬁcant accuracy
+penalty. There has also been recent work in training us-
+ing low precision arithmetic. (Gupta et al., 2015) propose
+a stochastic rounding scheme to help train networks using
+16-bit ﬁxed-point.
+(Lin et al., 2015) propose quantized
+back-propagation and ternary connect. This method re-
+duces the number of ﬂoating-point multiplications by cast-
+ing these operations into powers-of-two multiplies, which
+are easily realized with bitshifts in digital hardware. They
+apply this technique on MNIST and CIFAR10 with lit-
+tle loss in performance. However, their method does not
+completely eliminate all multiplications end-to-end. Dur-
+ing test-time the network uses the learned full resolution
+weights for forward propagation. Training with reduced
+precision is motivated by the idea that high-precision gra-
+dient updates is unnecessary for the stochastic optimization
+of networks (Bottou & Bousquet, 2007; Bishop, 1995; Au-
+dhkhasi et al., 2013). In fact, there are some studies that
+show that gradient noise helps convergence. For example,
+(Neelakantan et al., 2015) empirically ﬁnds that gradient
+noise can also encourage faster exploration and annealing
+of optimization space, which can help network generaliza-
+tion performance.
+Hardware implementations. There have been a few
+but signiﬁcant advances in the development of specialized
+hardware of large networks. For example (Farabet et al.,
+2010) developed Field-Programmable Gate Arrays (FPGA)
+to perform real-time forward propagation. These groups
+have also performed a comprehensive study of classiﬁca-
+tion performance and energy efﬁciency as function of res-
+olution. (Zhang et al., 2015) have also explored the design
+of convolutions in the context of memory versus compute
+management under the RoofLine model. Other works fo-
+cus on specialized, optimized kernels for general purpose
+GPUs (Chetlur et al., 2014).
+
+3. Concept and Motivation
+Each convolutional and fully-connected layer of a network
+performs matrix operations that distills down to dot prod-
+ucts y = wT x, where x ∈ Rn is the input, w ∈ Rn the
+weights, and y the activations before being transformed by
+the non-linearity (e.g. ReLU). Using conventional digital
+hardware, this operation is performed using n multiply-
+and-add operations using ﬂoating or ﬁxed point represen-
+tation as shown in Figure 1(a). However, this dot product
+can also be computed in the log-domain as shown in Fig-
+ure 1(b,c).
+
+3.1. Proposed Method 1.
+
+The ﬁrst proposed method as shown in Figure 1(b) is to
+transform one operand to its log representation, convert
+the resulting transformation back to the linear domain, and
+
+Convolutional Neural Networks using Logarithmic Data Representation
+
+3.2. Proposed Method 2.
+
+The second proposed method as shown in Figure 1(c) is
+to extend the ﬁrst method to compute dot products in the
+log-domain for both operands. Additions in linear-domain
+map to sums of exponentials in the log-domain and mul-
+tiplications in linear become log-addition. The resulting
+dot-product is
+
+wT x (cid:39) n(cid:88)
+n(cid:88)
+
+i=1
+
+=
+
+i=1
+
+2Quantize(log2(wi))+Quantize(log2(xi))
+
+Bitshift(1, ˜wi + ˜xi),
+
+(2)
+
+Figure 1. Concept and motivation of this study.
+
+multiply this by the other operand. This is simply
+
+wT x (cid:39) n(cid:88)
+n(cid:88)
+
+i=1
+
+=
+
+wi × 2˜xi
+
+3.3. Accumulation in log domain
+
+are
+
+the
+
+log-domain
+
+log-domain weights
+
+where
+and
+Quantize(log2(wi))
+˜xi = Quantize(log2(xi)).
+By transforming both the weights and inputs, we compute
+the original dot product by bitshifting 1 by an integer result
+˜wi + ˜xi and summing over all i.
+
+˜wi
+inputs
+
+=
+are
+
+(cid:32) 2(cid:88)
+
+(cid:33)
+
+Although Fig. 1(b,c) indicates a logarithm-to-linear con-
+verter between layers where the actual accumulation is per-
+formed in the linear domain, this accumulation is able to
+be performed in the log-domain using the approximation
+log2(1 + x) (cid:39) x for 0 ≤ x < 1. For example, let
+sn = w1x1+. . .+wnxn, ˜sn = log2(sn), and ˜pi = ˜wi+ ˜xi.
+When n = 2,
+
+˜s2 = log2
+
+Bitshift (1, ˜pi)
+
+i=1
+
+(cid:39) max (˜p1, ˜p2) + Bitshift (1,−|˜p1 − ˜p2|) , (3)
+
+and for n in general,
+˜sn (cid:39) max (˜sn−1, ˜pn) + Bitshift (1,−|(cid:98)˜sn−1(cid:99) − ˜pn|) .
+
+(4)
+
+Note that ˜si preserves the fractional part of the word dur-
+ing accumulation. Both accumulation in linear domain and
+accumulation in log domain have its pros and cons. Ac-
+cumulation in linear domain is simpler but requires larger
+bit widths to accommodate large dynamic range numbers.
+Accumulation in log in (3) and (4) appears to be more com-
+plicated, but is in fact simply computed using bit-wise op-
+erations in digital hardware.
+
+4. Experiments of Proposed Methods
+Here we evaluate our methods as detailed in Sections 3.1
+and 3.2 on the classiﬁcation task of ILSVRC-2012 (Deng
+
+Bitshift(wi, ˜xi),
+
+(1)
+
+i=1
+
+where ˜xi = Quantize(log2(xi)), Quantize(•) quantizes
+• to an integer, and Bitshift(a, b) is the function that bit-
+shifts a value a by an integer b in ﬁxed-point arithmetic.
+In ﬂoating-point, this operation is simply an addition of
+b with the exponent part of a. Taking advantage of the
+Bitshift(a, b) operator to perform multiplication obviates
+the need for expensive digital multipliers.
+Quantizing the activations and weights in the log-domain
+(log2(x) and log2(w)) instead of x and w is also motivated
+by leveraging structure of the non-uniform distributions of
+x and w. A detailed treatment is shown in the next section.
+In order to quantize, we propose two hardware-friendly ﬂa-
+vors. The ﬁrst option is to simply ﬂoor the input. This
+method computes (cid:98)log2(w)(cid:99) by returning the position of
+the ﬁrst 1 bit seen from the most signiﬁcant bit (MSB).
+The second option is to round to the nearest integer, which
+is more precise than the ﬁrst option. With the latter op-
+tion, after computing the integer part, the fractional part is
+computed in order to assert the rounding direction. This
+method of rounding is summarized as follows. Pick m bits
+followed by the leftmost 1 and consider it as a ﬁxed point
+number F with 0 integer bit and m fractional bits. Then, if
+2 − 1, round F up to the nearest integer and other-
+
+F ≥ √
+
+wise round it down to the nearest integer.
+
+Convolutional Neural Networks using Logarithmic Data Representation
+
+Table 1. Structure of AlexNet(Krizhevsky et al., 2012) with quan-
+tization
+
+Table 2. Structure of VGG16(Simonyan & Zisserman, 2014) with
+quantization
+
+layer
+
+ReLU(Conv1)
+LogQuant1
+LRN1
+Pool1
+ReLU(Conv2)
+LogQuant2
+LRN2
+Pool2
+ReLU(Conv3)
+LogQuant3
+ReLU(Conv4)
+LogQuant4
+ReLU(Conv5)
+LogQuant5
+Pool5
+ReLU(FC6)
+LogQuant6
+ReLU(FC7)
+LogQuant7
+FC8
+
+# Weight
+96 · 3 · 112
+
+-
+-
+-
+
+256 · 96 · 52
+
+-
+-
+-
+
+-
+
+384 · 256 · 32
+384 · 384 · 32
+256 · 384 · 32
+
+-
+
+-
+-
+
+-
+
+4096 · 256 · 62
+4096 · 4096
+1000 · 4096
+
+-
+
+-
+
+-
+
+# Input
+3 · 2272
+96 · 552
+96 · 552
+96 · 272
+256 · 272
+256 · 272
+256 · 132
+384 · 132
+384 · 132
+384 · 132
+384 · 132
+256 · 132
+256 · 132
+256 · 62
+4096
+4096
+4096
+4096
+
+FSR
+
+-
+
+fsr + 3
+
+-
+-
+-
+
+fsr + 3
+
+-
+-
+-
+
+fsr + 4
+
+-
+
+fsr + 3
+
+-
+
+fsr + 3
+
+-
+-
+
+fsr + 1
+
+-
+fsr
+-
+
+et al., 2009) using Chainer (Tokui et al., 2015). We eval-
+uate method 1 (Section 3.1) on inference (forward pass)
+in Section 4.1. Similarly, we evaluate method 2 (Section
+3.2) on inference in Sections 4.2 and 4.3. For those ex-
+periments, we use published models (AlexNet (Krizhevsky
+et al., 2012), VGG16 (Simonyan & Zisserman, 2014)) from
+the caffe model zoo ((Jia et al., 2014)) without any ﬁne tun-
+ing (or extra retraining). Finally, we evaluate method 2 on
+training in Section 4.4.
+
+4.1. Logarithmic Representation of Activations
+
+This experiment evaluates the classiﬁcation accuracy us-
+ing logarithmic activations and ﬂoating point 32b for the
+weights. In similar spirit to that of (Gupta et al., 2015), we
+describe the logarithmic quantization layer LogQuant that
+performs the element-wise operation as follows:
+
+(cid:26) 0
+
+x = 0,
+otherwise,
+
+(5)
+
+2˜x
+
+LogQuant(x, bitwidth, FSR) =
+
+where
+
+˜x = Clip(cid:0)Round(log2(|x|)), FSR − 2bitwidth, FSR(cid:1) ,
+
+ 0
+
+x ≤ min,
+max − 1 x ≥ max,
+otherwise.
+x
+
+(6)
+
+(7)
+
+Clip(x, min, max) =
+
+These layers perform the logarithmic quantization and
+computation as detailed in Section 3.1. Tables 1 and 2
+
+layer
+
+ReLU(Conv1 1)
+LogQuant1 1
+ReLU(Conv1 2)
+LogQuant1 2
+Pool1
+ReLU(Conv2 1)
+LogQuant2 1
+ReLU(Conv2 2)
+LogQuant2 2
+Pool2
+ReLU(Conv3 1)
+LogQuant3 1
+ReLU(Conv3 2)
+LogQuant3 2
+ReLU(Conv3 3)
+LogQuant3 3
+Pool3
+ReLU(Conv4 1)
+LogQuant4 1
+ReLU(Conv4 2)
+LogQuant4 2
+ReLU(Conv4 3)
+LogQuant4 3
+Pool4
+ReLU(Conv5 1)
+LogQuant5 1
+ReLU(Conv5 2)
+LogQuant5 2
+ReLU(Conv5 3)
+LogQuant5 3
+Pool5
+ReLU(FC6)
+LogQuant6
+ReLU(FC7)
+LogQuant7
+FC8
+
+# Weight
+64 · 3 · 32
+64 · 64 · 32
+
+-
+
+-
+-
+
+128 · 64 · 32
+128 · 128 · 32
+
+-
+
+-
+-
+
+-
+
+256 · 128 · 32
+256 · 256 · 32
+256 · 256 · 32
+
+-
+
+-
+-
+
+-
+
+512 · 256 · 32
+512 · 512 · 32
+512 · 512 · 32
+
+-
+
+-
+-
+
+-
+
+512 · 512 · 32
+512 · 512 · 32
+512 · 512 · 32
+
+-
+
+-
+-
+
+-
+
+4096 · 512 · 72
+4096 · 4096
+1000 · 4096
+
+-
+
+# Input
+3 · 2242
+64 · 2242
+64 · 2242
+64 · 2242
+64 · 2242
+64 · 1122
+128 · 1122
+128 · 1122
+128 · 1122
+128 · 1122
+128 · 562
+256 · 562
+256 · 562
+256 · 562
+256 · 562
+256 · 562
+256 · 562
+256 · 282
+512 · 282
+512 · 282
+512 · 282
+512 · 282
+512 · 282
+512 · 282
+512 · 142
+512 · 142
+512 · 142
+512 · 142
+512 · 142
+512 · 142
+512 · 142
+512 · 72
+4096
+4096
+4096
+4096
+
+FSR
+
+-
+
+fsr + 4
+
+-
+
+fsr + 6
+
+-
+-
+
+fsr + 6
+
+-
+
+fsr + 7
+
+-
+-
+
+fsr + 7
+
+-
+
+fsr + 7
+
+-
+
+fsr + 7
+
+-
+-
+
+fsr + 7
+
+-
+
+fsr + 6
+
+-
+
+fsr + 5
+
+-
+-
+
+fsr + 4
+
+-
+
+fsr + 3
+
+-
+
+fsr + 2
+
+-
+-
+
+fsr + 1
+
+-
+fsr
+-
+
+illustrate the addition of these layers to the models. The
+quantizer has a speciﬁed full scale range, and this range in
+linear scale is 2FSR, where we express this as simply FSR
+throughout this paper for notational convenience. The FSR
+values for each layer are shown in Tables 1 and 2; they
+show fsr added by an offset parameter. This offset param-
+eter is chosen to properly handle the variation of activation
+ranges from layer to layer using 100 images from the train-
+ing set. The fsr is a parameter which is global to the net-
+work and is tuned to perform the experiments to measure
+the effect of FSR on classiﬁcation accuracy. The bitwidth
+is the number of bits required to represent a number after
+quantization. Note that since we assume applying quanti-
+zation after ReLU function, x is 0 or positive and then we
+
+Convolutional Neural Networks using Logarithmic Data Representation
+
+use unsigned format without sign bit for activations.
+In order to evaluate our logarithmic representation, we de-
+tail an equivalent linear quantization layer described as
+
+LinearQuant(x, bitwidth, FSR)
+× step, 0, 2FSR
+
+Round
+
+step
+
+(cid:19)
+
+(8)
+
+(9)
+
+(cid:18)
+
+(cid:18) x
+
+(cid:19)
+
+= Clip
+
+and where
+
+step = 2FSR−bitwidth.
+
+Figure 2 illustrates the effect of the quantizer on activa-
+tions following the conv2 2 layer used in VGG16. The pre-
+quantized distribution tends to 0 exponentially, and the log-
+quantized distribution illustrates how the log-encoded acti-
+vations are uniformly equalized across many output bins
+which is not prevalent in the linear case. Many smaller
+activation values are more ﬁnely represented by log quan-
+tization compared to linear quantization. The total quanti-
+N ||Quantize(x)− x||1, where Quantize(•) is
+zation error 1
+LogQuant(•) or LinearQuant(•), x is the vectorized ac-
+tivations of size N, is less for the log-quantized case than
+for linear. This result is illustrated in Figure 3. Using linear
+quantization with step size of 1024, we obtain a distribu-
+tion of quantization errors that are highly concentrated in
+the region where |LinearQuant(x) − x| < 512. How-
+ever, log quantization with the bitwidth as linear results in
+a signiﬁcantly lower number of quantization errors in the
+region 128 < |LogQuant(x) − x| < 512. This comes
+at the expense of a slight increase in errors in the region
+512 < |LogQuant(x) − x|. Nonetheless, the quantiza-
+N ||LogQuant(x) − x||1 = 34.19 for log and
+tion errors 1
+N ||LogQuant(x) − x||1 = 102.89 for linear.
+1
+We run the models as described in Tables 1 and 2 and test
+on the validation set without data augmentation. We evalu-
+ate it with variable bitwidths and FSRs for both quantizer
+layers.
+Figure 4 illustrates the results of AlexNet. Using only 3 bits
+to represent the activations for both logarithmic and linear
+quantizations, the top-5 accuracy is still very close to that of
+the original, unquantized model encoded at ﬂoating-point
+32b. However, logarithmic representations tolerate a large
+dynamic range of FSRs. For example, using 4b log, we
+can obtain 3 order of magnitude variations in the full scale
+without a signiﬁcant loss of top-5 accuracy. We see similar
+results for VGG16 as shown in Figure 5. Table 3 lists the
+classiﬁcation accuracies with the optimal FSRs for each
+case. There are some interesting observations. First, 3b log
+performs 0.2% worse than 3b linear for AlexNet but 6.2%
+better for VGG16, which is a higher capacity network than
+AlexNet. Second, by encoding the activations in 3b log, we
+achieve the same top-5 accuracy compared to that achieved
+
+Figure 2. Distribution of activations of conv2 2 layer in VGG16
+before and after log and linear quantization. The order (from top
+to bottom) is: before log-quantization, after log-quantization, be-
+fore linear quantization, and after linear quantization. The color
+highlights the binning process of these two quantizers.
+
+by 4b linear for VGG16. Third, with 4b log, there is no loss
+in top-5 accuracy from the original ﬂoat32 representation.
+
+Table 3. Top-5 accuracies with quantized activations at optimal
+FSRs
+
+Model
+
+AlexNet
+
+Float 32b
+Log. 3b
+Log. 4b
+Linear 3b
+Linear 4b
+
+78.3%
+
+76.9%(fsr = 7)
+76.9%(fsr = 15)
+77.1%(fsr = 5)
+77.6%(fsr = 5)
+
+VGG16
+
+89.8%
+
+89.2%(fsr = 6)
+89.8%(fsr = 11)
+83.0%(fsr = 3)
+89.4%(fsr = 4)
+
+4.2. Logarithmic Representation of Weights of Fully
+
+Connected Layers
+
+The FC weights are quantized using the same strategies as
+those in Section 4.1, except that they have sign bit. We
+evaluate the classiﬁcation performance using log data rep-
+resentation for both FC weights and activations jointly us-
+ing method 2 in Section 3.2. For comparison, we use lin-
+ear for FC weights and log for activations as reference. For
+both methods, we use optimal 4b log for activations that
+were computed in Section 4.1.
+Table 4 compares the mentioned approaches along with
+ﬂoating point. We observe a small 0.4% win for log
+over linear for AlexNet but a 0.2% decrease for VGG16.
+Nonetheless, log computation is performed without the use
+of multipliers.
+
+Convolutional Neural Networks using Logarithmic Data Representation
+
+Figure 3. Comparison of the quantization error distribution be-
+tween logarithmic quantization and linear quantization
+
+Figure 5. Top5 Accuracy vs Full scale range: VGG16
+
+4.3. Logarithmic Representation of Weights of
+
+Convolutional Layers
+
+We now represent the convolutional layers using the same
+procedure. We keep the representation of activations at 4b
+log and the representation of weights of FC layers at 4b log,
+and compare our log method with the linear reference and
+√
+ideal ﬂoating point. We also perform the dot products using
+√
+two different bases: 2,
+2. Note that there is no additional
+overhead for log base-
+2 as it is computed with the same
+equation shown in Equation 4.
+Table 5 shows the classiﬁcation results. The results illus-
+trate an approximate 6% drop in performance from ﬂoating
+point down to 5b base-2 but a relatively minor 1.7% drop
+for 5b base-
+2. They includes sign bit. There are also
+some important observations here.
+
+√
+
+Table 5. Top-5 accuracy after applying quantization to weights of
+convolutional layers
+
+Model
+
+Float
+32b
+
+Linear
+
+5b
+
+Base-2
+Log 5b
+
+√
+2
+Log 5b
+
+Base-
+
+AlexNet
+VGG16
+
+76.8% 73.6% 70.6%
+89.5% 85.1% 83.4%
+
+75.1%
+89.0%
+
+We ﬁrst observe that the weights of the convolutional layers
+for AlexNet and VGG16 are more sensitive to quantization
+than are FC weights. Each FC weight is used only once
+per image (batch size of 1) whereas convolutional weights
+are reused many times across the layer’s input activation
+map. Because of this, the quantization error of each weight
+now inﬂuences the dot products across the entire activation
+√
+volume. Second, we observe that by moving from 5b base-
+2, we allow the
+2 to a ﬁner granularity such as 5b base-
+
+Figure 4. Top5 Accuracy vs Full scale range: AlexNet
+
+Table 4. Top-5 accuracy after applying quantization to weights of
+FC layers
+
+Model
+
+Float 32b
+
+Log. 4b
+
+Linear 4b
+
+AlexNet
+VGG16
+
+76.9%
+89.8%
+
+76.8%
+89.5%
+
+76.4%
+89.7%
+
+An added beneﬁt to quantization is a reduction of the model
+size. By quantizing down to 4b log including sign bit, we
+compress the FC weights for free signiﬁcantly from 1.9 Gb
+to 0.27 Gb for AlexNet and 4.4 Gb to 0.97 Gb for VGG16.
+This is because the dense FC layers occupy 98.2% and
+89.4% of the total model size for AlexNet and VGG16 re-
+spectively.
+
+Convolutional Neural Networks using Logarithmic Data Representation
+
+network to 1) be robust to quantization errors and degrada-
+tion in classiﬁcation performance and 2) retain the practical
+features of log-domain arithmetic.
+
+Figure 6. Distribution of quantization errors for weights under
+base 2 and
+
+√
+2.
+
+√
+
+The distributions of quantization errors for both 5b base-2
+and 5b base-
+2 are shown in Figure 6. The total quanti-
+N ||Quantize(x)− x||1, where
+zation error on the weights, 1
+x is the vectorized weights of size N, is 2× smaller for
+√
+base-
+
+2 than for base-2.
+
+Algorithm 1 Training a CNN with base-2 logarithmic rep-
+resentation. C is the softmax loss for each minibatch.
+LogQuant(x) quantizes x in base-2 log-domain. The op-
+timization step Update(Wk,gWk) updates the weights Wk
+based on backpropagated gradients gWk. We use the SGD
+with momentum and Adam rule.
+Require: a minibatch of inputs and targets (a0, a∗), previ-
+
+ous weights W .
+Ensure: updated weights W t+1
+{1. Computing the parameters’ gradient:}
+{1.1. Forward propagation:}
+(cid:1)
+for k = 1 to L do
+k ← LogQuant(Wk)
+W q
+k−1W b
+k ← LogQuant(ak)
+k
+aq
+
+ak ← ReLU(cid:0)aq
+
+knowing aL and a∗
+
+end for
+{1.2. Backward propagation:}
+Compute gaL = ∂C
+∂aL
+for k = L to 1 do
+
+← LogQuant(gak )
+
+gq
+gak−1 ← gq
+ak
+gWk ← gq(cid:62)
+
+ak
+
+W q
+ak
+k
+aq
+k−1
+
+end for
+{2. Accumulating the parameters’ gradient:}
+for k = 1 to L do
+
+k ← Update(Wk, gWk )
+W t+1
+end for
+
+4.4. Training with Logarithmic Representation
+
+We incorporate log representation during the training
+phase.
+This entire algorithm can be computed using
+Method 2 in Section 3.2. Table 6 illustrates the networks
+that we compare. The proposed log and linear networks
+are trained at the same resolution using 4-bit unsigned ac-
+tivations and 5-bit signed weights and gradients using Al-
+gorithm 1 on the CIFAR10 dataset with simple data aug-
+mentation described in (He et al., 2015). Note that un-
+like BinaryNet (Courbariaux & Bengio, 2016), we quantize
+the backpropagated gradients to train log-net. This enables
+end-to-end training using logarithmic representation at the
+5-bit level. For linear quantization however, we found it
+necessary to keep the gradients in its unquantized ﬂoating-
+point precision form in order to achieve good convergence.
+Furthermore, we include the training curve for BinaryNet,
+which uses unquantized gradients.
+Fig.
+7 illustrates the training results of log, linear, and
+BinaryNet. Final test accuracies for log-5b, linear-5b, and
+BinaryNet are 0.9379, 0.9253, 0.8862 respectively where
+linear-5b and BinaryNet use unquantized gradients. The
+test results indicate that even with quantized gradients, our
+proposed network with log representation still outperforms
+the others that use unquantized gradients.
+
+Figure 7. Loss curves and test accuracies
+
+Convolutional Neural Networks using Logarithmic Data Representation
+
+5. Conclusion
+In this paper, we describe a method to represent the weights
+and activations with low resolution in the log-domain,
+which eliminates bulky digital multipliers. This method is
+also motivated by the non-uniform distributions of weights
+and activations, making log representation more robust to
+quantization as compared to linear. We evaluate our meth-
+ods on the classiﬁcation task of ILSVRC-2012 using pre-
+trained models (AlexNet and VGG16). We also offer ex-
+tensions that incorporate end-to-end training using log rep-
+resentation including gradients.
+
+Table 6. Structure of VGG-like network for CIFAR10
+
+log quantization
+Conv 64 · 3 · 32
+BatchNorm
+
+ReLU
+
+LogQuant
+
+Conv 64 · 64 · 32
+
+BatchNorm
+
+ReLU
+
+LogQuant
+
+MaxPool 2 × 2
+Conv 128 · 64 · 32
+
+BatchNorm
+
+ReLU
+
+linear quantization
+Conv 64 · 3 · 32
+BatchNorm
+
+ReLU
+
+LinearQuant
+Conv 64 · 64 · 32
+
+BatchNorm
+
+ReLU
+
+LinearQuant
+MaxPool 2 × 2
+Conv 128 · 64 · 32
+
+BatchNorm
+
+ReLU
+
+LogQuant
+
+Conv 128 · 128 · 32
+
+LinearQuant
+
+Conv 128 · 128 · 32
+
+BatchNorm
+
+ReLU
+
+BatchNorm
+
+ReLU
+
+LogQuant
+
+MaxPool 2 × 2
+Conv 256 · 128 · 32
+
+LinearQuant
+MaxPool 2 × 2
+Conv 256 · 128 · 32
+
+BatchNorm
+
+ReLU
+
+BatchNorm
+
+ReLU
+
+BatchNorm
+
+ReLU
+
+BatchNorm
+
+ReLU
+
+BatchNorm
+
+ReLU
+
+BatchNorm
+
+ReLU
+
+LogQuant
+
+Conv 256 · 256 · 32
+
+LinearQuant
+
+Conv 256 · 256 · 32
+
+LogQuant
+
+Conv 256 · 256 · 32
+
+LinearQuant
+
+Conv 256 · 256 · 32
+
+LogQuant
+
+Conv 256 · 256 · 32
+
+LinearQuant
+
+Conv 256 · 256 · 32
+
+BatchNorm
+
+ReLU
+
+LogQuant
+
+MaxPool 2 × 2
+FC 1024 · 256 · 42
+
+BatchNorm
+
+ReLU
+
+LinearQuant
+MaxPool 2 × 2
+FC 1024 · 256 · 42
+
+BatchNorm
+
+ReLU
+
+LogQuant
+
+FC 1024 · 1024
+BatchNorm
+
+ReLU
+
+LogQuant
+FC 10 · 1024
+
+-
+
+BatchNorm
+
+ReLU
+
+LinearQuant
+FC 1024 · 1024
+BatchNorm
+
+ReLU
+
+LinearQuant
+FC 10 · 1024
+
+-
+
+BinaryNet
+
+Conv 64 · 3 · 32
+BatchNorm
+
+Binarize
+
+Conv 64 · 64 · 32
+
+BatchNorm
+
+Binarize
+
+MaxPool 2 × 2
+Conv 128 · 64 · 32
+
+BatchNorm
+
+Binarize
+
+Conv 128 · 128 · 32
+
+BatchNorm
+
+Binarize
+
+MaxPool 2 × 2
+Conv 256 · 128 · 32
+
+BatchNorm
+
+Binarize
+
+Conv 256 · 256 · 32
+
+BatchNorm
+
+Binarize
+
+Conv 256 · 256 · 32
+
+BatchNorm
+
+Binarize
+
+Conv 256 · 256 · 32
+
+BatchNorm
+
+Binarize
+
+MaxPool 2 × 2
+FC 1024 · 256 · 42
+
+BatchNorm
+
+Binarize
+
+FC 1024 · 1024
+BatchNorm
+
+Binarize
+FC 10 · 1024
+BatchNorm
+
+-
+
+-
+
+-
+
+-
+
+-
+
+-
+
+-
+
+-
+
+-
+
+-
+
+References
+Abadi, Mart´ın, Agarwal, Ashish, Barham, Paul, Brevdo,
+Eugene, Chen, Zhifeng, Citro, Craig, Corrado, Greg S.,
+Davis, Andy, Dean, Jeffrey, Devin, Matthieu, Ghe-
+mawat, Sanjay, Goodfellow, Ian, Harp, Andrew, Irv-
+ing, Geoffrey, Isard, Michael, Jia, Yangqing, Jozefowicz,
+Rafal, Kaiser, Lukasz, Kudlur, Manjunath, Levenberg,
+Josh, Man´e, Dan, Monga, Rajat, Moore, Sherry, Murray,
+
+Convolutional Neural Networks using Logarithmic Data Representation
+
+Derek, Olah, Chris, Schuster, Mike, Shlens, Jonathon,
+Steiner, Benoit, Sutskever, Ilya, Talwar, Kunal, Tucker,
+Paul, Vanhoucke, Vincent, Vasudevan, Vijay, Vi´egas,
+Fernanda, Vinyals, Oriol, Warden, Pete, Wattenberg,
+Martin, Wicke, Martin, Yu, Yuan, and Zheng, Xiaoqiang.
+TensorFlow: Large-scale machine learning on heteroge-
+neous systems, 2015.
+
+Audhkhasi, Kartik, Osoba, Osonde, and Kosko, Bart.
+Noise beneﬁts in backpropagation and deep bidirectional
+pre-training. In Proceedings of The 2013 International
+Joint Conference on Neural Networks (IJCNN), pp. 1–8.
+IEEE, 2013.
+
+Bishop, Christopher M. Training with noise is equivalent
+to tikhonov regularization. In Neural Computation, pp.
+108–116, 1995.
+
+Bottou, L´eon and Bousquet, Olivier. The tradeoffs of large
+scale learning.
+In Platt, J.C., Koller, D., Singer, Y.,
+and Roweis, S.T. (eds.), Advances in Neural Information
+Processing Systems 20, pp. 161–168. Curran Associates,
+Inc., 2007.
+
+Chetlur, Sharan, Woolley, Cliff, Vandermersch, Philippe,
+Cohen, Jonathan, Tran, John, Catanzaro, Bryan, and
+Shelhamer, Evan. cudnn: Efﬁcient primitives for deep
+learning. In Proceedings of Deep Learning and Repre-
+sentation Learning Workshop: NIPS 2014, 2014.
+
+Courbariaux, Matthieu and Bengio, Yoshua. Binarynet:
+Training deep neural networks with weights and ac-
+arXiv preprint
+tivations constrained to +1 or -1.
+arXiv:1602.02830, 2016.
+
+Deng, J., Dong, W., Socher, R., Li, L.-J., Li, K., and Fei-
+ImageNet: A Large-Scale Hierarchical Image
+
+Fei, L.
+Database. In CVPR09, 2009.
+
+Denton, Emily, Zaremba, Wojciech, Bruna, Joan, LeCun,
+Yann, and Fergus, Rob. Exploiting linear structure
+within convolutional networks for efﬁcient evaluation. In
+Advances in Neural Information Processing Systems 27
+(NIPS2014), pp. 1269–1277, 2014.
+
+Farabet, Cl´ement, Martini, Berin, Akselrod, Polina, Talay,
+Selc¸uk, LeCun, Yann, and Culurciello, Eugenio. Hard-
+ware accelerated convolutional neural networks for syn-
+In Proceedings of 2010 IEEE
+thetic vision systems.
+International Symposium on Circuits and Systems (IS-
+CAS),, pp. 257–260. IEEE, 2010.
+
+Solid- State Circuits Conference - (ISSCC), 2016 IEEE
+International. IEEE, 2016.
+
+Gupta, Suyog, Agrawal, Ankur, Gopalakrishnan, Kailash,
+and Narayanan, Pritish. Deep learning with limited nu-
+In Proceedings of The 32nd Inter-
+merical precision.
+national Conference on Machine Learning (ICML2015),
+pp. 1737–1746, 2015.
+
+Han, Song, Mao, Huizi, and Dally, William J. Deep com-
+pression: Compressing deep neural network with prun-
+ing, trained quantization and huffman coding. arXiv
+preprint arXiv:1510.00149, 2015a.
+
+Han, Song, Pool, Jeff, Tran, John, and Dally, William.
+Learning both weights and connections for efﬁcient neu-
+ral network. In Proceedings of Advances in Neural In-
+formation Processing Systems 28 (NIPS2015), pp. 1135–
+1143, 2015b.
+
+He, Kaiming, Zhang, Xiangyu, Ren, Shaoqing, and Sun,
+Jian. Deep residual learning for image recognition. arXiv
+preprint arXiv:1512.03385, 2015.
+
+Jia, Yangqing, Shelhamer, Evan, Donahue, Jeff, Karayev,
+Sergey, Long, Jonathan, Girshick, Ross, Guadarrama,
+Sergio, and Darrell, Trevor. Caffe: Convolutional ar-
+chitecture for fast feature embedding. In Proceedings of
+the 22nd ACM International Conference on Multimedia,
+pp. 675–678. ACM, 2014.
+
+Krizhevsky, Alex, Sutskever, Ilya, and Hinton, Geoffrey E.
+Imagenet classiﬁcation with deep convolutional neural
+networks. In Pereira, F., Burges, C.J.C., Bottou, L., and
+Weinberger, K.Q. (eds.), Advances in Neural Informa-
+tion Processing Systems 25, pp. 1097–1105, 2012.
+
+Lin, Zhouhan, Courbariaux, Matthieu, Memisevic, Roland,
+and Bengio, Yoshua. Neural networks with few multipli-
+cations. arXiv preprint arXiv:1510.03009, 2015.
+
+Neelakantan, Arvind, Vilnis, Luke, Le, Quoc V., Sutskever,
+Ilya, Kaiser, Lukasz, and Karol Kurach, James Martens.
+Adding gradient noise improves learning for very deep
+networks. arXiv preprint arXiv:1511.06807, 2015.
+
+Novikov, Alexander, Podoprikhin, Dmitry, Osokin, Anton,
+and Vetrov, Dmitry. Tensorizing neural networks.
+In
+Advances in Neural Information Processing Systems 28
+(NIPS2015), pp. 442–450, 2015.
+
+Gautschi, Michael, Schaffner, Michael, Gurkaynak,
+Frank K., and Benini, Luca. A 65nm CMOS 6.4-to-
+29.2pJ/FLOP at 0.8V shared logarithmic ﬂoating point
+unit for acceleration of nonlinear function kernels in
+In Proceedings of
+a tightly coupled processor cluster.
+
+Shin, Sungho, Hwang, Kyuyeon, and Sung, Wonyong.
+Fixed point performance analysis of recurrent neural net-
+works. In Proceedings of The 41st IEEE International
+Conference on Acoustic, Speech and Signal Processing
+(ICASSP2016). IEEE, 2016.
+
+Convolutional Neural Networks using Logarithmic Data Representation
+
+Simonyan, Karen and Zisserman, Andrew. Very deep con-
+volutional networks for large-scale image recognition.
+arXiv preprint arXiv:11409.1556, 2014.
+
+Sung, Wonyong, Shin, Sungho, and Hwang, Kyuyeon.
+Resiliency of deep neural networks under quantization.
+arXiv preprint arXiv:1511.06488, 2015.
+
+Szegedy, Christian, Liu, Wei, Jia, Yangqing, Sermanet,
+Pierre, Reed, Scott, Anguelov, Dragomir, Erhan, Du-
+mitru, Vanhoucke, Vincent, and Rabinovich, Andrew.
+Going deeper with convolutions. In CVPR 2015, 2015.
+
+Tokui, Seiya, Oono, Kenta, Hido, Shohei, and Clayton,
+Justin. Chainer: a next-generation open source frame-
+In Proceedings of Workshop
+work for deep learning.
+on Machine Learning Systems (LearningSys) in The
+Twenty-ninth Annual Conference on Neural Information
+Processing Systems (NIPS), 2015.
+
+Vanhoucke, Vincent, Senior, Andrew, and Mao, Mark Z.
+Improving the speed of neural networks on cpus. In Pro-
+ceedings of Deep Learning and Unsupervised Feature
+Learning Workshop, NIPS 2011, 2011.
+
+Zhang, Chen, Li, Peng, Sun, Guangyu, Guan, Yijin, Xiao,
+Bingjun, and Cong, Jason. Optimizing FPGA-based
+accelerator design for deep convolutional neural net-
+In Proceedings of 23rd International Sympo-
+works.
+sium on Field-Programmable Gate Arrays (FPGA2015),
+2015.
+
+

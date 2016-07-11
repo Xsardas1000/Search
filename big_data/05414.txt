@@ -1,0 +1,1328 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+7
+1
+
+ 
+ 
+]
+
+V
+C
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+4
+1
+4
+5
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Variable-Length Hashing
+
+Honghai Yu
+
+Data Analytics Department
+
+Institute for Infocomm Research
+
+Singapore 138632
+
+Pierre Moulin
+
+Electrical and Computer Engineering
+
+University of Illinois at Urbana-Champaign
+
+Urbana, IL 61801
+
+yuhh@i2r.a-star.edu.sg
+
+moulin@ifp.uiuc.edu
+
+Hong Wei Ng
+
+Advanced Digital Science Center
+
+Singapore
+
+hwng@adsc.com.sg
+
+Xiaoli Li
+
+Data Analytics Department
+
+Institute for Infocomm Research
+
+Singapore 138632
+
+xlli@i2r.a-star.edu.sg
+
+Abstract
+
+Hashing has emerged as a popular technique for large-scale similarity search.
+Most learning-based hashing methods generate compact yet correlated hash codes.
+However, this redundancy is storage-inefﬁcient. Hence we propose a lossless
+variable-length hashing (VLH) method that is both storage- and search-efﬁcient.
+Storage efﬁciency is achieved by converting the ﬁxed-length hash code into a
+variable-length code. Search efﬁciency is obtained by using a multiple hash ta-
+ble structure. With VLH, we are able to deliberately add redundancy into hash
+codes to improve retrieval performance with little sacriﬁce in storage efﬁciency or
+search complexity. In particular, we propose a block K-means hashing (B-KMH)
+method to obtain signiﬁcantly improved retrieval performance with no increase in
+storage and marginal increase in computational cost.
+
+1 Introduction
+
+Retrieval of similar objects is a key component in many applications such as large-scale visual
+search. As databases grow larger, learning compact representations for efﬁcient storage and fast
+search becomes increasingly important. These representations should preserve similarity, i.e., sim-
+ilar objects should have similar representations. Hashing algorithms, which encode objects into
+compact binary codes to preserve similarity, are particularly suitable for addressing these challenges.
+
+The last several years have witnessed an accelerated growth in hashing methods. One common
+theme among these methods is to learn compact codes because they are storage and search efﬁcient.
+In their pioneering work on spectral hashing (SH) [1], Weiss et al argued that independent hash bits
+lead to the most compact codes, and thus independence is a desired property for hashing. Some other
+hashing methods such as [2, 3, 4, 5, 6, 7, 8], explicitly or implicitly aim at generating independent
+bits. However, it is often difﬁcult to generate equally good independent bits. Under the unsupervised
+setting, it has been observed that data distributions are generally concentrated in a few high-variance
+projections [9, 10], and performance deteriorates rapidly as hash code length increases [11]. Under
+the supervised setting, it has also been noticed that the number of high signal-to-noise ratio (SNR)
+projections is limited, and bits generated from subsequent uncorrelated low-SNR projections may
+deteriorate performance [12]. Therefore, most hashing methods generate correlated bits. Some learn
+hash functions sequentially in boosting frameworks [13, 9, 14], some learn orthogonal transforma-
+tions on top of PCA projections to balance variances among different projection directions [10, 15],
+
+1
+
+some learn multiple bits from each projection [16, 12], and many others learn hash functions jointly
+without the independence constraint [17, 18, 19].
+
+One drawback of correlated hash codes is the storage cost caused by the redundancy in the codes.
+Surprisingly, this drawback has never been addressed, even though one of the main purposes of hash-
+ing is to ﬁnd storage-efﬁcient representations. Theoretically, this redundancy could be eliminated
+by entropy coding [20], where more frequent patterns are coded with fewer bits and less frequent
+patterns are coded with more bits. Practically, entropy coding faces two major challenges: (1) as
+the number of codewords is exponential in the input sequence length B, it is infeasible to estimate
+the underlying distribution when B is large; (2) as entropy coding produces variable-length codes,
+it is not clear how to ﬁnd nearest neighbors of a query without ﬁrst decoding every database item to
+the original ﬁxed-length hash codes, which will increase search complexity tremendously. Perhaps
+due to these two challenges, all existing hashing methods require data points to be hashed into the
+same number of bits, which leave little room for redundancy reduction. The ﬁrst contribution of
+this paper is to propose a two-stage procedure, termed variable-length hashing (VLH), that is not
+only capable of reducing redundancy in hash codes to save storage but also is search efﬁcient. The
+ﬁrst stage is a lossless variable-length encoder that contains multiple sub-encoders, each of which
+has moderate complexity. The second stage is a multiple hash table data structure that combines
+the variable-length codes from stage 1 and the multi-index hashing algorithm [21] to achieve search
+efﬁciency.
+
+On the other hand, deliberately adding redundancy into a system boosts performance in many ap-
+plications. For instance, channel coding uses extra bits to improve the robustness to noise in digital
+communication systems [20], sparse coding uses overcomplete dictionary to represent images for
+denoising, compression, and inpainting [22], and content identiﬁcation for time-varying sequences
+uses overlapping frames to overcome the desynchronization problem [23]. The second contribution
+of this paper is to demonstrate the effectiveness of adding redundancy in hashing, and shed some
+light on this new design paradigm for hashing. Speciﬁcally, we propose a block K-means hashing
+(B-KMH) method, in the spirit of block codes in channel coding, to represent each K-means code-
+word with more than the necessary number of bits so that the Hamming distance between hash codes
+can better approximate the Euclidean distance between their corresponding codewords. B-KMH is
+an extension to the state-of-the-art K-means hashing (KMH) [24]. On two large datasets containing
+one million points each, we demonstrate B-KMH’s superior approximate nearest neighbor (ANN)
+search performance over KMH and many other well-known hashing methods. Moreover, the added
+redundancy can be removed from storage with only marginal increase in search complexity using
+VLH.
+
+2 Lossless Compression by Variable-Length Hashing
+
+In this section, we ﬁrst propose a variable-length encoding scheme that encodes ﬁxed-length hash
+codes into variable lengths thus reducing the average code length. Moreover, we show that the
+variable-length codes can be seamlessly combined with multi-index hashing [21] to efﬁciently ﬁnd
+nearest neighbors.
+
+2.1 Variable-Length Encoding
+
+Let us consider a 64-bit hash code, for example produced by ITQ [10]. The expected code length in
+this ﬁxed-length setting is L = 64 bits. We know that bits are correlated as they are generated from
+correlated projections. An entropy coder, such as the Huffman coder, could achieve an expected
+code length L < 64 bits without any information loss. However, to use entropy coding, one needs
+to estimate the probabilities for K = 264 symbols, which would require many times K examples.
+Moreover, it is impossible to store the codebook consisting of K codewords.
+Inspired by the product quantizer [25, 26] which allows us to choose the number of components to
+be quantized jointly, we partition the B-bit hash code f ∈ {0, 1}B into M distinct binary substrings
+f = {f(1), . . . , f(M)}. For convenience, we assume M divides B and each substring consists of b =
+B/M bits. This limitation can be easily circumvented. The substrings are compressed separately
+using M distinct encoders. For each substring, the number of symbols is only 2b. For instance, each
+substring has only 256 unique symbols when a 64-bit code is partitioned into 8 substrings, and can
+
+2
+
+be learned accurately using one million examples. Moreover, the total number of codewords is only
+M times 2b. Note that in the extreme case where M = B, the bits are all encoded separately and
+the variable-length procedure reduces to the original ﬁxed-length hashing procedure.
+
+As will be shown in the next section, variable-length codewords are stored in different hash ta-
+bles for retrieval with one hash table corresponding to one encoder. This multiple hash table data
+structure provides great ﬂexibility in designing encoders because codewords are naturally separated.
+Therefore, we can drop the preﬁx code constraint, and only require codewords to be different (such
+codes are called nonsingular [20]) to ensure unique decodability. Here, we propose the following
+encoding procedure for each substring:
+
+1. Estimate the probability pi for each of the 2b symbols. Assign a small probability ǫ to
+
+symbols not appearing in the database.
+
+2. Rearrange symbols in decreasing order of {pi}. Starting from one bit, assign one more bit
+to the next most probable symbol if all shorter bit strings have been assigned. To ensure
+each codeword can be converted into a unique integer 1, bit strings longer than one bit and
+with the most signiﬁcant bit (MSB) equal to “0” will not be used as codewords. Therefore,
+the codewords for the ﬁrst ﬁve most probable symbols are “0”, “1”, “10”, “11”, and “100”.
+
+One advantage of the proposed encoder is that the maximum codeword length does not exceed the
+substring length b, which gives greater control over the size of the decoding table.
+
+130
+
+ 
+
+)
+
+120
+
+110
+
+100
+
+L
+
+ 
+,
+
+h
+t
+g
+n
+e
+
+l
+ 
+
+ 
+
+e
+d
+o
+c
+d
+e
+t
+c
+e
+p
+x
+E
+
+Huffman
+Ours
+
+90
+
+80
+
+6
+
+5
+
+4
+
+3
+
+m
+L
+
+(
+
+ 
+,
+
+h
+t
+g
+n
+e
+
+l
+ 
+
+ 
+
+e
+d
+o
+c
+d
+e
+t
+c
+e
+p
+x
+E
+
+70
+
+ 
+
+16 
+
+32 
+
+64 
+
+Number of substrings, M
+
+128
+
+2
+1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16
+
+m−th substring
+
+(a) Expected code length for different M.
+
+(b) L(m) for m = 1, . . . , 16.
+
+Figure 1: Variable-length encoding of 128-bit ITQ hash codes on the SIFT1M dataset. M = 128 corresponds
+to the ﬁxed-length codes.
+
+For the m-th substring, each symbol will be assigned a codeword with length l(m)
+resulting an expected code length of
+
+i
+
+, 1 ≤ i ≤ 2b,
+
+L(m) =
+
+2b
+X
+
+i=1
+
+p(m)
+
+i
+
+l(m)
+
+i
+
+.
+
+(1)
+
+m=1 L(m).
+
+Thus, the overall expected code length is L = PM
+As an example, let us examine how much compression can be done to the hash codes generated by
+ITQ on the SIFT1M dataset [26], which contains one million 128-D SIFT descriptors [27]. From
+each data point in the SIFT1M dataset, ITQ extracts a 128-bit hash code. As shown in Fig. 1a, our
+encoder has a much higher compression ratio than the Huffman encoder, and expected code lengths
+decrease when longer substrings are jointly compressed (corresponding to a smaller M ). Fig. 1b
+shows the substring expected code length L(m) for 1 ≤ m ≤ 16 in our encoder. It is clear that
+different substrings contain different degrees of redundancy. The signiﬁcant improvement over the
+optimal preﬁx code, i.e., the Huffman code, is due to our multiple hash table data structure, which
+
+1Thus, we can simply use the corresponding integer as the index to the decoding table, which makes decod-
+
+ing super fast.
+
+3
+
+Query 
+
+00110111 
+
+… 
+
+01111010 
+
+Hash Table 1 
+
+[0] 
+[1] 
+[2] 
+
+5, 9867, … 
+48, 1009, … 
+39,200, … 
+
+ 
+
+…
+
+Hash Table M 
+
+[0] 
+[1] 
+[2] 
+
+48, 707, … 
+74, 8943, … 
+14, 2355, … 
+
+ 
+
+…
+
+[255] 
+
+2,67,501, … 
+
+[255] 
+
+5, 11, 79, … 
+
+(a) Hash table loolup.
+
+0 
+110 
+
+… 
+
+… 
+
+1010 
+10 
+
+decoding 
+
+00111110 
+10011101 
+
+ 
+
+…
+
+11 
+
+… 
+
+110001 
+
+10110101 
+
+… 
+… 
+
+ 
+
+…
+
+… 
+
+00110000 
+00010100 
+
+10001100 
+
+(b) Candidate test.
+
+Figure 2: Multi-index hashing with variable-length codes.
+
+enables us to us nonsingular codes, a superset of preﬁx codes. Note that Fig. 1 shows the theoretical
+amount of compression each encoder can achieve. In practice, the amount of saving is subject to the
+smallest unit of representation in computer architectures.
+
+2.2 Multi-Index Hashing
+
+Multi-index hashing (MIH) [21] is an efﬁcient algorithm for exact nearest neighbor search on hash
+codes. It has a provably sub-linear search complexity for uniformly distributed codes. Practice has
+shown it to be more than 100 times faster than a linear scan baseline on many large-scale datasets
+[21]. However in its formulation, MIH assumes ﬁxed-length hash codes, and thus considers the
+storage cost of the hash codes as irreducible. The structure of MIH is compatible with our variable-
+length encoding. Both rely on partitioning hash codes into binary substrings. In MIH, hash codes
+from the database are indexed M times into M different hash tables, based on M disjoint binary
+substrings. With variable-length encoding, we only store the variable-length codes in the hash table
+buckets, while the ﬁxed-length binary substrings are used as keys to the hash tables. From the
+previous section, it is clear that we can reduce storage cost with variable-length codes. The rest of
+this section shows how to combine variable-length encoding with MIH to achieve fast search.
+The key idea of MIH rests on the following proposition: When two hash codes f and g differ by r
+bits or less, then, in at least one of their M substrings they must differ by at most ⌊r/M ⌋ bits. This
+follows straightforwardly from the Pigeonhole Principle [21]. Given a query g = {g(1), . . . , g(M)},
+MIH ﬁnds all its r-neighbors (that is all samples f such that dH (g, f) <= r) by ﬁrst retrieving
+samples in the database that might be its r-neighbors (which we refer to as candidates) using table
+lookups followed by testing them exhaustively to check if they indeed fall within a radius r from g.
+This procedure is described in greater detail below and is depicted graphically in Fig. 2.
+
+Hash table lookup. For a query g = {g(1), . . . , g(M)}, we search the m-th substring hash table for
+entries that are within Hamming distance ⌊r/M ⌋ of g(m), i.e., the m-th set of search keys Kr
+m(g) is
+given by
+
+Kr
+
+m(g) = {g′ ∈ {0, 1}b|dH (g(m), g′) <= ⌊r/M ⌋},
+
+(2)
+
+4
+
+m(g) gives us the hash table index (inside square
+where the integer value of each search key in Kr
+brackets in Fig. 2a) to look for matching substrings. Thus, for each hash table, we retrieve a set
+of candidates Nm(g). Based on the proposition above, the union of the candidate sets N (g) =
+∪mNm(g) is a superset of the r-neighbors of g.
+In this step, the run-time cost is the same for
+ﬁxed-length and variable-length codes, while variable-length codes has a lower storage cost.
+Candidate test. To ﬁnd the true r-neighbors of g, we need to compute the Hamming distance
+between g and every hash code in N (g). However before doing so, variable-length codes need to be
+decoded into ﬁxed-length codes. To decode each codeword, we need M table lookups. As decoding
+tables are typically small, e.g., for a 16-bit substring the decoding table is only 128 Kbytes, they can
+be load into cache memory for fast decoding.
+To compare the run-time of decoding and Hamming distance computation dH , we run 1,000 simu-
+lations using MATLAB on an ofﬁce desktop with Intel Core i7 3.40 GHz and 8GB RAM. We use
+substring of length b = 16 for encoding 128-bit codes, resulting in M = 8 small decoding tables. In
+Fig. 3a, we show the average run-time per query with up to one million candidates. Decoding one
+million candidate codewords followed by one million Hamming distance computation costs merely
+0.17 sec for 128-bit hash codes. However, as the number of candidates |N (g)| is typically much
+smaller than the database size, we should expect the candidate test cost be much smaller than 0.17
+sec for most databases [21]. In Fig. 3b, we see that the average decoding run-time is actually smaller
+than Hamming distance computation, so decoding will not be the bottleneck in real-time search ap-
+plications. Note that MATLAB is not optimized for speed, we expect the actual run-times to be
+much faster than those shown in Fig. 3.
+
+100
+
+10−1
+
+10−2
+
+10−3
+
+10−4
+
+)
+s
+(
+ 
+
+y
+r
+e
+u
+q
+ 
+r
+e
+p
+e
+m
+T
+
+i
+
+ 
+
+10−5
+
+ 
+
+102
+
+64−bit d
+H
+128−bit d
+H
+Decoding + 128−bit d
+H
+
+ 
+
+)
+s
+(
+ 
+
+i
+
+e
+t
+a
+d
+d
+n
+a
+c
+
+ 
+
+ 
+r
+e
+p
+y
+r
+e
+u
+q
+ 
+r
+e
+p
+e
+m
+T
+
+i
+
+ 
+
+103
+105
+Number of candidates
+
+104
+
+106
+
+10−6
+
+10−7
+
+ 
+
+128−bit d
+H
+Decoding
+
+10−8
+
+ 
+
+102
+
+103
+105
+Number of candidates
+
+104
+
+106
+
+(a) Candidate test cost.
+
+(b) Decoding vs Hamming distance computation.
+
+Figure 3: Run-time comparisons for candidate test between ﬁxed-length and variable-length hash codes at
+various candidate set size. We use (M = 8, b = 16) for encoding 128-bit codes.
+
+3 Improving Retrieval Performance by Adding Redundancy
+
+Knowing redundancy could be reduced by VLH with little increase in search complexity, we would
+like to examine whether deliberately adding redundancy into hash codes would improve retrieval
+performance. We test this idea on the recent K-means hashing (KMH) [24] method, which has shown
+excellent ANN search performance, and propose a block K-means hashing (B-KMH) method to
+represent each K-means codeword with more than the necessary number of bits so that the Hamming
+distance between binary representations can better approximate the Euclidean distance between their
+corresponding codewords.
+
+3.1 K-means Hashing
+
+Recently, vector quantization has shown excellent ANN search performance [26]. It approximates
+the Euclidean distance between two vectors x and y by the Euclidean distance between their code-
+words:
+
+d(x, y) ≈ d(ci(x), ci(y)),
+
+(3)
+
+5
+
+where i(x) denotes the index of the cell containing x ∈ Rd, and ci(x) ∈ Rd is the codeword.
+However, vector quantization is considerably slower than Hashing-based methods [24]. To take ad-
+vantage of fast Hamming distance computation, k-means hashing (KMH) approximates the pairwise
+codewords distance by the Hamming distance between the codewords’ binary representations (hash
+codes):
+
+(4)
+where Ii ∈ {0, 1}b is the b-bit representation of ci, and ds is deﬁned as a rescaled Hamming distance
+between any two binary representations Ii and Ij:
+
+d(ci(x), ci(y)) ≈ ds(Ii(x), Ii(y)),
+
+ds(Ii, Ij ) , s · d
+
+1
+
+2
+
+H (Ii, Ij),
+
+(5)
+
+where s is a constant scale and dH denotes the Hamming distance. The square root is necessary
+because it enables to generalize this approximation to product space. The use of s is because the
+Euclidean distance can be in an arbitrary range, while the Hamming distance dH is constrained in
+[0, b] given b bits.
+Given a training dataset X ∈ Rn×d consisting of n d-dimensional vectors, KMH learns k = 2b
+codewords corresponding to k cells. Note that {Ii} are predetermined and remain the same through-
+out the training process. KMH considers two error terms: the average quantization error Equan
+
+and the afﬁnity error Eaff, which is the average error due to the distance approximation in (4),
+
+Equan =
+
+1
+n X
+
+x∈X
+
+||x − ci(x)||2,
+
+Eaff =
+
+k
+
+k
+
+X
+
+X
+
+i=1
+
+j=1
+
+wij (d(ci, cj) − ds(Ii, Ij))2,
+
+(6)
+
+(7)
+
+where wij = ninj/n2, and ni and nj are the number of samples having index i and j respectively.
+The overall cost function of KMH is
+
+E = Equan + λEaff,
+
+(8)
+
+where λ is a ﬁxed weight. Minimizing (8) takes an alternating fashion:
+
+• Assignment step: ﬁx {ci} and optimize i(x). Each sample x is assigned to its nearest
+
+codeword in the codebook {ci}. This is the same as the K-means algorithm.
+
+• Update step: ﬁx i(x) and optimize {ci}. Each codeword cj is sequentially optimized with
+
+other {ci}i6=j ﬁxed.
+
+Similar to Product Quantization [26], KMH is easily generalized to a Cartesian product of sub-
+spaces, where (8) is independently minimized in each subspace [24]. To keep model complexity
+manageable, each subspace will be assigned a small number of bits, often not exceeding b = 8
+corresponding to at most 256 codewords.
+
+3.2 Block K-means Hashing
+
+In KMH, b bits are used to represent k = 2b codewords. However, this representation can be very
+restrictive as the number of distinct Hamming distances between any two b-bit strings is only b + 1.
+To make Eaff small, KMH will need to force the codewords to respect the simple geometry of their
+binary representations, resulting in a large Equan. Therefore, we propose to use more than b bits to
+represent k codewords.
+In B-KMH, we represent each of the k codewords with β > log2 k bits. The goal of B-KMH is to
+search for the optimal set of k representations among the 2β binary strings B = {0, 1}β to minimize
+Eaff. Moreover, the codebook {ci} is learned by minimising Equan, which is solved by the K-means
+algorithm, and stays unchanged during the training. Therefore, the differences between KMH and
+B-KMH are: (1) binary representations are ﬁxed in KMH, while they are learned in B-KMH; (2)
+codewords are learned in KMH, while they are ﬁxed by the K-means algorithm in B-KMH; (3) the
+objective function of KMH is E = Equan + λEaff, while B-KMH uses only Eaff.
+
+6
+
+[1 1]
+
+[1 0]
+
+[0 0]
+
+[0 1]
+
+[1 0]
+
+[1 1]
+
+[0 0]
+
+[0 1]
+
+[0 1 0 0]
+
+[1 0 1 0]
+
+[1 0 0 0]
+
+[0 0 0 1]
+
+E
+
+quan
+
+=1.5666
+
+E
+
+quan
+
+=2.1654
+
+E
+
+quan
+
+=1.5666
+
+E
+
+aff
+
+   =7.0921
+
+E
+
+aff
+
+ =3.7731
+
+E
+
+aff
+
+ =0.7328
+
+(a) Naive Two-Step
+
+(b) KMH.
+
+(c) B-KMH.
+
+Figure 4: Illustration of the proposed B-KMH (best viewed in color). B-KMH achieves both the smallest
+quantization error and afﬁnity error.
+
+i=1 = arg min Equan by K-means.
+
+Algorithm 1 Block K-means hashing (B-KMH)
+Input: Training dataset X ∈ Rn×d, number of codewords k, and all β-bit strings B = {0, 1}β
+1: Learn {ci}k
+2: Randomly choose k different β-bit strings {Ii}k
+3: Obtain s = arg min Eaff by solving a quadratic function.
+4: while termination conditions are not met do
+5:
+6:
+end for
+7:
+8: end while
+Output: {ci} and {Ii}
+
+Ii = arg minIi∈B Eaff
+
+i=1 from B to represent {ci}k
+
+i=1.
+
+for i=1:k do
+
+Exhaustively search all possible combinations of k representations from 2β candidates is feasible
+only for very small k and β. Therefore, B-KMH relies on a greedy search strategy. It randomly
+choose k elements from B to form an initial set of representations {Ii}, and initialize s by mini-
+mizing Eaff with respect to s. We ﬁx s after initialization. Next, we update each Ij by exhaustively
+searching B to minimize Eaff while Ii, i 6= j being ﬁxed. The sequential updates will terminate when
+there is no change in {Ii} or the number of iterations exceeds a predeﬁned threshold. Moreover, we
+could run B-KMH multiple times with different initializations, and choose the one generates the
+smallest Eaff. A summary of the proposed B-KMH method is presented in Algorithm 1.
+In KMH [24], He et al have also considered a similar strategy that is to use K-means to learn
+codewords and then assign binary representations to each codeword. However, they only considered
+using b = log2 k bits to represent the codewords, and called this strategy a “naive two-step” method.
+Even with exhaustive assignment, their “naive two-step” method performs much worse than KMH
+(Fig. 4 in [24]). We also observe similar behavior in our experiments when setting β = log2 k.
+However, as β exceeds log2 k, B-KMH outperforms KMH signiﬁcantly (refer to Fig. 6a).
+In Fig. 4, we illustrate the differences among the naive two-step, KMH, and B-KMH on a synthetic
+dataset. Data points are generated by a Gaussian mixture model, and then projected onto the PCA
+projection directions (KMH uses PCA for initialization.). In Fig. 4a, K-means learned codewords
+lead to a small quantization error, but ﬁtting b = 2 bits into k = 4 codewords is challenging
+which leads to a large afﬁnity error. For example, the Euclidean distance between codewords of
+yellow (top right cell) and cyan (middle cell) is much smaller than that of yellow and magenta
+(bottom cell), but their Hamming distances are the other way around.
+In Fig. 4b, KMH learns
+codewords to respect the geometry of their binary representations, which forms a square in a 2-bit
+representation. KMH reduces the afﬁnity error but incurs a larger quantization error. If the weight
+λ = ∞, the codewords will coincide with their binary representations, resulting in zero afﬁnity error
+but very large quantization error. On the other hand, B-KMH is able to maintain the small K-means
+quantization error while reducing the afﬁnity error signiﬁcantly, as demonstrated in Fig. 4c.
+
+Note that the (β − b) redundant bits can be removed by VLH, so B-KMH incur no extra storage cost.
+The additional decoding and Hamming distance with longer codes only apply to the candidate set
+
+7
+
+which is normally much smaller than the database size. As shown in Fig. 3a, this increase in search
+complexity is only marginal in real-time search applications.
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+N
+@
+
+l
+l
+a
+c
+e
+R
+
+ 
+
+1
+
+ 
+
+0.8
+
+N
+@
+
+l
+l
+a
+c
+e
+R
+
+0.6
+
+0.4
+
+0.2
+
+B−KMH
+KMH
+ITQ
+IsoHash
+LSH
+
+B−KMH
+KMH
+ITQ
+IsoHash
+LSH
+
+0
+ 
+0
+Number of top Hamming neighbors, N
+
+200
+
+400
+
+600
+
+800
+
+1000
+
+0
+ 
+0
+Number of top Hamming neighbors, N
+
+200
+
+400
+
+600
+
+800
+
+1000
+
+(a) SIFT1M 64-bit.
+
+(b) SIFT1M 128-bit.
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+N
+@
+
+l
+l
+
+a
+c
+e
+R
+
+ 
+
+1
+
+N
+@
+
+l
+l
+
+a
+c
+e
+R
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+ 
+
+B−KMH
+KMH
+ITQ
+IsoHash
+LSH
+
+0
+ 
+0
+Number of top Hamming neighbors, N
+
+200
+
+400
+
+600
+
+800
+
+1000
+
+B−KMH
+KMH
+ITQ
+IsoHash
+LSH
+
+0
+ 
+0
+Number of top Hamming neighbors, N
+
+200
+
+400
+
+600
+
+800
+
+1000
+
+(c) GIST1M 64-bit.
+
+(d) GIST1M 128-bit.
+
+Figure 5: Retrieval Performance on SIFT1M and GIST1M. b = 4 and β = 8 are used by KMH and B-KMH
+respectively for both 64-bit and 128-bit cases. We set K = 10 here.
+
+4 Experiments
+
+We evaluate the ANN search performance on the SIFT1M and GIST1M datasets [26]. Both datasets
+contain one million base points, and 10,000 and 1,000 queries respectively. We consider the ground
+truth as each query’s K Euclidean nearest neighbors. We consider K = 1, 10, and 100 in our
+experiments.
+
+We follow the search strategy of Hamming ranking commonly adopted in KMH and many hashing
+methods, where we sort the data according to their Hamming distances to the query. We evaluate the
+recall@N , where N is the number of top Hamming neighbors. The recall is deﬁned as the fraction
+of retrieved true nearest neighbors to the total number of true nearest neighbors K.
+We compare the proposed B-KMH with KMH [24], and some well-known hashing methods includ-
+ing iterative quantization (ITQ) [10], isotropic hashing (IsoHash) [15], and locality sensitive hashing
+(LSH) [28]. All methods have publicly available codes and we use their default settings except KMH
+where we present the best test performance among multiple candidate values of λ.
+
+8
+
+In the SIFT1M experiments shown in Fig. 5a and 5b, B-KMH outperforms KMH consistently in
+both 64-bit and 128-bit settings, which in turn outperforms other hashing algorithms also by a large
+margin. In particular, B-KMH improves the recall@1000 from 0.90 to 0.97.
+
+In the GIST1M experiments shown in Fig. 5c and 5d, B-KMH signiﬁcantly outperforms all other
+competing methods. For the 128-bit codes, B-KMH achieves perfect recall at N = 800. Moreover,
+KMH performs much worse in the GIST1M dataset, presumably because adjusting codewords to
+respect the geometry of their binary representations causes Equan to be large.
+Results in Fig. 5 are generated using b = 4. Therefore both KMH and B-KMH learn k = 16
+codewords in each subspace (16 subspaces for the 64-bit and 32 subspaces for 128-bit), but B-KMH
+uses β = 8 bits to represent each codeword in computing the Hamming distance. The actual storage
+of the hash codes incur no addition cost because redundancy is removed by VLH. Therefore, the
+signiﬁcant increase in performance is obtained with no increase in storage and marginal increase in
+computational cost.
+
+In Fig. 6a, we evaluate performance at various values of β. When β = b, B-KMH is similar to the
+naive two-step method, and the performance is worse than KMH. As we use more bits to represent
+codewords, B-KMH outperforms KMH, and we can observe an increased performance improvement
+with larger β. Though larger β increases training and search complexity, the actual storage costs are
+the same for B-KMH and KMH. Figure 6b compares recall performances at different ground truth
+nearest neighbor thresholds. It is clear B-KMH is superior across different K.
+
+1
+
+0.8
+
+N
+@
+
+l
+l
+
+a
+c
+e
+R
+
+0.6
+
+0.4
+
+0.2
+
+0
+ 
+0
+
+SIFT1M 64−bit
+
+ 
+
+B−KMH, β=4b
+B−KMH, β=2b
+B−KMH, β=b
+KMH
+
+200
+
+400
+
+600
+
+800
+
+1000
+
+Number of top Hamming neighbors, N
+
+N
+@
+
+l
+l
+
+a
+c
+e
+R
+
+1
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0
+ 
+0
+
+SIFT1M 64−bit
+
+ 
+
+K = 1
+
+K = 10
+
+K = 100
+
+B−KMH
+KMH
+
+200
+
+400
+
+600
+
+800
+
+1000
+
+Number of top Hamming neighbors, N
+
+(a) Performance at different values of β with K =
+10.
+
+(b) Performance at different values of K with β =
+2b.
+
+Figure 6: Retrieval performance with different values of β and K. Here b = 4.
+
+5 Conclusion
+
+We have proposed a variable-length hashing (VLH) method which enables redundancy in hashing
+to be exploited in two ways. First, the hash can be compressed losslessly to reduce storage cost
+while incurring a marginal increase in search complexity. Second, redundancy can be deliberately
+introduced in the hash function design to improve retrieval performance without increasing storage
+cost. We have demonstrated the latter feature using K-means hashing, and believe that this strategy
+can be applied to other hash codes.
+
+9
+
+References
+
+[1] Y. Weiss, A. Torralba, and R. Fergus, “Spectral hashing,” in NIPS, 2008.
+[2] P. Indyk and R. Motwani, “Approximate nearest neighbors: Towards removing the curse of
+
+dimensionality,” in ACM STOC, 1998.
+
+[3] G. Shakhnarovich, P. Viola, and T. Darrell, “Fast pose estimation with parameter sensitive
+
+hashing,” in In ICCV, 2003.
+
+[4] M. Raginsky and S. Lazebnik, “Locality-sensitive binary codes from shift-invariant kernels,”
+
+in NIPS, 2009.
+
+[5] J. Wang, S. Kumar, and S.-F. Chang, “Semi-supervised hashing for scalable image retrieval,”
+
+in CVPR, 2010.
+
+[6] X. Liu, J. He, D. Liu, and B. Lang, “Compact kernel hashing with multiple features,” in ACM
+
+MM, 2012.
+
+[7] X. Liu, J. He, B. Lang, and S.-F. Chang, “Hash bit selection: A uniﬁed solution for selection
+
+problems in hashing,” in CVPR, 2013.
+
+[8] H. Yu and P. Moulin, “SNR maximization hashing for learning compact binary codes,” in
+
+ICASSP, 2015.
+
+[9] J. Wang, S. Kumar, and S.-F. Chang, “Sequential projection learning for hashing with compact
+
+codes,” in ICML, 2010.
+
+[10] Y. Gong and S. Lazebnik, “Iterative quantization: A procrustean approach to learning binary
+
+codes,” in CVPR, 2011.
+
+[11] W. Liu, C. Mu, S. Kumar, and S.-F. Chang, “Discrete graph hashing,” in NIPS, 2014.
+[12] H. Yu and P. Moulin, “SNR maximization hashing,” IEEE TIFS, 2015.
+[13] G. Shakhnarovich, “Learning task-speciﬁcsimilarity,” PhD dissertation, MIT, 2005.
+[14] R.-S. Lin, D. A. Ross, and J. Yagnik, “SPEC hashing: Similarity preserving algorithm for
+
+entropy-based coding,” in CVPR, 2010.
+
+[15] W. Kong and W.-J. Li, “Isotropic hashing,” in NIPS, 2012.
+[16] W. Liu, J. Wang, and S. fu Chang, “Hashing with graphs,” in In ICML, 2011.
+[17] B. Kulis and T. Darrell, “Learning to hash with binary reconstructive embeddings,” in NIPS,
+
+2009.
+
+[18] Y. Weiss, R. Fergus, and A. Torralba, “Multidimensional spectral hashing,” in ECCV, 2012.
+[19] M. Norouzi, D. J. Fleet, and R. Salakhutdinov, “Hamming distance metric learning,” in NIPS,
+
+2012.
+
+[20] T. M. Cover and J. A. Thomas, Elements of Information Theory, 2nd Edition. Wiley-
+
+Interscience, 2006.
+
+[21] M. Norouzi, A. Punjani, and D. J. Fleet, “Fast search in Hamming space with multi-index
+
+hashing,” in CVPR, 2012.
+
+[22] M. Aharon, M. Elad, and A. Bruckstein, “K-SVD: An algorithm for designing overcomplete
+
+dictionaries for sparse representation,” IEEE TSP, 2006.
+
+[23] J. Haitsma and T. Kalker, “A highly robust audio ﬁngerprinting system,” in ISMIR, 2002.
+[24] K. He, F. Wen, and J. Sun, “K-means hashing: An afﬁnity-preserving quantization method for
+
+learning binary compact codes,” in CVPR, 2013.
+
+[25] M. Sabin and R. Gray, “Product code vector quantizers for waveform and voice coding,” IEEE
+
+TASSP, 1984.
+
+[26] H. J´egou, M. Douze, and C. Schmid, “Product quantization for nearest neighbor search,” IEEE
+
+TPAMI, 2011.
+
+[27] D. G. Lowe, “Distinctive image features from scale-invariant keypoints,” IJCV, 2004.
+[28] A. Andoni and P. Indyk, “Near-optimal hashing algorithms for approximate nearest neighbor
+
+in high dimensions,” Commun. ACM, 2008.
+
+10
+
+

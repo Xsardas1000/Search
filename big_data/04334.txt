@@ -1,0 +1,3035 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+4
+1
+
+ 
+ 
+]
+h
+p
+-
+p
+m
+o
+c
+.
+s
+c
+i
+s
+y
+h
+p
+[
+ 
+ 
+
+1
+v
+4
+3
+3
+4
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+SPARC: Accurate and efﬁcient ﬁnite-difference formulation and parallel
+implementation of Density Functional Theory. Part I: Isolated clusters
+
+Swarnava Ghosha, Phanish Suryanarayana∗,a
+
+aCollege of Engineering, Georgia Institute of Technology, GA 30332, USA
+
+Abstract
+
+As the ﬁrst component of SPARC (Simulation Package for Ab-initio Real-space Calculations), we present
+an accurate and efﬁcient ﬁnite-difference formulation and parallel implementation of Density Functional
+Theory (DFT) for isolated clusters. Speciﬁcally, utilizing a local reformulation of the electrostatics, the
+Chebyshev polynomial ﬁltered self-consistent ﬁeld iteration, and a reformulation of the non-local compo-
+nent of the force, we develop a framework using the ﬁnite-difference representation that enables the efﬁ-
+cient evaluation of energies and atomic forces to within chemical accuracies. Through selected examples
+consisting of a variety of elements, we demonstrate that SPARC obtains exponential convergence in energy
+and forces with domain size; systematic convergence in the energy and forces with mesh-size to reference
+plane-wave result at comparably high rates; forces that are consistent with the energy, both free from any
+noticeable ‘egg-box’ effect; and accurate ground-state properties including equilibrium geometries and vi-
+brational spectra. In addition, for systems consisting up to thousands of electrons, SPARC displays weak
+and strong parallel scaling behavior that is similar to well-established and optimized plane-wave implemen-
+tations, but with a signiﬁcantly reduced prefactor. Overall, SPARC represents an attractive alternative to
+plane-wave codes for practical DFT simulations of isolated clusters.
+
+Key words: Electronic structure, Real-space, Finite-differences, Electrostatics, Atomic forces, Parallel
+computing
+
+1. Introduction
+
+Over the past few decades, the Density Functional Theory (DFT) developed by Hohenberg, Kohn, and
+Sham [1, 2] has been extensively used for understanding and predicting a wide array of materials properties
+[3, 4, 5, 6]. The tremendous popularity of DFT—free from any empirical parameters by virtue of its origins
+in the ﬁrst principles of quantum mechanics—stems from its high accuracy to cost ratio when compared
+to other such ab-initio theories [7, 8]. However, the efﬁcient solution of the DFT problem still remains a
+formidable task. In particular, the orthogonality constraint on the Kohn-Sham orbitals in combination with
+the substantial number of basis functions required per atom results in a cubic scaling with respect to the
+number of atoms [9, 10] that is accompanied by a large prefactor. Furthermore, the need for orthogonality
+gives rise to substantial amount of global communication in parallel computations, which hinders parallel
+scalability. Consequently, the size of physical systems accessible to DFT has been severely restricted, par-
+ticularly in the context of ab initio molecular dynamics [11, 12], wherein one complete simulation regularly
+requires the solution of the Kohn-Sham equations tens to hundreds of thousands of times.
+
+∗Corresponding Author (phanish.suryanarayana@ce.gatech.edu)
+
+Preprint submitted to arXiv
+
+March 15, 2016
+
+A vast majority of the DFT codes in widespread use today employ plane-waves for discretizing the
+Kohn-Sham equations [13, 14, 15, 16, 17, 18, 19]. The plane-wave basis is an attractive choice because it
+forms a complete and orthonormal set that is independent of the atomic positions, provides spectral con-
+vergence with respect to basis size, and enables the efﬁcient evaluation of convolutions through the Fast
+Fourier Transform (FFT) [20, 21]. In addition, effective preconditioners are readily available due to the di-
+agonal representation of the Laplacian operator in this setting [22, 23]. However, the plane-wave basis also
+suffers from a few notable disadvantages. Speciﬁcally, the need for periodic boundary conditions limits its
+effectiveness in the study of non-periodic and localized systems such as clusters and defects, which require
+the introduction of artiﬁcial supercell periodicity [24, 25, 26]. Furthermore, the non-locality of plane-waves
+makes them unsuitable for the development of approaches that scale linearly with respect to the number of
+atoms [27, 28], and makes parallelization over modern large-scale, distributed-memory computer architec-
+tures particularly challenging [29, 30]. These characteristics of plane-wave methods are also inherited by
+the recently developed spectral scheme for isolated clusters [31], which is the analogue of plane-waves in
+the spherical setting.
+
+In view of the aforementined limitations, a number of recents efforts have been directed towards the
+development of real-space DFT implementations. These include discretizations based on ﬁnite-differences
+[32, 33, 34, 35, 36], ﬁnite-elements [37, 38, 39, 40, 41, 42], wavelets [43, 44, 45], periodic sinc functions
+[46], basis splines (B-splines) [47], non-uniform rational B-splines (NURBS) [48], and mesh-free max-
+imum entropy basis functions [49]. However, despite the success of real-space methods in overcoming
+many of the aforementioned limitations—particularly in the development of techniques that scale linearly
+with respect to the number of atoms [46, 47]—plane-wave approaches still remain the preferred choice for
+practical DFT computations. This is mainly because real-space implementations are unable to consistently
+outperform the well-optimized plane-wave codes on the modest computational resources commonly avail-
+able to researchers, while simultaneously achieving the chemical accuracy desired in electronic structure
+calculations. Furthermore, the functionality provided by plane-wave codes is signiﬁcantly larger than their
+real-space counterparts, having been under development for a longer period of time.
+
+The ﬁnite-difference method is an attractive choice for performing real-space DFT calculations due a
+number of reasons, including the following. First, the ﬁnite-difference discretization results in a standard
+eigenvalue problem, which can typically be solved more efﬁciently compared to generalized eigenvalue
+problems resulting from the use of non-orthogonal bases. Second, the eigenproblem has a relatively small
+spectral width (i.e., difference between the maximum and minimum eigenvalues), which is critical to the
+performance of eigensolvers, particularly since effective real-space preconditioners are presently lacking.
+Third, it is straightforward to employ and switch between high-order approximations, a critical feature for
+performing efﬁcient and accurate ab-initio calculations. Finally, ﬁnite-differences are extremely simple to
+implement, thereby enabling the rapid prototyping of new solution strategies. However, the ﬁnite-difference
+method does suffer from a few limitations. The lack of a underlying basis and associated variational structure
+can result in non-monotonic convergence of the energies and atomic forces. Furthermore, the reduced
+accuracy of spatial integrations due to the use of a lower order integration scheme can lead to a pronounced
+‘egg-box’ effect [50, 51]—phenomenon arising due to the breaking of the translational symmetry—which
+can signiﬁcantly affect the accuracy of structural relaxations and molecular dynamics simulations.
+
+In this work, we present an accurate and efﬁcient ﬁnite-difference formulation and parallel implementa-
+tion of DFT for isolated clusters, which forms the ﬁrst component of SPARC (Simulation Package for Ab-
+initio Real-space Calculations). The approach employed includes a local reformulation of the electrostatics,
+the Chebyshev polynomial ﬁltered self-consistent ﬁeld iteration, and a reformulation of the non-local com-
+ponent of the atomic force, which allows for the efﬁcient evaluation of accurate energies and atomic forces
+
+2
+
+within the ﬁnite-difference representation. Through a wide variety of examples, we demonstrate that SPARC
+obtains exponential convergence in energies and forces with domain size; high rates of convergence in the
+energy and forces to reference plane-wave results on reﬁning the discretization; forces that are consistent
+with the energy, both being free from any noticeable ‘egg-box’ effect; and accurate ground-state properties
+(e.g. equilibrium geometries and vibrational spectra). Moreover, SPARC displays similar weak and strong
+scaling as well-established and optimized plane-wave codes, but with a signiﬁcantly smaller prefactor.
+
+The remainder of this paper is organized as follows. In Section 2, we provide the mathematical back-
+ground for DFT. In Section 3, we describe the ﬁnite-difference formulation and parallel implementation of
+DFT for isolated clusters in SPARC. Next, we verify the accuracy and efﬁciency of SPARC through selected
+examples in Section 4. Finally, we provide concluding remarks in Section 5.
+
+2. Density Functional Theory (DFT)
+
+Consider an isolated system of N atoms comprising of nuclei with valence charges {Z1, Z2, . . . , ZN }
+and a total of Ne valence electrons. Neglecting spin, the system’s free energy in Density Functional Theory
+(DFT) [1, 2] is of the form
+
+F(Ψ, g, R) = Ts(Ψ, g) + Exc(ρ) + K(Ψ, g, R) + Eel(ρ, R) − T S(g) ,
+
+(1)
+
+where Ψ = {ψ1, ψ2, . . . , ψNs} is the collection of orbitals with occupations g = {g1, g2, . . . , gNs}, R =
+{R1, R2, . . . , RN } is the position of the nuclei, ρ is the electron density, and T is the electronic temperature.
+The electron density itself depends on the orbitals and their occupations through the relation
+
+ρ(x) = 2
+
+gnψ2
+
+n(x) .
+
+Ns
+
+Xn=1
+
+(2)
+
+The ﬁrst term in Eqn. 1 denotes the kinetic energy of the non-interacting electrons, the second term cor-
+responds to the exchange-correlation energy, the third term signiﬁes the non-local pseudopotential energy,
+the fourth term represents the electrostatic energy, and the ﬁnal term accounts for the contribution of the
+electronic entropy to the free energy.
+
+Electronic kinetic energy. In Kohn-Sham DFT, the electronic kinetic energy can be written in terms of the
+orbitals and their occupations as
+
+Ts(Ψ, g) = −
+
+Ns
+
+Xn=1
+
+gnZR3
+
+ψn(x)∇2ψn(x) dx .
+
+(3)
+
+Exchange-correlation energy. Since the exact form of the exchange-correlation energy is unknown, a num-
+ber of approximations have been developed, the most popular ones being the Local Density Approximation
+(LDA) [2] and the Generalized Gradient Approximation (GGA) [52]. In this work, we employ the LDA:
+
+Exc(ρ) =ZR3
+
+εxc(ρ(x))ρ(x) dx ,
+
+(4)
+
+where εxc(ρ) = εx(ρ) + εc(ρ) is the sum of the exchange and correlation per particle of a uniform electron
+gas.
+
+3
+
+Non-local pseudopotential energy. The non-local pseudopotential energy can be written as
+
+K(Ψ, g, R) = 2
+
+gn
+
+Ns
+
+Xn=1
+
+N
+
+XJ=1Xlm
+
+γJl(cid:18)ZR3
+
+χJlm(x, RJ )ψn(x)dx(cid:19)2
+
+,
+
+(5)
+
+where we have employed the Kleinman-Bylander [53] separable form for the pseudopotential. The coefﬁ-
+cients γJl and projection functions χJlm are of the form
+
+, χJlm(x, RJ ) = uJlm(x, RJ ) (VJl(x, RJ ) − VJ (x, RJ )) ,
+
+γJl =(cid:18)ZR3
+
+χJlm(x, RJ )uJlm(x, RJ ) dx(cid:19)−1
+
+(6)
+where uJlm denote the isolated atom pseudowavefunctions and VJl represent the angular momentum depen-
+dent pseudopotentials, with l and m signifying the azimuthal and magnetic quantum numbers, respectively.
+In addition, VJ designate the local components of the pseudopotentials, and are typically set to be one of the
+angular momentum dependent components.
+
+Electrostatic energy. The electrostatic energy can be further decomposed as
+
+Eel(ρ, R) =
+
+1
+
+2ZR3ZR3
+
+ρ(x)ρ(x′)
+|x − x′|
+
+dx dx′ +
+
+N
+
+XJ=1ZR3
+
+ρ(x)VJ (x, RJ ) dx +
+
+1
+2
+
+N
+
+N
+
+XI=1
+
+XJ=1
+
+J 6=I
+
+ZI ZJ
+
+|RI − RJ |
+
+,
+
+(7)
+
+where the ﬁrst term is the classical interaction energy of the electron density, also referred to as the Hartree
+energy. The second term is the interaction energy between the electron density and the nuclei, and the third
+term is the repulsion energy between the nuclei.
+
+Electronic entropy. The electronic entropy accounts for the partial orbital occupations, for which we choose
+the dependence that is appropriate for Fermions:
+
+S(g) = −2kB
+
+Ns
+
+Xn=1
+
+(gn log gn + (1 − gn) log(1 − gn)) ,
+
+where kB is the Boltzmann constant.
+
+Ground state. The overall ground state in DFT is governed by the variational problem
+
+F0 = inf
+R
+
+F ∗(R) ,
+
+where
+
+F ∗(R) = inf
+Ψ,g
+
+F(Ψ, g, R)
+
+s.t.
+
+ZR3
+
+ψi(x)ψj (x) dx = δij ,
+
+2
+
+Ns
+
+Xn=1
+
+In this staggered scheme, the electronic ground-state as described by the above equation needs to be com-
+puted for every conﬁguration of the nuclei encountered during the geometry optimization represented by
+Eqn. 9.
+
+(8)
+
+(9)
+
+gn = Ne .
+
+(10)
+
+4
+
+3. Formulation and implementation
+
+In this section, we describe the real-space formulation and parallel ﬁnite-difference implementation
+of Density Functional Theory (DFT) for isolated clusters. This represents the ﬁrst component of the ﬁrst
+principles code referred to as SPARC, an acronym representing Simulation Package for Ab-initio Real-space
+Calculations.
+
+Electrostatic reformulation. The electrostatic energy as presented in Eqn. 7 is inherently non-local, whereby
+a direct real-space implementation scales as O(N 2) with respect to the number of atoms. Moreover, it is
+inefﬁcient in the context of parallel computing since a large amount of interprocessor communication is
+required. We overcome this by adopting a local formulation of the electrostatics [54, 55]:
+
+Eel(ρ, R) = sup
+
+φ (cid:26) −
+
+1
+
+8π ZR3
+
+|∇φ(x, R)|2 dx +ZR3
+
+(ρ(x) + b(x, R))φ(x, R) dx(cid:27) − Eself (R) + Ec(R) ,
+
+(11)
+where φ is referred to as the electrostatic potential, and b is the total pseudocharge density of the nuclei.
+Speciﬁcally,
+
+b(x, R) =
+
+N
+
+XJ=1
+
+bJ (x, RJ ) ,
+
+bJ (x, RJ ) = −
+
+1
+4π
+
+∇2VJ (x, RJ ) ,
+
+ZR3
+
+bJ (x, RJ ) dx = ZJ ,
+
+(12)
+
+where bJ denotes the pseudocharge density of the J th nucleus that generates the potential VJ. The second
+to last term in Eqn. 11 represents the self energy associated with the pseudocharge densities:
+
+Eself (R) =
+
+1
+2
+
+N
+
+XJ=1ZR3
+
+bJ (x, RJ )VJ (x, RJ ) dx .
+
+(13)
+
+The last term—identically zero for non-overlapping pseudocharge densities—corrects for the error in the
+repulsive energy when the pseudocharge densities overlap. The explicit expression for Ec can be found in
+Appendix A.
+
+Electronic ground-state. The electronic ground-state for a given position of nuclei is determined by the
+variational problem in Eqn. 10. The corresponding Euler-Lagrange equations are of the form
+
+∇2 + Vxc + φ + Vnl(cid:19) ψn = λnψn , n = 1, 2, . . . , Ns ,
+
+Ns
+
+1
+2
+
+(cid:18)H ≡ −
+gn =(cid:18)1 + exp(cid:18) λn − λf
+
+kBT (cid:19)(cid:19)−1
+
+ρ(x) = 2
+
+gnψ2
+
+n(x) , −
+
+1
+4π
+
+Ns
+
+Xn=1
+
+, where λf is s.t. 2
+
+Xn=1
+
+gn = Ne ,
+
+(14)
+
+∇2φ(x, R) = ρ(x) + b(x, R) ,
+
+where H is the Hamiltonian operator, Vxc = δExc/δρ is the exchange-correlation potential,
+
+Vnl =
+
+N
+
+XJ=1
+
+Vnl,J =
+
+N
+
+XJ=1Xlm
+
+5
+
+γJl |χJlmi hχJlm|
+
+(15)
+
+is the non-local pseudopotential operator, and λf is the Fermi energy.
+
+The electronic ground-state is determined using the Self-Consistent Field (SCF) method [56]. Specif-
+ically, the non-linear eigenvalue problem described in Eqn. 14 is solved using a ﬁxed-point iteration—
+accelerated using mixing/extrapolation schemes [57, 58, 59, 60]—with respect to the potential Vef f =
+Vxc + φ. In each iteration of the SCF method, the electron density is calculated by solving for the eigenfunc-
+tions of the linearized Hamiltonian, and the effective potential is evaluated by solving the Poisson equation
+for the electrostatic potential. Indeed, the calculation of the orthonormal Kohn-Sham orbitals scales asymp-
+totically as O(N 3) with respect to the number of atoms. In order to overcome this restrictive scaling, O(N )
+approaches [27, 28] will be subsequently developed and implemented into SPARC.
+
+Free energy. The free energy is evaluated using the Harris-Foulkes [61, 62] type functional :
+
+F ∗(R) = 2
+
+Ns
+
+Xn=1
+
+gnλn +ZR3
+
+εxc(ρ(x))ρ(x) dx −ZR3
+
+Vxc(ρ(x))ρ(x) dx +
+
+1
+
+2ZR3
+
+(b(x, R) − ρ(x))φ(x, R) dx
+
+− Eself (R) + Ec(R) + 2kBT
+
+(gn log gn + (1 − gn) log(1 − gn)) ,
+
+(16)
+
+Ns
+
+Xn=1
+
+where Eself and Ec are as deﬁned in Eqns. 13 and 45, respectively.
+
+Atomic forces. Once the electronic ground-state has been determined, the atomic forces are calculated using
+the following expression:
+
+fJ = −
+
+∂F ∗(R)
+
+∂RJ
+
+= ZR3
+
+−4
+
+∇bJ (x, RJ ) (φ(x, R) − VJ (x, RJ )) dx + fJ,c(R)
+
+(17)
+
+Ns
+
+Xn=1
+
+gnXlm
+
+γJl(cid:18)ZR3
+
+ψn(x)χJlm(x, RJ ) dx(cid:19)(cid:18)ZR3
+
+∇ψn(x)χJlm(x, RJ ) dx(cid:19) .
+
+The ﬁrst term is the local component of the force [26], and the second term—expression presented in Ap-
+pendix A—represents the electrostatic correction in the forces when the pseudocharge densities overlap
+[55]. The ﬁnal term, which represents the non-local component of the atomic force, has been obtained by
+transferring the derivative on the non-local projectors (with respect to the atomic position) to the orbitals
+(with respect to space) [63]. This strategy has been adopted since the orbitals are typically much smoother
+than the projectors, which enables more accurate atomic forces to be obtained [64].
+
+Overview of SPARC. SPARC has been implemented in the framework of the Portable, Extensible Toolkit for
+scientiﬁc computations (PETSc) [65, 66] suite of data structures and routines. The electronic and structural
+ground-states for isolated clusters are determined using the methodology outlined in Fig. 1, whose key
+components are discussed in detail in the subsections below.
+
+6
+
+Electrostatic
+
+force correction
+
+Conﬁguration
+
+of nuclei
+
+Geometry Optimization
+
+Pseudocharge
+
+density of nuclei
+
+Electron den-
+
+sity guess
+
+Non-local pseu-
+
+dopotential
+
+Self Consistent Field (SCF)
+
+Linearized
+Hamiltonian
+
+Potential mixing
+
+Exchange-
+
+correlation potential
+
+Orbitals
+
+Electron density
+
+Electrostatic potential
+
+Atomic forces
+
+Properties
+
+e.g. Free energy
+
+Figure 1: Outline of ground-state DFT simulations in SPARC.
+
+3.1. Finite-difference discretization
+
+The simulations are performed on a cuboidal domain Ω with boundary ∂Ω and sides of length L1, L2 and
+L3. The domain Ω is discretized using a uniform ﬁnite-difference grid with spacing h such that L1 = n1h,
+L2 = n2h and L3 = n3h, where n1, n2, n3 ∈ N, N being the set of all natural numbers. Each node in the
+ﬁnite-difference grid is indexed by (i, j, k), where i = 1, 2, . . . , n1, j = 1, 2, . . . , n2 and k = 1, 2, . . . , n3.
+We approximate the Laplacian of any function f at the grid point (i, j, k) using ﬁnite-differences:
+
+no
+
+Xp=0
+
+wp(cid:18)f (i+p,j,k) + f (i−p,j,k) + f (i,j+p,k) + f (i,j−p,k) + f (i,j,k+p) + f (i,j,k−p)(cid:19) ,
+
+(18)
+
+where f (i,j,k) represents the value of the function f at the node (i, j, k). The weights wp are given by [67, 68]
+
+∇2
+
+(i,j,k) ≈
+
+hf(cid:12)(cid:12)
+
+w0 = −
+
+1
+h2
+
+1
+q2 ,
+
+no
+
+Xq=1
+
+wp =
+
+2(−1)p+1
+
+(no!)2
+
+h2p2
+
+(no − p)!(no + p)!
+
+, p = 1, 2, . . . , no.
+
+(19)
+
+Similarly, we approximate the gradient using the ﬁnite-difference approximation:
+
+(i,j,k) ≈
+
+∇hf(cid:12)(cid:12)
+
+no
+
+Xp=1
+
+˜wp(cid:18)(f (i+p,j,k) − f (i−p,j,k))ˆe1 + (f (i,j+p,k) − f (i,j−p,k))ˆe2 + (f (i,j,k+p) − f (i,j,k−p))ˆe3(cid:19) , (20)
+
+7
+
+where ˆe1, ˆe2 and ˆe3 signify unit vectors along the edges of Ω, and the weights [67, 68]
+
+˜wp =
+
+(−1)p+1
+
+(no!)2
+
+hp
+
+(no − p)!(no + p)!
+
+, p = 1, 2, . . . , no.
+
+(21)
+
+These ﬁnite-difference expressions for the Laplacian and gradient represent O(h2no ) accurate approxima-
+tions. We enforce zero Dirichlet boundary conditions by setting f (i,j,k) = 0 for any index that does not
+correspond to a node in the ﬁnite-difference grid. While performing spatial integrations, we assume that the
+function f is constant in a cube of side h around each grid point, i.e.,
+
+f (x) dx ≈ h3
+
+ZΩ
+
+n1
+
+n2
+
+n3
+
+Xi=1
+
+Xj=1
+
+Xk=1
+
+f (i,j,k).
+
+Using this integration rule, we approximate the non-local pseudopotential operator as
+
+(22)
+
+(23)
+
+(i,j,k) =
+
+(i,j,k) ≈ h3
+
+Vnlf(cid:12)(cid:12)
+
+N
+
+XJ=1
+
+Vnl,J f(cid:12)(cid:12)
+
+N
+
+n1
+
+n2
+
+n3
+
+XJ=1Xlm
+
+Xp=1
+
+Xq=1
+
+Xr=1
+
+γJlχ(i,j,k)
+
+Jlm χ(p,q,r)
+
+Jlm f (p,q,r) .
+
+Henceforth, we denote the Hamiltonian matrix resulting from the above discretization by H ∈ RNd×Nd,
+where Nd = n1 × n2 × n3 is the total number of ﬁnite-difference nodes used to discretize Ω. In addition,
+we represent the eigenvalues of H arranged in ascending order by λ1, λ2, . . . , λNd. We store H and other
+sparse matrices in compressed row format, and store the discrete orbitals as the columns of the dense matrix
+
+Ψ ∈ RNd×Ns. During parallel computations, we partition the domain as Ω =
+
+Ωp, where Ωp denotes
+
+the domain local to the pth processor, and np is the total number of processors. The speciﬁc choice of Ωp
+corresponds to the PETSc default for structured grids.
+
+np
+
+Sp=1
+
+3.2. Pseudocharge density generation and self energy calculation
+
+In each step of geometry optimization, the pseudocharge densities are assigned to the grid using the
+
+ﬁnite-difference approximated Laplacian [26, 55]:
+
+b(i,j,k) =
+
+N
+
+XJ=1
+
+b(i,j,k)
+J
+
+,
+
+b(i,j,k)
+J
+
+= −
+
+1
+4π
+
+The associated discrete self energy is of the form
+
+(i,j,k) .
+
+∇2
+
+hVJ(cid:12)(cid:12)
+
+Eh
+
+self =
+
+h3
+
+1
+2
+
+N
+
+n1
+
+n2
+
+n3
+
+XJ=1
+
+Xi=1
+
+Xj=1
+
+Xk=1
+
+b(i,j,k)
+J
+
+V (i,j,k)
+J
+
+.
+
+(24)
+
+(25)
+
+Since each radially symmetric pseudopotential VJ matches the Coulomb potential outside some prespeciﬁed
+J , the continuous pseudocharge density bJ has compact support in a sphere of radius rc
+cutoff radius rc
+J
+centered at RJ . This is not the case for the corresponding discrete pseudocharge density b(i,j,k)
+, which
+actually has inﬁnite extent due to the use of the ﬁnite-difference Laplacian (Eqn. 24). However, b(i,j,k)
+has exponential decay away from RJ (Appendix C), which allows for truncation at some suitably chosen
+radius rb
+J . It is worth noting that even though the discrete pseudocharge densities may overlap, as long as
+there is no overlap between the continuous pseudocharge densities, the electrostatic correction to the energy
+
+J
+
+J
+
+8
+
+and forces (i.e., Ec and fJ,c) both rapidly converge to zero as the mesh is reﬁned. This is a consequence
+of the ﬁnite-difference Laplacian being used to assign the pseudocharge densities on to the mesh, with the
+corresponding inverse operation being performed during the solution of the Poisson equation in Eqn. 14.
+
+We calculate the total pseudocharge density b(i,j,k) and the corresponding self energy Eh
+
+self using the
+with the processor do-
+approach outlined in Algorithm 1. Speciﬁcally, we ﬁrst determine the overlap of Ωrb
+J centered on the J th atom. We have chosen a
+mains Ωp, where Ωrb
+cube rather than a sphere due to its simplicity and efﬁciency within the Euclidean ﬁnite-difference discretiza-
+tion. The value of rb
+J for every type of atom—determined at the start of the complete DFT simulation—is
+chosen such that the charge constraint in Eqn. 12 is satisﬁed to within a prespeciﬁed tolerance εb, i.e.,
+
+denotes the cube with side of length 2rb
+
+J
+
+J
+
+h3
+
+n1
+
+n2
+
+n3
+
+Xi=1
+
+Xj=1
+
+Xk=1
+
+b(i,j,k)
+J
+
+(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)
+
+− ZJ(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)
+
+< εb .
+
+(26)
+
+J
+
+While describing Algorithm 1, we use the subscripts s and e to denote the starting and ending indices of
+∩ Ωp 6= ∅, respectively. In this overlap region (and an additional 2n0 points in each direction), we
+Ωrb
+interpolate V (i,j,k)
+on to the ﬁnite-difference grid using cubic-splines [69]. Next, we utilize Eqns. 24 and 25
+to compute b(i,j,k) and Eh,p
+self is the contribution of the pth processor to the self energy. Finally,
+we sum the contributions from all the processors to obtain the total self energy Eh
+
+self , where Eh,p
+
+J
+
+The local and independent nature of the aforedescribed computations ensure that they possess good
+weak and strong parallel scalability. However, the approach as presented here is formally slightly worse
+than O(N ) with respect to the number of atoms. In order to achieve perfect O(N ) scaling, the atoms need
+to be suitably distributed amongst the processors (in O(N ) time), whereby each processor is only required
+to go over the local subset of atoms. However, for the modest system sizes studied in ab-initio calculations,
+the adopted approach is both simple and efﬁcient. Moreover, this part of the calculation constitutes a very
+minor fraction of the total computational effort.
+
+self .
+
+Algorithm 1: Pseudocharge density generation and self energy calculation
+
+Input: R, VJ , and rb
+J
+b(i,j,k) = 0, Eh,p
+self = 0
+for J = 1 . . . N do
+
+if Ωrb
+
+J
+
+∩ Ωp 6= ∅ then
+
+∀ i ∈ [is − no, ie + no], j ∈ [js − no, je + no], k ∈ [ks − no, ke + no]
+
+Determine starting and ending indices is, ie, js, je, ks, ke for Ωrb
+Determine V (i,j,k)
+J
+b(i,j,k)
+= − 1
+4π ∇2
+J
+Eh,p
+self = Eh,p
+self + 1
+p=1 Eh,p
+
+b(i,j,k) = b(i,j,k) + b(i,j,k)
+
+(i,j,k),
+2 h3b(i,j,k)
+
+hVJ(cid:12)(cid:12)
+
+V (i,j,k)
+J
+
+J
+
+J
+
+J
+
+∀ i ∈ [is, ie], j ∈ [js, je], k ∈ [ks, ke]
+
+∩ Ωp
+
+∀ i ∈ [is, ie], j ∈ [js, je], k ∈ [ks, ke]
+
+Eh
+Output: b(i,j,k) and Eh
+
+self =Pnp
+
+self
+
+self
+
+3.3. Electrostatic potential calculation
+
+The electrostatic potential φ—solution to the Poisson problem in Eqn. 14 on all of space R3—needs to
+be computed in each iteration of the SCF method as part of the linearized Hamiltonian H . However, since
+all calculations are restricted to Ω, appropriate boundary conditions need to be prescribed on ∂Ω in order
+Indeed, the simplest choice of zero Dirichlet boundary conditions
+to minimize the ﬁnite-domain effect.
+
+9
+
+can result in very slow convergence with domain size, as is evident from the discussion that follows. The
+electrostatic potential can be written in integral form using the Green’s function of the Laplacian:
+
+φ(x) =ZR3
+
+ρ(x′) + b(x′, R)
+
+|x − x′|
+
+dx′ ≈ZΩ
+
+ρ(x′) + b(x′, R)
+
+|x − x′|
+
+dx′ ,
+
+(27)
+
+where the exponential decay of the electron density ρ and total pseudocharge b has been used to restrict the
+integral to Ω. On performing a multipole expansion of the kernel 1/|x − x′|, we arrive at
+
+φ(x) =
+
+∞
+
+l
+
+Xl=0
+
+Xm=−l
+
+4π
+
+(2l + 1)|x|l+1 Ylm(cid:18) x
+
+|x|(cid:19)ZΩ
+
+|x′|lYlm(cid:18) x′
+
+|x′|(cid:19) (ρ(x′) + b(x′))dx′ ,
+
+(28)
+
+where Ylm are the real spherical harmonics. It can therefore be deduced that unlike ρ and b, in general φ
+only has algebraic decay away from the cluster. Therefore, signiﬁcant errors can result when zero Dirichlet
+boundary conditions are employed, particularly for systems with net charge and/or dipole moment. In order
+to mitigate this, we adopt the procedure described below.
+
+We write the discrete form of the Poisson problem in Eqn. 14 as
+
+∇2
+
+(i,j,k) = ρ(i,j,k) + b(i,j,k) − d(i,j,k) ,
+
+(29)
+
+−
+
+1
+4π
+
+hφ(cid:12)(cid:12)
+
+where zero Dirichlet boundary conditions are prescribed on ∂Ω, and the ‘charge correction’ [70]
+
+d(i,j,k) =
+
+−1
+4π
+
+wp(cid:18)χ(i+p,j,k)φ(i+p,j,k) + χ(i−p,j,k)φ(i−p,j,k) + χ(i,j+p,k)φ(i,j+p,k) + χ(i,j−p,k)φ(i,j−p,k)
+
+no
+
+Xp=0
+
++ χ(i,j,k+p)φ(i,j,k+p) + χ(i,j,k−p)φ(i,j,k−p)(cid:19) .
+
+In the above expression, wp are the ﬁnite-difference weights given by Eqn. 19, and χ is the indicator
+function that takes values of 0 and 1 when the index does and does not belong to the ﬁnite-difference grid,
+respectively. The values of φ(i,j,k) corresponding to χ(i,j,k) = 1 are calculated using the discrete truncated
+version of the multipole expansion in Eqn. 28:
+
+φ(i,j,k) =
+
+lmax
+
+l
+
+Xl=0
+
+Xm=−l
+
+4π
+
+(2l + 1)|x(i,j,k)|l+1
+
+Y (i,j,k)
+lm Qh
+
+lm ,
+
+where lmax is the maximum angular momentum component, and the discrete multipole moments
+
+Qh
+
+lm = h3
+
+|x(r,s,t)|lY (r,s,t)
+
+lm (ρ(r,s,t) + b(r,s,t)) .
+
+n1
+
+n2
+
+n3
+
+Xr=1
+
+Xs=1
+
+Xt=1
+
+d
+
+It is worth noting that the evaluation of Qlm is independent of the position at which the electrostatic
+potential needs to be evaluated. Therefore, the cost of calculating the compensating charge is O(Nd) +
+O(N 2/3
+), which makes its scaling O(N ) with respect to the number of atoms. The associated prefactors
+are insigniﬁcant since lmax is typically very small, and d(i,j,k) only needs to be computed for grid points
+which lie within a distance of (no − 1)h from the boundary ∂Ω. Therefore, the electrostatic potential φ
+can be determined in O(N ) time when sophisticated preconditioners like multigrid [71] are employed for
+solving the linear system in Eqn. 29. The above strategy is expected to minimize the ﬁnite-domain effect
+resulting from the slow decay of the electrostatic potential, which is indeed veriﬁed by the results presented
+in Section 4.
+
+(30)
+
+(31)
+
+(32)
+
+10
+
+3.4. Electron density calculation
+
+In each iteration of the SCF method, the electron density corresponding to the linearized Hamiltonian H
+needs to be evaluated. This is typically the most computationally expensive step in DFT calculations. In this
+work, we utilize the Chebyshev ﬁltered subspace iteration (CheFSI) [72, 73] to compute approximations to
+the lowest Ns eigenvalues and corresponding eigenvectors of H. This choice of eigensolver is motivated by
+the minimal orthogonalization and computer memory costs compared to other eigensolvers commonly em-
+ployed in electronic structure calculations, e.g. Locally Optimal Block Preconditioned Conjugate Gradient
+(LOBPCG) [74]. Moreover, the lack of efﬁcient real-space preconditioners limits the effectiveness of diag-
+onalization approaches like LOBPCG in the current setting. In fact, CheFSI has been found to outperform
+LOBPCG for large scale computations even in the context of plane-waves [75].
+
+The CheFSI algorithm as implemented in SPARC consists of three main steps. First, we ﬁlter the guess
+
+orbitals Ψ using Chebyshev polynomials:
+
+Ψf = pm(H)Ψ ,
+
+pm(t) = Cm(cid:18) t − c
+e (cid:19) ,
+
+(33)
+
+where Ψf represents the collection of ﬁltered orbitals, and Cm denotes the Chebyshev polynomial of degree
+m. In addition, e = (λNd − λc)/2 and c = (λNd + λc)/2, where λc signiﬁes the cutoff chosen for the
+Chebyshev polynomial ﬁlter. The central idea of this technique is to use the rapid growth of Chebyshev
+polynomials outside the interval [−1, 1] to dampen all the eigencomponents corresponding to eigenvalues
+larger than λc. The matrix pm(H) is not explicitly determined, rather its product with Ψ is computed using
+the three term recurrence relation of Chebyshev polynomials, as outlined in Algorithm 2.
+
+Algorithm 2: Chebyshev ﬁltering
+
+Input: H, Ψ, m, λ1, λNd, λc
+λNd
+−λc
+e =
+2
+Ψf = σ
+e (H − cI) Ψ
+for j = 2 : m do
+
+λNd +λc
+
+; c =
+
+2
+
+; σ = e
+
+λ1−c
+
+˜Ψf = 2σ
+Ψ = Ψf ; Ψf = ˜Ψf ; σ = σ
+
+e (H − cI) Ψf −(cid:16) σ2
+
+2−σ2(cid:17) Ψ
+
+2−σ2
+
+Output: Ψf
+
+Next, we project onto the ﬁltered basis Ψf to arrive at the generalized eigenproblem:
+
+Hsyn = λnMsyn , n = 1, 2, . . . Ns ,
+
+(34)
+
+whose eigenvalues represent approximations to those of the Hamiltonian H. The dense matrices Hs, Ms ∈
+RNs×Ns are obtained using the relations
+
+Hs = ΨT
+
+f HΨf , Ms = ΨT
+
+f Ψf .
+
+(35)
+
+After solving the eigenproblem in Eqn. 34, we calculate the Fermi energy λf by enforcing the constraint on
+the total number of electrons:
+
+2
+
+Ns
+
+Xn=1
+
+gn = Ne , where
+
+gn =(cid:18)1 + exp(cid:18) λn − λf
+
+kBT (cid:19)(cid:19)−1
+
+.
+
+(36)
+
+11
+
+Finally, we perform the subspace rotation
+
+where the columns of the matrix Y ∈ RNs×Ns contain the eigenvectors yn. The columns of Ψ so obtained
+represent approximations to the eigenvectors of H, which are then used to calculate the electron density at
+the ﬁnite-difference grid points:
+
+Ψ = Ψf Y ,
+
+(37)
+
+ρ(i,j,k) =
+
+2
+h3
+
+Ns
+
+Xn=1
+
+gn ψ2(i,j,k)
+
+n
+
+,
+
+are extracted from the nth column of Ψ.
+
+where ψ(i,j,k)
+
+n
+
+(38)
+
+In the very ﬁrst SCF iteration of the complete DFT simulation, we start with a randomly generated Ψ,
+and repeat the steps in CheFSI—without calculating/updating the electron density—multiple times (∼ 3)
+[76]. This allows us to obtain a good approximation of the electron density for the second SCF iteration.
+In principle, this can be achieved by performing the CheFSI steps only once but with a higher degree
+Chebyshev polynomial m. However, in practice this causes the orbitals to become linearly dependent, which
+is prevented in the current procedure by the orthogonalization step within CheFSI. In every subsequent SCF
+iteration, we perform the CheFSI steps only once with the subspace rotated Ψ from the previous step as the
+initial guess. Overall, the calculation of the electron density scales as O(NsNd) + O(N 2
+s ),
+which makes it O(N 3) with respect to the number of atoms.
+
+s Nd) + O(N 3
+
+3.5. Free energy calculation
+
+We approximate the integrals in Eqn. 16 using the integration rule in Eqn. 22 to arrive at the following
+
+expression for the discrete free energy:
+
+F ∗h = 2
+
+gnλn + h3
+
+Ns
+
+Xn=1
+
+n1
+
+Xi=1
+
+ρ(i,j,k) − V (i,j,k)
+
+xc
+
+ρ(i,j,k) +
+
+1
+2
+
+(b(i,j,k) − ρ(i,j,k))φ(i,j,k)(cid:19)
+
+n2
+
+n3
+
+xc
+
+Xk=1(cid:18)ε(i,j,k)
+Xj=1
+Xn=1
+
+Ns
+
+−Eh
+
+self + Eh
+
+c + 2kBT
+
+(gn log gn + (1 − gn) log(1 − gn)) ,
+
+(39)
+
+self is the discrete self energy of the pseudocharges (Eqn. 25), and Eh
+
+where Eh
+c is the discrete repulsive
+energy correction due to overlapping pseudocharges (Eqn. 48). The evaluation of F ∗h scales as O(Nd), and
+therefore O(N ) with respect to the number of atoms. Even though the free energy needs to be calculated
+only after the electronic/structural ground-state is determined, it is computed during each step of the SCF
+method, as is common practice in electronic structure calculations.
+
+3.6. Atomic forces calculation
+
+The discrete form of the atomic force presented in Eqn. 17 is the sum of three components:
+
+J = f h
+f h
+
+J,loc + f h
+
+J,c + f h
+
+J,nloc ,
+
+(40)
+
+J,loc is the discrete local component of the force, f h
+
+where f h
+overlapping pseudocharges, and f h
+expressions for f h
+in Eqn. 50, and its evaluation progresses along similar lines as f h
+
+J,c is the discrete electrostatic correction for
+J,nloc is the discrete non-local component of the force. Below, we present
+J,c can be found
+
+J,loc and f h
+
+J,nloc, and discuss their evaluation in SPARC. The expression for f h
+
+J,loc.
+
+12
+
+Local component. The local component of the atomic force in discrete form can be written as
+
+f h
+J,loc = h3
+
+n1
+
+n2
+
+n3
+
+Xi=1
+
+Xj=1
+
+Xk=1
+
+∇hbJ(cid:12)(cid:12)
+
+(i,j,k)(φ(i,j,k) − V (i,j,k)
+
+J
+
+) ,
+
+(41)
+
+J,loc proceeds as outlined in Algorithm 3. Speciﬁcally, V (i,j,k)
+
+where the integral in Eqn. 17 has been approximated using the integration rule in Eqn. 22. The calculation
+of f h
+is interpolated on to the ﬁnite-difference
+∩ Ωp 6= ∅ (and an additional 2n0 points in each direction) using cubic-splines,
+grid in the overlap region Ωrb
+from which b(i,j,k)
+J,loc—contribution of the pth processor to
+the local component of the force—is calculated using Eqn. 41. Finally, the contributions from all processors
+are summed to simultaneously obtain f h
+
+is calculated using Eqn. 24. Subsequently, f h,p
+
+J
+
+J
+
+J,loc for all the atoms.
+
+J
+
+Algorithm 3: Calculation of the local component of the atomic force.
+
+Input: R, φ(i,j,k), VJ , and rb
+J
+for J = 1 . . . N do
+
+if Ωrb
+
+J
+
+∩ Ωp 6= ∅ then
+
+∀ i ∈ [is − no, ie + no], j ∈ [js − no, je + no], k ∈ [ks − no, ke + no]
+
+Determine starting and ending indices is, ie, js, je, ks, ke for Ωrb
+Determine V (i,j,k)
+J
+b(i,j,k)
+= − 1
+4π ∇2
+J
+f h,p
+
+(i,j,k) ∀ i ∈ [is, ie], j ∈ [js, je], k ∈ [ks, ke]
+
+hVJ(cid:12)(cid:12)
+i=is+noPje−no
+J,loc = h3Pie−no
+
+j=js+noPke−no
+
+k=ks+no ∇hbJ(cid:12)(cid:12)
+
+p=1 f h,p
+
+J,loc
+
+J
+
+(i,j,k)(φ(i,j,k) − V (i,j,k)
+
+)
+
+J
+
+∩ Ωp
+
+f h
+Output: f h
+
+J,loc =Pnp
+
+J,loc
+
+Non-local component. The non-local component of the force in discrete form can be written as
+
+f h
+J,nloc = −4
+
+Ns
+
+Xn=1
+
+gnXlm
+
+γJlUJnlmWJnlm .
+
+where
+
+UJnlm = h3
+
+n1
+
+n2
+
+n3
+
+Xi=1
+
+Xj=1
+
+Xk=1
+
+ψ(i,j,k)
+
+n
+
+χ(i,j,k)
+Jlm , WJnlm = h3
+
+n1
+
+n2
+
+n3
+
+Xi=1
+
+Xj=1
+
+Xk=1
+
+(42)
+
+(43)
+
+(i,j,k)χ(i,j,k)
+Jlm .
+
+∇hψn(cid:12)(cid:12)
+
+denotes the cube with side of length 2rc
+
+J,nloc in SPARC proceeds as summarized in Algorithm 4. We ﬁrst determine the overlap of Ωrc
+
+Again, the integral in Eqn. 17 has been approximated using the integration rule in Eqn. 22. The calculation
+of f h
+with
+J centered on the J th atom.
+the processor domains Ωp, where Ωrc
+The value of rc
+J corresponds to the maximum cutoff radius amongst the non-local components of the pseu-
+dopotential for the J th atom. We have chosen a cube rather than a sphere due to its simplicity and efﬁciency
+within the Euclidean ﬁnite-difference discretization. While describing Algorithm 4, we use the subscripts
+∩ Ωp 6= ∅, respectively. In this overlap region,
+s and e to denote the starting and ending indices of Ωrc
+we interpolate the radial components of the projectors χ(i,j,k)
+Jlm on to the ﬁnite-difference grid using cubic-
+splines. Next, we utilize Eqn. 43 to determine U p
+Jnlm and Wp
+Jnlm, which represent the contributions of the
+
+J
+
+J
+
+J
+
+13
+
+pth processor to UJnlm and WJnlm, respectively. Finally, we sum the contributions from all the processors
+to obtain UJnlm and WJnlm, which are then used to calculate f h
+
+J,nloc using Eqn. 42 .
+
+Algorithm 4: Calculation of the non-local component of the atomic force
+
+n
+
+Input: R, ψ(i,j,k)
+U p
+Jnlm = 0, Wp
+for J = 1 . . . N do
+
+Jnlm = 0
+
+, γJl, χJlm, and rc
+J
+
+if Ωrc
+
+J
+
+∩ Ωp 6= ∅ then
+
+∩ Ωp
+
+Jlm ∀ i ∈ [is, ie], j ∈ [js, je], k ∈ [ks, ke]
+Jnlm + h3ψ(i,j,k)
+
+Determine starting and ending indices is, ie, js, je, ks, ke for Ωrc
+Determine χ(i,j,k)
+χ(i,j,k)
+U p
+Jnlm = U p
+Jlm ∀ i ∈ [is, ie], j ∈ [js, je], k ∈ [ks, ke]
+(i,j,k)χ(i,j,k)
+Jnlm = Wp
+Wp
+Jnlm + h3∇hψn(cid:12)(cid:12)
+Jnlm, WJnlm =Pnp
+p=1 Wp
+p=1 U p
+n=1 gnPlm γJlUJnlmWJnlm
+
+Jnlm
+
+UJnlm =Pnp
+J,nloc = −4PNs
+
+f h
+Output: f h
+
+J,nloc
+
+n
+
+J
+
+Jlm ∀ i ∈ [is, ie], j ∈ [js, je], k ∈ [ks, ke]
+
+4. Examples and Results
+
+In this section, we verify the proposed ﬁnite-difference formulation and parallel implementation of DFT
+
+for isolated clusters—ﬁrst component of SPARC (Simulation Package for Ab-initio Real-space Calculations)—
+through selected examples. In all the simulations, we utilize a twelfth-order accurate ﬁnite-difference dis-
+cretization, the Perdew-Wang parametrization [77] of the correlation energy calculated by Ceperley-Alder
+[78], a smearing of kBT = 1× 10−3 Ha, and norm-conserving Troullier-Martins pseudopotentials [79]. The
+values of cutoff radii for the non-local projectors and the choice of local component of the pseudopotentials
+are speciﬁed in Appendix B.
+
+We truncate the discrete multipole expansion presented in Eqn. 31 at lmax = 6. We solve the linear
+system in Eqn. 29—discrete form of the Poisson problem in Eqn. 14—using the Generalized minimal
+residual method (GMRES) [80] with the block-Jacobi preconditioner [81].
+In the CheFSI method, we
+determine the extremal eigenvalues of the Hamiltonian H using a few iterations of the Lanczos method
+[82], set the number of states to be Ns = Ne/2 + 30, utilize a polynomial of degree m = 20 for Chebyshev
+ﬁltering, and choose the ﬁlter cutoff λc to be the previous iteration’s Fermi energy plus 0.1 Ha. Further, we
+solve the generalized eigenproblem in Eqn. 34 using the QR algorithm [83] as implemented in LAPACK
+[84]. We calculate the Fermi energy—root of the constraint in Eqn. 36—using Brent’s method [85]. We
+use Anderson mixing [86] with relaxation parameter of 0.3 and mixing history of 7 for accelerating the
+convergence of the Self-Consistent Field (SCF) method. Finally, we employ the Polak-Ribiere variant of
+non-linear conjugate gradients with a secant line search [87] for performing geometry optimization.
+
+In all the calculations, the energy and forces are converged to within the chemical accuracy of 0.001
+Ha/atom and 0.001 Ha/Bohr, respectively. Wherever applicable, the results obtained by SPARC are com-
+pared to the well established plane-wave code ABINIT [15, 88, 89]. The error in energy is deﬁned as the
+difference in the magnitude, and the error in forces is deﬁned to be the maximum difference in any com-
+ponent on any atom. The simulations are performed on a computer cluster consisting of 16 nodes with
+the following conﬁguration: Altus 1804i Server - 4P Interlagos Node, Quad AMD Opteron 6276, 16C, 2.3
+GHz, 128GB, DDR3-1333 ECC, 80GB SSD, MLC, 2.5" HCA, Mellanox ConnectX 2, 1-port QSFP, QDR,
+memfree, CentOS, Version 5, and connected through InﬁniBand cable.
+
+14
+
+4.1. Convergence with domain size
+
+We ﬁrst verify the convergence of the computed energy and atomic forces with respect to the size of
+the domain Ω. We choose the carbon monoxide (CO) and water (H2O) molecules as representative exam-
+ples, with the C-O and O-H bond lengths reduced and increased by 8% from their equilibrium values as
+determined by ABINIT, respectively. The polar nature of the molecules and their deliberate asymmetric po-
+sitioning within Ω ensure that any ﬁnite-domain effects are exaggerated. In Fig. 2, we present convergence
+of the energy and atomic forces for h = 0.2 Bohr as {L1, L2, L3} is increased from {12, 12, 12} Bohr to
+{18, 18, 18} Bohr, with the results obtained for {L1, L2, L3} = {40, 40, 40} Bohr used as reference. We
+observe exponential convergence of both the energy and the forces to well below accuracies desired in DFT
+calculations. In fact, even a domain size of {L1, L2, L3} = {12, 12, 12} is sufﬁcient to obtain chemical
+accuracy in both energy and forces. The corresponding electron density contours for H2O are plotted in Fig.
+3. Overall, these results demonstrate the efﬁcacy of SPARC’s electrostatic formulation in minimizing the
+ﬁnite-domain effect for isolated clusters.
+
+10-3
+
+)
+
+m
+o
+t
+a
+/
+a
+H
+(
+
+r
+o
+r
+r
+E
+
+10-4
+
+10-5
+
+CO
+H2O
+
+10-3
+
+10-4
+
+10-5
+
+10-6
+
+)
+r
+h
+o
+B
+/
+a
+H
+(
+
+r
+o
+r
+r
+E
+
+CO
+H2O
+
+10-6
+
+12.00
+
+13.00
+
+15.00
+
+14.00
+16.00
+Domain size (Bohr)
+
+17.00
+
+18.00
+
+10-7
+
+12.00
+
+13.00
+
+15.00
+
+14.00
+16.00
+Domain size (Bohr)
+
+17.00
+
+18.00
+
+(a) Energy
+
+(b) Forces
+
+Figure 2: Convergence of energy and atomic forces with respect to domain size for the CO and H2O
+molecules.
+
+ 
+
+0.9
+
+0.8
+
+0.7
+
+0.6
+
+0.5
+
+0.4
+
+0.3
+
+0.2
+
+0.1
+
+ 
+
+Figure 3: In-plane electron density contours for the H2O molecule.
+
+15
+
+4.2. Convergence with spatial discretization
+
+We next verify the convergence of the computed energy and atomic forces with respect to the ﬁnite-
+difference mesh-size. As representative examples, we choose the icosahedral Platinum (Pt13), icosahe-
+dral Gold (Au13), and β-Aminoisobutyric acid tri-TMS II (C13H33NO2Si3) clusters with domain sizes of
+{L1, L2, L3} = {36, 36, 36}, {40, 40, 40} and {42, 38, 34} Bohr, respectively. All errors are deﬁned with
+respect to ABINIT, wherein we employ plane-wave cutoffs of 42, 42, and 68 Ha along with domain sizes
+of {L1, L2, L3} = {42, 42, 42}, {42, 42, 42}, and {50, 46, 42} Bohr for Pt13, Au13, and C13H33NO2Si3,
+respectively. The resulting reference energies and forces are converged to within 5.0 × 10−6 Ha/atom and
+5.0 × 10−6 Ha/Bohr, respectively. In Fig. 4, we plot error in the SPARC energy and forces with respect to
+the mesh size, from which it is clear that there is systematic convergence of both energies and forces. On
+performing a ﬁt to the data, we obtain average convergence rates of approximately O(h9) in the energy and
+O(h8) in the forces. In doing so, the chemical accuracy desired in electronic structure calculations is readily
+attained. In Fig. 5, we present the computed isosurfaces for Au13 and C13H33NO2Si3. Overall, we con-
+clude that SPARC is able to obtain high convergence rates in both the DFT energy and atomic forces, which
+contributes to its accuracy and efﬁciency. Moreover, the energy and forces converge at comparable rates,
+without need of additional measures such as double-grid [90] or high-order integration [51] techniques.
+
+)
+
+m
+o
+t
+a
+/
+a
+H
+(
+
+r
+o
+r
+r
+E
+
+101
+
+100
+
+10-1
+
+10-2
+
+10-3
+
+10-4
+
+10-5
+
+10-6
+
+1
+
+0.9
+
+0.8
+
+0.7
+
+0.5
+
+0.6
+Mesh size (Bohr)
+
+0.4
+
+Pt13
+Au13
+C13H33NO2Si3
+
+0.3
+
+0.2
+
+)
+r
+h
+o
+B
+/
+a
+H
+(
+
+r
+o
+r
+r
+E
+
+101
+
+100
+
+10-1
+
+10-2
+
+10-3
+
+10-4
+
+10-5
+
+10-6
+
+1
+
+0.9
+
+0.8
+
+0.7
+
+0.5
+
+0.6
+Mesh size (Bohr)
+
+0.4
+
+Pt13
+Au13
+C13H33NO2Si3
+
+0.3
+
+0.2
+
+(a) Energy
+
+(b) Forces
+
+Figure 4: Convergence of the energy and atomic forces with respect to mesh size to reference planewave
+result for the Pt13, Au13, and C13H33NO2Si3 clusters.
+
+16
+
+(a) Au13
+
+(b) C13H33NO2Si3
+
+Figure 5: Electron density isosurface for ρ = 0.05 Bohr−3
+
+4.3. Ground state properties
+
+We now verify that the ground-state properties of isolated clusters can be accurately determined using
+SPARC. For this purpose, we select the Hydrogen (H2), Nitrogen (N2), and Oxygen (O2) molecules, a
+domain size of {L1, L2, L3} = {24, 24, 24} Bohr, and mesh-size of h = 0.2 Bohr. We begin by evaluating
+the energy and force as a function of interatomic distance, the results of which are presented in Fig. 6.
+Speciﬁcally, we plot the energy as a function of bond length along with its cubic spline ﬁt in Fig. 6a,
+and the computed interatomic force and the derivative of the cubic spline ﬁt to the energy in Fig. 6b.
+The evident agreement demonstrates that the computed energy and atomic forces are indeed consistent.
+Moreover, there is no noticeable ‘egg-box’ effect [91]—a phenomenon arising due to the breaking of the
+translational symmetry—at meshes required for obtaining chemical accuracies.
+
+0.20
+
+0.15
+
+0.10
+
+0.05
+
+0.00
+
+)
+
+m
+o
+t
+a
+/
+a
+H
+(
+
+n
+o
+i
+t
+a
+i
+r
+a
+v
+
+y
+g
+r
+e
+n
+E
+
+H2
+N2
+O2
+
+ 1.5
+
+ 1.0
+
+ 0.5
+
+ 0.0
+
+-0.5
+
+)
+r
+h
+o
+B
+/
+a
+H
+(
+
+e
+c
+r
+o
+f
+
+c
+i
+m
+o
+t
+a
+r
+e
+t
+n
+I
+
+H2
+N2
+O2
+
+1.0
+
+1.5
+
+2.0
+
+2.5
+
+3.0
+
+1.0
+
+1.5
+
+2.0
+
+2.5
+
+3.0
+
+Bond length (Bohr)
+
+Bond length (Bohr)
+
+(a) Computed energy and its cubic spline ﬁt
+
+(b) Computed force and the derivative of the cubic spline ﬁt
+to the energy
+
+Figure 6: Variation in the computed energy and atomic force as a function of interatomic distance for the
+H2, N2, and O2 molecules.
+
+Next, we use the above results to calculate the vibrational frequency for the H2, N2, and O2 molecules
+
+17
+
+using the relation [92]:
+
+ν =
+
+1
+
+2
+
+,
+
+(44)
+
+1
+
+2πc(cid:18) k
+µ(cid:19)
+
+where c is the speed of light, k is the derivative of the cubic spline ﬁt to the force at the equilibrium bond
+length, and µ is the reduced mass of the system. In ABINIT, we choose a domain size of {L1, L2, L3} =
+{30, 30, 30} Bohr for all three systems and planewave cutoffs of 32 Ha, 40 Ha, and 38 Ha for H2, N2, and O2,
+respectively. From the results presented in Table 1, we observe that there is excellent agreement between
+SPARC and ABINIT, with the maximum difference in the vibrational frequency being 8 cm−1. There is
+also good agreement between DFT and experiment, highlighting the accuracy of DFT as an ab-initio theory.
+These results further verify that SPARC is able to obtain accurate atomic forces, a critical feature for both
+structural relaxations and ab-initio molecular dynamics.
+
+Molecule
+
+H2
+N2
+O2
+
+SPARC ABINIT Experiment [93, 94]
+4007
+2448
+1649
+
+4401
+2358
+1580
+
+4014
+2456
+1642
+
+Table 1: Vibrational frequency in cm−1 for the H2, N2, and O2 molecules.
+
+Finally, we randomly perturb the atomic positions in the three molecules such that the interatomic dis-
+tance differs by up to 15 percent from the equilibrium bond length. We maximize generality by ensuring
+that the resulting systems are not aligned with any of the coordinate axes. In Table 2, we present the results
+of the geometry optimization by SPARC, and compare them with ABINIT for the aforementioned choice of
+parameters. We observe that there is very good agreement between SPARC and ABINIT, with the maximum
+difference in the energy being 0.0007 Ha/atom, and the maximum difference in the equilibrium bond length
+being 0.001 Bohr. These results are also in excellent agreement with the data plotted in Fig. 6. Overall the
+results indicate that SPARC is able to accurately determine ground state properties for isolated clusters.
+
+Molecule
+
+H2
+N2
+O2
+
+Energy (Ha/atom)
+ABINIT
+SPARC
+−0.5681
+−0.5682
+−9.9463
+−9.9460
+−15.8717 −15.8710
+
+Bond length (Bohr)
+SPARC ABINIT
+1.437
+2.049
+2.226
+
+1.437
+2.049
+2.227
+
+Table 2: Ground state energy and equilibrium conﬁguration for the H2, N2, and O2 molecules.
+
+4.4. Scaling and performance
+
+In previous subsections, we have veriﬁed the accuracy of SPARC by comparing with the well-established
+plane-wave code ABINIT. We now investigate the efﬁciency of SPARC relative to ABINIT, for which we
+choose bulk-terminated Silicon nanoclusters passivated by Hydrogen as representative examples. In all the
+calculations, we utilize a mesh-size of h = 0.5 Bohr in SPARC, and a planewave energy cutoff of 16 Ha
+in ABINIT. Further, we employ a vacuum of 5 Bohr in both SPARC and ABINIT. We choose all the other
+parameters so as to obtain the chemical accuracy of 0.001 Ha/atom in the energy and 0.001 Ha/Bohr in the
+atomic force. All the times reported here include the calculation of the electronic ground-state as well as the
+atomic force.
+
+18
+
+First, we compare the strong scaling of SPARC with ABINIT for the Si275H172 cluster. We utilize 2,
+8, 64, 128, 512, and 640 cores for performing the simulation using SPARC. We use 6, 9, 37, 296, 592,
+and 666 cores for ABINIT, which it suggests are optimal in the range of cores considered here. In Fig.
+7a, we present the wall time taken by SPARC and ABINIT as the number of processors is increased. We
+observe that both SPARC and ABINIT display similar trends with respect to strong scaling. Speciﬁcally,
+the SPARC and ABINIT curves are close to being parallel, with no further reduction in wall time observed
+after approximately 600 cores. However, the prefactors are signiﬁcantly different, with SPARC being able
+to outperform ABINIT by up to factors of 5.
+
+Next, we compare the weak scaling of SPARC with ABINIT for the Si29H36, Si71H84, Si275H172,
+Si525H276, and Si849H372 nanoclusters. The number of electrons in these systems range from 152 (Si29H36)
+to 3768 (Si849H372). For both SPARC and ABINIT, we ﬁx the number of electrons per core to be approx-
+imately 160, and select at most 4 cores from every compute node. In Figure 7b, we present the results so
+obtained for the variation in total CPU time versus the number of electrons. We observe similar scaling for
+both codes, with O(N 2.65
+) for ABINIT. However, the prefactor for SPARC is
+again noticeably lower, with speedups over ABINIT ranging from factors of 6 to 10.
+
+) for SPARC and O(N 2.74
+
+e
+
+e
+
+)
+s
+e
+t
+u
+n
+M
+
+i
+
+(
+
+e
+m
+
+i
+t
+
+l
+l
+a
+
+W
+
+104
+
+103
+
+102
+
+101
+
+SPARC
+ABINIT
+
+SPARC
+ABINIT
+
+106
+
+105
+
+104
+
+103
+
+102
+
+)
+s
+e
+t
+u
+n
+M
+
+i
+
+(
+
+e
+m
+
+i
+t
+U
+P
+C
+
+101
+
+102
+Number of cores
+
+(a) Strong scaling
+
+103
+
+101
+
+102
+
+103
+
+104
+
+Number of electrons
+
+(b) Weak scaling
+
+Figure 7: Strong and weak scaling behavior for hydrogen passivated silicon nanoclusters. The system
+utilized for strong scaling is Si275H172. The systems employed for weak scaling are Si29H36, Si71H84,
+Si275H172, Si525H276 and Si849H372.
+
+Finally, we compare the minimum wall time achievable by SPARC and ABINIT for the aforementioned
+nanoclusters with the exception of Si849H372, for which the resources currently available to us are insufﬁ-
+cient. While performing this study, we restrict the maximum number of electrons per computational core to
+160. In SPARC, we choose the number of cores as multiples of 64, whereas we select the number of cores
+and parallelization scheme in ABINIT as suggested by it. We present the results so obtained in Table 3. We
+observe that SPARC is able to achieve smaller wall times by factors larger than 2.5 compared to ABINIT
+for all the systems considered. In particular, SPARC requires a factor of approximately 5.5 less wall time
+than ABINIT for the Si525H276 nanocluster. Overall, these results indicate that SPARC is a highly efﬁcient
+DFT formulation and implementation that is highly competitive with well-optimized plane-wave codes.
+
+19
+
+System
+Si29H36
+Si71H84
+Si275H172
+Si525H276
+
+SPARC
+
+1.27 (128)
+2.65 (320)
+14.90 (512)
+48.71 (960)
+
+ABINIT
+4.53 (106)
+12.63 (321)
+37.50 (666)
+270.00 (1008)
+
+Table 3: Minimum wall time in minutes for hydrogen passivated silicon nanoclusters. The number in
+brackets represents the number of cores on which the minimum wall time is achieved.
+
+5. Concluding Remarks
+
+In this work, we have developed an accurate and efﬁcient ﬁnite-difference formulation and parallel
+implementation of Density Functional Theory (DFT) for isolated clusters, which represents the ﬁrst com-
+ponent of SPARC (Simulation Package for Ab-initio Real-space Calculations). Speciﬁcally, employing the
+Chebyshev polynomial ﬁltered self-consistent ﬁeld iteration in conjunction with the reformulation of the
+electrostatics and the non-local component of the atomic force, we have developed a framework using the
+ﬁnite-difference representation wherein energies and forces can be efﬁciently evaluated to within the chem-
+ical accuracies desired in electronic structure calculations. Through a variety of examples consisting of
+both light and heavy elements, we have demonstrated that SPARC obtains exponential convergence in en-
+ergies and forces with domain size; systematic convergence in the energy and forces with respect to spatial
+discretization at comparably high rates to reference plane-wave results; forces that are consistent with the
+energy, both being free from any noticeable ‘egg-box’ effect; and accurate ground-state properties like equi-
+librium energies, geometries and vibrational spectra. Moreover, we have shown that the weak and strong
+parallel scaling of SPARC is very similar to well-established and optimized plane-wave codes for systems
+consisting of up to thousands of electrons, but with a signiﬁcantly smaller prefactor.
+
+We note that there is signiﬁcant scope for improvement of the DFT implementation for isolated clus-
+ters in SPARC. Speciﬁcally, the subspace eigenvalue problem—currently solved in serial—is expected to
+become the dominant cost for systems consisting of tens of thousands of electrons. Therefore, incorpo-
+rating efﬁcient and scalable parallel eigendecomposition techniques into SPARC is being undertaken by
+the authors. In addition, the non-local pseudopotential is currently employed in matrix form as part of the
+linearized Hamiltonian. However, since the non-local pseudopotential has a special outer-product form, a
+matrix-free approach is likely to produce signiﬁcant gains in efﬁciency and parallel scalability. Therefore,
+it is also currently being pursued by the authors. These improvements along with optimization of code are
+expected to further improve the efﬁciency of SPARC.
+
+Acknowledgements
+
+The authors gratefully acknowledge the support of National Science Foundation under Grant Number 1333500.
+
+References
+
+[1] P. Hohenberg, W. Kohn, Physical Review 136 (1964) B864–B871.
+
+[2] W. Kohn, L. J. Sham, Physical Review 140 (1965) A1133–A1138.
+
+[3] R. O. Jones, O. Gunnarsson, Reviews of Modern Physics 61 (1989) 689.
+
+20
+
+[4] T. Ziegler, Chemical Reviews 91 (1991) 651–667.
+
+[5] W. Kohn, A. D. Becke, R. G. Parr, The Journal of Physical Chemistry 100 (1996) 12974–12980.
+
+[6] R. O. Jones, Reviews of modern physics 87 (2015) 897.
+
+[7] R. G. Parr, W. Yang, Annual Review of Physical Chemistry 46 (1995) 701–728.
+
+[8] B. Kaduk, T. Kowalczyk, T. Van Voorhis, Chemical reviews 112 (2011) 321–370.
+
+[9] W. Yang, Physical review letters 66 (1991) 1438.
+
+[10] E. A. Carter, Science 321 (2008) 800–803.
+
+[11] D. Marx, J. Hutter, Ab initio molecular dynamics: basic theory and advanced methods, Cambridge
+
+University Press, 2009.
+
+[12] G. Kresse, J. Hafner, Physical Review B 47 (1993) 558.
+
+[13] G. Kresse, J. Furthmüller, Physical Review B 54 (1996) 11169–11186.
+
+[14] M. D. Segall, P. J. D. Lindan, M. J. Probert, C. J. Pickard, P. J. Hasnip, S. J. Clark, M. C. Payne, Journal
+
+of Physics: Condensed Matter 14 (2002) 2717–2744.
+
+[15] X. Gonze, J. M. Beuken, R. Caracas, F. Detraux, M. Fuchs, G. M. Rignanese, L. Sindic, M. Verstraete,
+G. Zerah, F. Jollet, M. Torrent, A. Roy, M. Mikami, P. Ghosez, J. Y. Raty, D. C. Allan, Computational
+Materials Science 25 (2002) 478–492(15).
+
+[16] P. Giannozzi, S. Baroni, N. Bonini, M. Calandra, R. Car, C. Cavazzoni, D. Ceresoli, G. L. Chiarotti,
+M. Cococcioni, I. Dabo, A. Dal Corso, S. de Gironcoli, S. Fabris, G. Fratesi, R. Gebauer, U. Ger-
+stmann, C. Gougoussis, A. Kokalj, M. Lazzeri, L. Martin-Samos, N. Marzari, F. Mauri, R. Maz-
+zarello, S. Paolini, A. Pasquarello, L. Paulatto, C. Sbraccia, S. Scandolo, G. Sclauzero, A. P. Seitsonen,
+A. Smogunov, P. Umari, R. M. Wentzcovitch, Journal of Physics: Condensed Matter 21 (2009) 395502
+(19pp).
+
+[17] D. Marx, J. Hutter, Modern methods and algorithms of quantum chemistry 1 (2000) 301–449.
+
+[18] S. Ismail-Beigi, T. A. Arias, Computer Physics Communications 128 (2000) 1 – 45.
+
+[19] F. Gygi, IBM Journal of Research and Development 52 (2008) 137–144.
+
+[20] J. Cooley, J. Tukey, Mathematics of Computation 19 (1965) 297.
+
+[21] J. Leszczynski, Handbook of computational chemistry, volume 2, Springer Science & Business Media,
+
+2012.
+
+[22] M. C. Payne, M. P. Teter, D. C. Allan, T. Arias, J. Joannopoulos, Reviews of Modern Physics 64 (1992)
+
+1045–1097.
+
+[23] J. Hutter, H. P. Lüthi, M. Parrinello, Computational Materials Science 2 (1994) 244–248.
+
+[24] C. Freysoldt, J. Neugebauer, C. G. Van de Walle, Physical review letters 102 (2009) 016402.
+
+21
+
+[25] M. Probert, M. Payne, Physical Review B 67 (2003) 075204.
+
+[26] P. Suryanarayana, K. Bhattacharya, M. Ortiz, Journal of the Mechanics and Physics of Solids 61 (2013)
+
+38 – 60.
+
+[27] S. Goedecker, Rev. Mod. Phys. 71 (1999) 1085–1123.
+
+[28] D. R. Bowler, T. Miyazaki, Reports on Progress in Physics 75 (2012) 036503.
+
+[29] F. Bottin, S. Leroux, A. Knyazev, G. Zérah, Computational Materials Science 42 (2008) 329–336.
+
+[30] M. E. Tuckerman, D. Yarne, S. O. Samuelson, A. L. Hughes, G. J. Martyna, Computer Physics Com-
+
+munications 128 (2000) 333–376.
+
+[31] A. S. Banerjee, R. S. Elliott, R. D. James, Journal of Computational Physics 287 (2015) 226–253.
+
+[32] J. R. Chelikowsky, N. Troullier, Y. Saad, Physical review letters 72 (1994) 1240.
+
+[33] A. Castro, H. Appel, M. Oliveira, C. A. Rozzi, X. Andrade, F. Lorenzen, M. A. L. Marques, E. K. U.
+
+Gross, A. Rubio, Physica Status Solidi B-Basic Solid State Physics 243 (2006) 2465–2488.
+
+[34] E. Briggs, D. Sullivan, J. Bernholc, Physical Review B 54 (1996) 14362.
+
+[35] J.-L. Fattebert, Journal of Computational Physics 149 (1999) 75–94.
+
+[36] F. Shimojo, R. K. Kalia, A. Nakano, P. Vashishta, Computer Physics Communications 140 (2001)
+
+303–314.
+
+[37] J. E. Pask, B. M. Klein, C. Y. Fong, P. A. Sterne, Physical Review B 59 (1999) 12352–12358.
+
+[38] S. R. White, J. W. Wilkins, M. P. Teter, Physical Review B 39 (1989) 5819.
+
+[39] E. Tsuchida, M. Tsukada, Physical Review B 52 (1995) 5573.
+
+[40] P. Suryanarayana, V. Gavini, T. Blesgen, K. Bhattacharya, M. Ortiz, Journal of the Mechanics and
+
+Physics of Solids 58 (2010) 256 – 280.
+
+[41] P. Motamarri, M. Iyer, J. Knap, V. Gavini, Journal of Computational Physics 231 (2012) 6596–6621.
+
+[42] J. Fang, X. Gao, A. Zhou, Journal of Computational Physics 231 (2012) 3166–3180.
+
+[43] T. A. Arias, Reviews of Modern Physics 71 (1999) 267.
+
+[44] K. Cho, T. Arias, J. Joannopoulos, P. K. Lam, Physical Review Letters 71 (1993) 1808.
+
+[45] L. Genovese, A. Neelov, S. Goedecker, T. Deutsch, S. A. Ghasemi, A. Willand, D. Caliste, O. Zilber-
+
+berg, M. Rayson, A. Bergman, et al., The Journal of chemical physics 129 (2008) 014109.
+
+[46] C.-K. Skylaris, P. D. Haynes, A. A. Mostoﬁ, M. C. Payne, The Journal of Chemical Physics 122 (2005)
+
+084119.
+
+[47] D. R. Bowler, R. Choudhury, M. J. Gillan, T. Miyazaki, physica status solidi (b) 243 (2006) 989–1000.
+
+22
+
+[48] A. Masud, R. Kannan, Computer Methods in Applied Mechanics and Engineering 241 (2012) 112–
+
+127.
+
+[49] P. Suryanarayana, K. Bhattacharya, M. Ortiz, Journal of Computational Physics 230 (2011) 5226 –
+
+5238.
+
+[50] T. Ono, M. Heide, N. Atodiresei, P. Baumeister, S. Tsukamoto, S. Blügel, Physical Review B 82 (2010)
+
+205115.
+
+[51] N. S. Bobbitt, G. Schoﬁeld, C. Lena, J. R. Chelikowsky, Phys. Chem. Chem. Phys. (2015). DOI:
+
+10.1039/c5cp02561c.
+
+[52] J. P. Perdew, W. Yue, Physical review B 33 (1986) 8800.
+
+[53] L. Kleinman, D. Bylander, Physical Review Letters 48 (1982) 1425.
+
+[54] J. E. Pask, P. A. Sterne, Phys. Rev. B 71 (2005) 113101.
+
+[55] P. Suryanarayana, D. Phanish, Journal of Computational Physics 275 (2014) 524 – 538.
+
+[56] J. C. Slater, The self-consistent ﬁeld for molecules and solids, volume 4, McGraw-Hill New York,
+
+1974.
+
+[57] H.-r. Fang, Y. Saad, Numerical Linear Algebra with Applications 16 (2009) 197–221.
+
+[58] L. Lin, C. Yang, SIAM Journal on Scientiﬁc Computing 35 (2013) S277–S298.
+
+[59] P. P. Pratapa, P. Suryanarayana, Chemical Physics Letters 635 (2015) 69–74.
+
+[60] A. S. Banerjee, P. Suryanarayana, J. E. Pask, Chemical Physics Letters 647 (2016) 31 – 35.
+
+[61] J. Harris, Physical Review B 31 (1985) 1770.
+
+[62] W. M. C. Foulkes, R. Haydock, Physical review B 39 (1989) 12520.
+
+[63] K. Hirose, T. Ono, Y. Fujimoto, S. Tsukamoto, First-principles claculations in real-space formalism,
+
+2005.
+
+[64] P. P. Pratapa, P. Suryanarayana, J. E. Pask, Computer Physics Communications (2015).
+
+[65] S. Balay, J. Brown, , K. Buschelman, V. Eijkhout, W. D. Gropp, D. Kaushik, M. G. Knepley, L. C.
+McInnes, B. F. Smith, H. Zhang, PETSc Users Manual, Technical Report ANL-95/11 - Revision 3.4,
+Argonne National Laboratory, 2013.
+
+[66] S. Balay, W. D. Gropp, L. C. McInnes, B. F. Smith, in: E. Arge, A. M. Bruaset, H. P. Langtangen
+
+(Eds.), Modern Software Tools in Scientiﬁc Computing, Birkhäuser Press, 1997, pp. 163–202.
+
+[67] D. A. Mazziotti, Chemical physics letters 299 (1999) 473–480.
+
+[68] S. Ghosh, P. Suryanarayana, Journal of Computational Physics 307 (2016) 634 – 652.
+
+[69] J. H. Ahlberg, E. N. Nilson, J. L. Walsh, Mathematics in Science and Engineering, New York: Aca-
+
+demic Press, 1967 1 (1967).
+
+23
+
+[70] W. R. Burdick, Y. Saad, L. Kronik, I. Vasiliev, M. Jain, J. R. Chelikowsky, Computer Physics Commu-
+
+nications 156 (2003) 22–42.
+
+[71] W. Hackbusch, Multi-grid methods and applications, volume 4, Springer Science & Business Media,
+
+2013.
+
+[72] Y. Zhou, Y. Saad, M. L. Tiago, J. R. Chelikowsky, Journal of Computational Physics 219 (2006) 172–
+
+184.
+
+[73] Y. Zhou, Y. Saad, M. L. Tiago, J. R. Chelikowsky, Physical Review E 74 (2006) 066704.
+
+[74] A. V. Knyazev, SIAM journal on scientiﬁc computing 23 (2001) 517–541.
+
+[75] A. Levitt, M. Torrent, Computer Physics Communications 187 (2015) 98–105.
+
+[76] Y. Zhou, J. R. Chelikowsky, Y. Saad, Journal of Computational Physics 274 (2014) 770–782.
+
+[77] J. P. Perdew, Y. Wang, Physical Review B 45 (1992) 13244.
+
+[78] D. M. Ceperley, B. J. Alder, Phys. Rev. Lett. 45 (1980) 566–569.
+
+[79] N. Troullier, J. L. Martins, Physical Review B 43 (1991) 1993–2006.
+
+[80] Y. Saad, M. H. Schultz, SIAM Journal on scientiﬁc and statistical computing 7 (1986) 856–869.
+
+[81] G. H. Golub, C. F. Van Loan, Matrix computations, volume 3, JHU Press, 2012.
+
+[82] C. Lanczos, An iteration method for the solution of the eigenvalue problem of linear differential and
+
+integral operators, United States Governm. Press Ofﬁce, 1950.
+
+[83] D. S. Watkins, Fundamentals of matrix computations, volume 64, John Wiley & Sons, 2004.
+
+[84] E. Anderson, Z. Bai, C. Bischof, S. Blackford, J. Demmel, J. Dongarra, J. Du Croz, A. Greenbaum,
+S. Hammarling, A. McKenney, D. Sorensen, LAPACK Users’ Guide, Society for Industrial and Ap-
+plied Mathematics, Philadelphia, PA, third edition, 1999.
+
+[85] W. H. Press, Numerical recipes 3rd edition: The art of scientiﬁc computing, Cambridge university
+
+press, 2007.
+
+[86] D. G. Anderson, Journal of the ACM (JACM) 12 (1965) 547–560.
+
+[87] J. R. Shewchuk, An introduction to the conjugate gradient method without the agonizing pain, 1994.
+
+[88] X. Gonze, B. Amadon, P.-M. Anglade, J.-M. Beuken, F. Bottin, P. Boulanger, F. Bruneval, D. Caliste,
+
+R. Caracas, M. Cote, et al., Computer Physics Communications 180 (2009) 2582–2615.
+
+[89] X. Gonze, Zeitschrift für Kristallographie 220 (2005) 558–562.
+
+[90] T. Ono, K. Hirose, Phys. Rev. Lett. 82 (1999) 5016–5019.
+
+[91] V. Brázdová, D. R. Bowler, Atomistic computer simulations: a practical guide, John Wiley & Sons,
+
+2013.
+
+24
+
+[92] J. Mohan, Organic spectroscopy: principles and applications, CRC Press, 2004.
+
+[93] K.-P. Huber, Molecular spectra and molecular structure: IV. Constants of diatomic molecules, Springer
+
+Science & Business Media, 2013.
+
+[94] A. D. Becke, The Journal of Chemical Physics 97 (1992).
+
+[95] J. E. Pask, N. Sukumar, S. E. Mousavi, International Journal for Multiscale Computational Engineering
+
+10 (2012) 83–99.
+
+25
+
+Appendix
+
+A. Electrostatic correction for overlapping pseudocharge densities
+
+In ab-initio calculations, even if the pseudopotential approximation is employed, the repulsive energy is
+still calculated with the nuclei treated as point charges. The electrostatic formulation employed in this work
+does not make this distinction, resulting in disagreement with convention for overlapping pseudocharge
+densities. The correction to the repulsive energy which reestablishes agreement can be written as [55]
+
+Ec(R) =
+
+1
+
+2ZR3(cid:16)˜b(x, R) + b(x, R)(cid:17) Vc(x, R) dx +
+XJ=1ZR3
+
+˜bJ (x, RJ ) ˜VJ (x, RJ ) dx ,
+
+1
+2
+
+N
+
+−
+
+where Vc(x, R) is the solution of the Poisson equation
+
+1
+2
+
+N
+
+XJ=1ZR3
+
+bJ (x, RJ )VJ (x, RJ ) dx
+
+−1
+4π
+
+∇2Vc(x, R) = ˜b(x, R) − b(x, R) .
+
+(45)
+
+(46)
+
+Additionally, ˜b denotes the reference pseudocharge density, and ˜bJ represents the spherically symmetric and
+compactly supported reference charge density of the J th nucleus that generates the potential ˜VJ , i.e.,
+
+˜b(x, R) =
+
+N
+
+XJ=1
+
+˜bJ (x, RJ ) ,
+
+˜bJ (x, RJ ) = −
+
+1
+4π
+
+∇2 ˜VJ (x, RJ ) ,
+
+ZR3
+
+˜bJ (x, RJ ) dx = ZJ .
+
+(47)
+
+The discrete form of the repulsive energy correction is obtained by approximating the integrals in Eqn. 45
+using the integration rule in Eqn. 22:
+
+Eh
+
+c =
+
+h3
+
+1
+2
+
+n1
+
+n2
+
+Xi=1
+
+Xj=1
+
+n3
+
+Xk=1 (˜b(i,j,k) + b(i,j,k))V (i,j,k)
+
+c
+
++
+
+N
+
+XJ=1
+
+b(i,j,k)
+J
+
+V (i,j,k)
+J
+
+−
+
+˜b(i,j,k)
+J
+
+˜V (i,j,k)
+J
+
+! ,
+
+N
+
+XJ=1
+
+(48)
+
+where V (i,j,k)
+tion’ technique described in Section 3.3.
+
+c
+
+is obtained by solving Eqn. 46 using the truncated multipole expansion based ‘charge correc-
+
+The correction in the atomic forces arising from the overlapping pseudocharges can be written as [55]
+
+fJ,c(R) =
+
+1
+
+2ZR3(cid:20)∇˜bJ (x, RJ )(cid:16)Vc(x, R) − ˜VJ (x, RJ )(cid:17) + ∇bJ (x, RJ ) (Vc(x, R) + VJ (x, RJ ))
+
++ (cid:16)∇ ˜VJ (x, RJ ) − ∇VJ (x, RJ )(cid:17)(cid:16)˜b(x, R) + b(x, R)(cid:17) + bJ (x, RJ )∇VJ (x, RJ )
+− ˜bJ (x, RJ )∇ ˜VJ (x, RJ )(cid:21) dx ,
+
+(49)
+
+whose discrete form is
+n1
+
+n2
+
+n3
+
+f h
+J,c =
+
+c
+
+1
+2
+
+h3
+
+Xi=1
+
+Xj=1
++∇h( ˜VJ − VJ )(cid:12)(cid:12)
+
+− ˜V (i,j,k)
+
+(i,j,k)(cid:16)V (i,j,k)
+
+Xk=1(cid:18)∇h˜b(cid:12)(cid:12)
+(i,j,k)(cid:16)˜b(i,j,k) + b(i,j,k)(cid:17) + b(i,j,k)
+
+(cid:17) + ∇hbJ(cid:12)(cid:12)
+J ∇hVJ(cid:12)(cid:12)
+
+J
+
+26
+
+(i,j,k)(cid:16)V (i,j,k)
+
+c
+
++ V (i,j,k)
+
+J
+
+(cid:17)
+
+(i,j,k) − ˜b(i,j,k)
+
+J
+
+(i,j,k)(cid:19) . (50)
+
+∇h ˜VJ(cid:12)(cid:12)
+
+We choose ˜V to be the potential that has previously been employed for generating neutralizing densities in
+all-electron calculations [95].
+
+It is worth noting that it is indeed possible to correct for the error in repulsive energy and the corre-
+sponding force by only considering the pseudocharges that overlap. However, this requires the creation of
+neighbor lists, which need to be updated at every relaxation step. In SPARC, we employ the corrections in
+Eqns. 48 and 50 because of their simplicity and accuracy in the context of our electrostatic formulation, and
+their efﬁciency in the setting of scalable high performance computing.
+
+B. Pseudopotential parameters
+
+In Table 4, we list the cutoff radii (rc
+
+J ) used for generating the different angular momentum components
+within the Troullier-Martins pseudopotential. We choose the l = 0 pseudopotential component as local in
+all the simulations.
+
+Atom type
+
+H
+C
+N
+O
+Si
+Pt
+Au
+
+Radial cutoff (Bohr)
+l = 0
+l = 2
+1.25
+1.50
+1.50
+1.45
+1.80
+2.45
+2.60
+
+−
+1.54
+1.50
+1.45
+1.80
+2.45
+2.60
+
+l = 1
+
+−
+−
+−
+−
+1.80
+2.45
+2.60
+
+Table 4: Cutoff radii for non-local projectors within the Troullier-Martins pseudopotential.
+
+C. Properties of the discrete pseudocharge density
+
+J centered at RJ , where rc
+
+The continuous pseudocharge density for the atom positioned at RJ has compact support in a sphere
+of radius rc
+J is the cutoff radius for the local component of the pseudopotential.
+Though the corresponding discrete pseudocharge density has inﬁnite extent, it still possesses exponential
+decay. This is evident from Fig. 8, where we plot the normalized error in the net enclosed charge as a
+function of the pseudocharge radius rb
+J for a mesh-size of h = 0.5 Bohr. It is clear that a suitable ﬁnite
+truncation radius can indeed be chosen such that there is no signiﬁcant loss of accuracy.
+
+27
+
+r
+o
+r
+r
+E
+
+100
+
+10-2
+
+10-4
+
+10-6
+
+10-8
+
+10-10
+
+2
+
+H
+O
+Si
+Pt
+Au
+
+7
+
+3
+6
+Pseudocharge radius (Bohr)
+
+4
+
+5
+
+Figure 8: Normalized error in the net enclosed charge as a function of pseudocharge radius. The results for
+carbon and nitrogen are identical to oxygen.
+
+In this work, we choose the truncation radius rb
+
+satisﬁed to within a tolerance of εb = 10−8. In Fig. 9, we plot the rb
+accuracy as a function of mesh-size. It is clear that as the mesh becomes ﬁner, rb
+rb
+J → rc
+chosen to be a multiple of the mesh size h in SPARC.
+
+J for each pseudocharge density such that Eqn. 26 is
+J required to achieve this desired
+J becomes smaller, with
+J is
+
+J as h → 0. The slight non-monotonicity of the curves plotted in Fig. 9 is due to the fact that rb
+
+10.0
+
+ 9.0
+
+ 8.0
+
+ 7.0
+
+ 6.0
+
+ 5.0
+
+ 4.0
+
+)
+r
+h
+o
+B
+(
+
+s
+u
+
+i
+
+d
+a
+r
+
+e
+g
+r
+a
+h
+c
+o
+d
+u
+e
+s
+P
+
+ 3.0
+
+1.0
+
+H
+O
+Si
+Pt
+Au
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+Mesh size (Bohr)
+
+Figure 9: Variation of pseudocharge radius as a function of mesh spacing. The results for carbon and
+nitrogen are identical to oxygen.
+
+28
+
+

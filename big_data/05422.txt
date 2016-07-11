@@ -1,0 +1,2025 @@
+Set Containment Join Revisited
+
+Panagiotis Bouros · Nikos Mamoulis ·
+Shen Ge · Manolis Terrovitis
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+7
+1
+
+ 
+ 
+]
+
+B
+D
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+2
+2
+4
+5
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Abstract Given two collections of set objects R and S, the R (cid:111)(cid:110)⊆ S set con-
+tainment join returns all object pairs (r, s) ∈ R × S such that r ⊆ s. Besides
+being a basic operator in all modern data management systems with a wide range
+of applications, the join can be used to evaluate complex SQL queries based on
+relational division and as a module of data mining algorithms. The state-of-the-
+art algorithm for set containment joins (PRETTI) builds an inverted index on the
+right-hand collection S and a preﬁx tree on the left-hand collection R that groups
+set objects with common preﬁxes and thus, avoids redundant processing. In this
+paper, we present a framework which improves PRETTI in two directions. First, we
+limit the preﬁx tree construction by proposing an adaptive methodology based on
+a cost model; this way, we can greatly reduce the space and time cost of the join.
+Second, we partition the objects of each collection based on their ﬁrst contained
+item, assuming that the set objects are internally sorted. We show that we can
+process the partitions and evaluate the join while building the preﬁx tree and the
+inverted index progressively. This allows us to signiﬁcantly reduce not only the join
+cost, but also the maximum memory requirements during the join. An experimen-
+tal evaluation using both real and synthetic datasets shows that our framework
+outperforms PRETTI by a wide margin.
+
+Keywords Set-valued data · containment join · query processing · inverted
+index · preﬁx tree
+
+To appear at the Knowledge and Information Systems Journal (KAIS).
+
+Panagiotis Bouros
+Department of Computer Science, Aarhus University, Denmark
+E-mail: pbour@cs.au.dk
+N. Mamoulis · S. Ge
+Department of Computer Science, The University of Hong Kong, Hong Kong SAR, China
+E-mail: {nikos,sge}@cs.hku.hk
+M. Terrovitis
+Institute for the Management of Information Systems, Research Center “Athena”, Greece
+E-mail: mter@imis.athena-innovation.gr
+
+2
+
+1 Introduction
+
+P. Bouros et al.
+
+Sets are ubiquitous in computer science and most importantly in the ﬁeld of
+data management; they model among others transactions and scientiﬁc data, click
+streams and Web search data, text. Contemporary data management systems al-
+low the deﬁnition of set-valued (or multi-valued) data attributes and support op-
+erations such as containment queries [1, 23, 37, 38, 42]. Joins are also extended to
+include predicates on sets (containment, similarity, equality, etc.) [21]. In this pa-
+per, we focus on the eﬃcient evaluation of an important join operator: the set
+containment join. Formally, let R, S be two collections of set objects, the R (cid:111)(cid:110)⊆ S
+set containment join returns all pairs of objects (r, s) ∈ R × S such that r ⊆ s.
+Application examples/scenarios. Set containment joins ﬁnd application in a
+wide range of domains for knowledge and data management. In decision support
+scenarios, the join is employed to identify resources that match a set of preferences
+or qualiﬁcations, e.g., on real estate or job agencies. Consider a recruitment agency
+which besides publishing job-oﬀers also performs a ﬁrst level ﬁltering of the can-
+didates. The agency retains a collection of job-oﬀers R where an object r contains
+the set of required skills for each job, and a collection of job-seekers S with s cap-
+turing the skills of each candidate. The R (cid:111)(cid:110)⊆ S join returns all pairs of jobs and
+qualifying candidates for them which the agency then forwards to job-oﬀerers for
+making the ﬁnal decision. Containment joins can also support critical operations in
+data warehousing. For instance, the join can be used to compare diﬀerent versions
+of set-valued records for entities that evolve over time (e.g., sets of products in the
+inventories of all departments in a company). By identifying records that subsume
+each other (i.e., a set containment join between two versions), the evolution of the
+data is monitored and possibly hidden correlations and anomalies are discovered.
+In the core of traditional database systems and data engineering, set contain-
+ment joins can be employed to evaluate complex SQL queries based on division
+[13, 32]. Consider for example Figure 1 which shows two relational tables. The ﬁrst
+table shows students and the courses they have passed, while the second table
+shows the required courses to be taken and passed in order for a student to ac-
+quire a skill. For example, Maria has passed Operating systems and Programming.
+As the courses required for a Systems Programming skill are Operating systems
+and Programming, it can be said that Maria has acquired this skill. Consider the
+query “for each student ﬁnd the skills s/he has acquired” expressed in SQL below:
+
+select P1.Student, R1.Skill
+from Passes as P1, Requires as R1
+where not exists (select R2.Course
+
+from Requires as R2
+where R1.Skill = R2.Skill
+and not exists (select P2.Course
+
+from Passes as P2
+where P2.Student=P1.Student
+and P2.Course=R2.Course));
+
+It is not hard to see that this query is in fact a set containment join between tables
+Requires and Passes, considering each skill and student as the set of courses they
+require or have passed, respectively. This example demonstrates the usefulness of
+set containment joins even in classic databases with relations in 1NF.
+
+Set Containment Join Revisited
+
+3
+
+Student Course
+
+John
+Peter
+Maria
+Peter
+John
+Maria
+Peter
+
+Algorithms
+Databases
+Op. Systems
+Programming
+Databases
+Programming
+Op. Systems
+
+Skill
+DBA
+
+DBWeb
+DBWeb
+
+Course
+Databases
+Databases
+Programming
+Programming
+
+Sys. Prog.
+Sys. Prog. Op. Systems
+
+(a) table Passes
+
+(b) table Requires
+
+Fig. 1 Example of relational division based on set containment join: “for each student ﬁnd
+the skills s/he has acquired”
+
+In the context of data mining, containment join can act as a module during
+frequent itemset mining [31]. Consider the classic Apriori algorithm [2] which is
+well-known for its generality and adaptiveness to mining problems in most data
+domains; besides, studies like [43] report that Apriori can be faster than FP-
+growth-like algorithms for certain support threshold ranges and datasets. At each
+level, the Apriori algorithm (i) generates a set of candidate frequent itemsets (hav-
+ing speciﬁc cardinality) and (ii) counts their support in the database. Candidates
+veriﬁcation (i.e., step (ii)), which is typically more expensive than candidates gen-
+eration (i.e., step (i)), can be enhanced by applying a set containment join between
+the collection of candidates and the collection of database transactions. The diﬀer-
+ence is that we do not output the qualifying pairs, but instead count the number
+of pairs where each candidate participates (i.e., a join followed by aggregation).
+
+Motivation. The above examples highlight not only the range of applications for
+set containment join but also the importance of optimizing its evaluation. Even
+though this operation received signiﬁcant attention in the past with a number of
+algorithms proposed being either signature [21, 28, 29, 30] or inverted index based
+[24, 27], to our knowledge, since then, there have not been any new techniques that
+improve the state-of-the-art algorithm PRETTI [24]. PRETTI evaluates the join by
+employing an inverted index IS on the right-hand collection S and a preﬁx tree
+TR on the left-hand collection R that groups set objects with common preﬁxes
+in order to avoid redundant processing. The experiment analysis in [24] showed
+that PRETTI outperforms previous inverted index-based [27] and signature-based
+methods [29, 30], but as we discuss in this paper, there is still a lot of room for
+improvement primarily due to the following two shortcomings of PRETTI. First, the
+preﬁx tree can be too expensive to build and store, especially if R contains sets of
+high cardinality or very long. Second, PRETTI completely traverses the preﬁx tree
+during join evaluation, which may be unnecessary, especially if the set of remaining
+candidates is small.
+
+Contributions. Initially, we tackle the aforementioned shortcomings of PRETTI
+by proposing an adaptive evaluation methodology. In brief, we avoid building the
+entire preﬁx tree TR on left-hand collection R which signiﬁcantly reduces the re-
+quirements in both space and indexing time. Under this limited preﬁx tree denoted
+by (cid:96)TR, the evaluation of set containment join becomes a two-phase procedure that
+involves (i) candidates generation by traversing the preﬁx tree, and (ii) candidates
+veriﬁcation. Then, we propose a cost model to switch on-the-ﬂy to candidates ver-
+
+4
+
+P. Bouros et al.
+
+iﬁcation if the cost of verifying the remaining join candidates in current subtree is
+expected to be lower than preﬁx-tree based evaluation, i.e., candidates generation.
+Next, we propose the Order and Partition Join (OPJ) paradigm which considers
+the items of each set object in a particular order (e.g., in decreasing order of their
+frequency in the objects of R ∪ S). Collection R and S are divided into partitions
+such that Ri (Si) contains all objects in R (S) for which the ﬁrst item is i. Then,
+for each item i in order, OPJ processes partitions Ri and Si by (i) updating inverted
+index IS to include all objects in Si and (ii) creating preﬁx tree TRi for partition
+Ri and joining it with IS. As the inverted index is incrementally built, its lists are
+initially shorter and the join is faster. Further, the overall memory requirements
+are reduced since each TRi
+is constructed and processed separately, but most
+importantly, it can be discarded right after joining it with IS.
+
+As an additional contribution of our study, we reveal that ordering the set
+items in increasing order of their frequency (in contrast with decreasing frequency
+proposed in [24]) in fact improves query performance. Although such an ordering
+may lead to a larger preﬁx tree (compared to PRETTI), it dramatically reduces the
+number of candidates during query processing and enables our adaptive technique
+to achieve high performance gains.
+
+We focus on main-memory evaluation of set containment joins (i.e., we optimize
+the main module of PRETTI, which joins two in-memory partitions); note that
+our solution is easily integrated in the block-based approaches of [24, 27]. The
+fact that we limit the size of the preﬁx tree and that we use the OPJ paradigm,
+allows our method to operate with larger partitions compared to PRETTI in an
+external-memory problem, thus making our overall improvements even higher. Our
+thorough experimental evaluation using real datasets of diﬀerent characteristics
+shows that our framework always outperforms PRETTI, being up to more than one
+order of magnitude times faster and saving at least 50% of memory.
+
+Outline. The rest of the paper is organized as follows. Section 2 describes in detail
+the state-of-the-art set containment join algorithm PRETTI. Our adaptive evalua-
+tion methodology and the OPJ novel join paradigm are presented in Sections 3 and
+4, respectively. Section 5 presents our experimental evaluation. Finally, Section 6
+reviews related work and Section 7 concludes the paper.
+
+2 Background on Set Containment Join: The PRETTI Algorithm
+
+In this section, we describe in detail the state-of-the-art method PRETTI [24] for
+computing the R (cid:46)(cid:47)⊆ S set containment join of two collections R and S. The
+method has the following key features:
+
+(i) The left-hand collection R is indexed by a preﬁx tree TR and the right-hand
+collection S by an inverted index IS. Both index structures are built on-
+the-ﬂy, which enables the generality of the algorithm (for example, it can be
+applied for arbitrary data partitions instead of entire collections, and/or on
+data produced by underlying operators without interesting orders).
+
+(ii) PRETTI traverses the preﬁx tree TR in a depth-ﬁrst manner. While following a
+path on the tree, the algorithm intersects the corresponding lists of inverted
+index IS. The join algorithm is identical to the one proposed in [27] (see
+Section 6); however, due to grouping the objects under TR, PRETTI performs
+the intersections for all sets in R with a common preﬁx only once.
+
+Set Containment Join Revisited
+
+5
+
+r1: {G, F, E, C, B}
+r2: {G, F, D, B}
+r3: {G, D, A}
+r4: {F, D, C, B}
+r5: {G, F, E}
+r6: {E, C}
+r7: {G, F, E}
+
+s1: {D, C, A}
+s2: {G, F, E, D, C, A}
+s3: {D, B}
+s4: {G, F, C, B}
+s5: {G, F, E, B}
+s6: {F, E, D, C, B}
+s7: {G, E, D, C, B}
+s8: {G, E, D, C, B}
+s9: {G, F, E, D}
+s10: {G, F, E, D}
+s11: {G, F}
+s12: {G, F, E}
+
+(a) left-hand collection R (b) right-hand collection S
+
+Fig. 2 Example of two collections R and S
+
+Algorithm 1: PRETTI(R, S)
+
+input : Collections R and S; every object r ∈ R is internally sorted such that the
+output: the set J of all object pairs (r, s) such that r ∈ R, s ∈ S and r ⊆ s
+
+most frequent item appears ﬁrst
+
+11 TR ← ContructPrefixTree(R);
+22 IS ← ConstructInvertedIndex(S);
+3 foreach child node c of the root in TR do
+4
+
+CL ← {s|s ∈ S};
+ProcessNode(c, CL, IS , J);
+
+5
+
+6 return J;
+
+7 Function ProcessNode(n, CL, IS , J)
+8 CL(cid:48) ← CL ∩ IS [n.item];
+9 foreach object r ∈ n.RL do
+
+foreach object s ∈ CL(cid:48) do
+
+J ← J ∪ (r, s);
+
+10
+
+11
+
+// Candidates list
+
+// List intersection
+
+12 foreach child node c of n do
+ProcessNode(c, CL(cid:48), IS , J);
+13
+
+// Recursion
+
+Algorithm 1 illustrates the pseudocode of PRETTI. During the initialization
+phase (Lines 1–2), PRETTI builds preﬁx tree TR and inverted index IS for input
+collections R and S, respectively. To construct TR, every object r in R is internally
+sorted, so that its items appear in decreasing order of their frequency in R (this
+ordering is expected to achieve the highest path compression for TR).1 Each node
+n of preﬁx tree TR is a triple (item, path, RL) where n.item is an item, n.path is
+the sequence of the items in the nodes from the root of TR to n (including n.item),
+and ﬁnally, n.RL is the set of objects in R whose content is equal to n.path. For
+example, Figure 3(a) depicts preﬁx tree TR for collection R in Figure 2(a). Set
+n.RL is shown next to every node n unless it is empty. The inverted index IS on
+collection S associates each item i in the domain of S to a postings list denoted
+
+1 Our experiments show that an increasing frequency order is in practice more beneﬁcial.
+Yet, for the sake of readability, we present both PRETTI and our methodology considering a
+decreasing order.
+
+6
+
+P. Bouros et al.
+
+A: {s1,s2}
+B: {s3, s4,s5,s6,s7,s8}
+C: {s1,s2,s4,s6,s7,s8}
+D: {s1,s2,s3,s6,s7,s8,s9,s10}
+E: {s2,s5,s6,s7,s8,s9,s10,s12}
+F: {s2,s4,s5,s6,s9,s10,s11,s12}
+G: {s2,s4,s5,s7,s8,s9,s10,s11,s12}
+
+(a) preﬁx tree TR
+
+(b) inverted index IS
+
+Fig. 3 Indices of PRETTI for the collections in Figure 2
+
+by IS[i]. The IS[i] postings list has an entry for every object s ∈ S that contains
+item i. Figure 3(b) pictures inverted index IS for collection S in Figure 2(b).
+
+The second phase of the algorithm involves the computation of the join result
+set J (Lines 3–5). PRETTI traverses the subtree rooted at every child node c of TR’s
+root by recursively calling the ProcessNode function. For a node n, ProcessNode
+receives as input from its parent node p in TR, a candidates list CL. List CL
+includes all objects s ∈ S that contain every item in p.path, i.e., p.path ⊆ s. Note
+that for every child of the root in TR, CL = S. Next, ProcessNode intersects
+CL with inverted list IS[n.item] to ﬁnd the objects in S that contain n.path
+and stores them in CL(cid:48) (Line 8). At this point, every pair of objects in n.RL ×
+CL(cid:48) is guaranteed to be a join result (Lines 9–11). Finally, the algorithm calls
+ProcessNode for every child node of n (Line 12–13).
+
+Example 1 We demonstrate PRETTI for the set containment join of collections R
+and S in Figure 2. The algorithm constructs preﬁx tree TR and inverted index
+IS shown in Figures 3(a) and 3(b), respectively. To construct TR note that the
+items inside every object r ∈ R are internally sorted in decreasing order of global
+item frequency in R (this is not necessary for the objects in S). First, PRETTI
+traverses the leftmost subtree of TR under the node labeled by item G. Considering
+paths (cid:104)/, G(cid:105) and (cid:104)/, G, F(cid:105), the algorithm intersects candidates list CL (initially
+containing every object in S, i.e., {s1, . . . , s12}) ﬁrst with IS[G] and then with
+IS[F ], and produces candidates list {s2,s4,s5,s9, s10,s11,s12}, i.e., the objects in S
+that contain both G and F . The RL lists of the nodes examined so far are empty and
+thus, no result pair is reported. Next, path (cid:104)/, G, F, E(cid:105) is considered where CL is
+intersected with IS[E] producing CL(cid:48) = {s2,s5,s9,s10,s12}. At current node, RL =
+{r5,r7}, and thus, PRETTI reports result pairs (r5, s2), (r5, s5), (r5, s9), (r5, s10),
+(r5, s12), (r7, s2), (r7, s5), (r7, s9), (r7, s10), (r7, s12). The algorithm proceeds in
+this manner to examine the rest of the preﬁx tree nodes performing in total 15 list
+(cid:4)
+intersections. The result of the join contains 16 pairs of objects.
+
+Finally, to deal with the case where the available main memory is not suﬃcient
+for computing the entire set containment join of the input collections, a partition-
+
+GGSet Containment Join Revisited
+
+7
+
+based join strategy was also proposed in [24]. Particularly, the input collections R
+and S are horizontally partitioned so that the preﬁx tree and the inverted index for
+each pair of partitions (Ri, Sj) from R and S, respectively, ﬁt in memory. Then, in
+a nested-loop fashion, each partition Ri is joined in memory with every partition
+Sj in S invoking PRETTI(Ri, Sj).
+
+3 An Adaptive Methodology
+
+By employing a preﬁx tree on the left-hand collection R, PRETTI avoids redundant
+intersections and thus outperforms previous methods that used only inverted in-
+dices, e.g., [27]. However, we observe two important shortcomings of the PRETTI
+algorithm. First, the cost of building and storing the preﬁx tree on R can be high
+especially if R contains sets of high cardinality. This raises a challenge when the
+available memory is limited which is only partially addressed by the partition-
+based join strategy in [24]. Second, after a candidates list CL becomes short,
+continuing the traversal of the preﬁx tree to obtain the join results for CL may in-
+cur many unnecessary in practice inverted list intersections. This section presents
+an adaptive methodology which builds upon and improves PRETTI. In Section 3.1
+we primarily target the ﬁrst shortcoming of PRETTI proposing the LIMIT algo-
+rithm, while in Section 3.2 we propose an extension to LIMIT, termed LIMIT+,
+that additionally deals with the second shortcoming.
+
+3.1 The LIMIT Algorithm
+
+To deal with the high building and storage cost of the preﬁx tree TR, [24] suggests
+to partition R, as discussed in the previous section. Instead, we propose to build
+TR only up to a predeﬁned maximum depth (cid:96), called limit. Hence, computing set
+containment join becomes a two-phase process that involves a candidate generation
+and a veriﬁcation stage; for every candidate pair (r, s) with |r| > (cid:96) we need to
+compare the suﬃxes of objects r and s beyond (cid:96) in order to determine whether
+r ⊆ s. This approach is adopted by the LIMIT algorithm.
+
+Algorithm 2 illustrates the pseudocode of LIMIT. Compared to PRETTI (Al-
+gorithm 1), LIMIT diﬀers in two ways. First in Line 1, LIMIT constructs limited
+preﬁx tree (cid:96)TR on the left-hand collection R w.r.t. limit (cid:96). The (cid:96)TR preﬁx tree
+has almost identical structure to unlimited TR built by PRETTI except that the
+n.RL list of a leaf node n contains every object r ∈ R with r ⊇ n.path instead
+of r = n.path. Figures 4(a) and (b) illustrate the limited versions of the preﬁx
+tree in Figure 3(b) for (cid:96) = 2 and (cid:96) = 3, respectively. Second, the ProcessNode
+function distinguishes between two cases of objects in n.RL (Lines 11–14). If, for
+a object r ∈ n.RL, |r| ≤ (cid:96) holds, then r = n.path and, similar to PRETTI, pair
+(r, s) is guaranteed to be part of the join result J (Line 12). Otherwise, r ⊃ n.path
+holds and ProcessNode invokes the Verify function which compares the suﬃxes
+of objects r and s beyond (cid:96) (Line 14). Intuitively, the latter case arises only for
+leaf nodes according to the deﬁnition of the limited preﬁx tree. To achieve a low
+veriﬁcation cost, the objects of both R and S collections are internally sorted, i.e.,
+the items appear in decreasing order of their frequency in R ∪ S, which enables
+Verify to operate in a merge-sort manner.
+
+8
+
+P. Bouros et al.
+
+Algorithm 2: LIMIT(R, S, (cid:96))
+
+input : Collections R and S, limit (cid:96); every object r∈ R and s∈ S is internally sorted
+output: the set J of all object pairs (r, s) such that r ∈ R, s ∈ S and r ⊆ s
+
+such that the most frequent item in R ∪ S appears ﬁrst
+
+// Candidates list
+
+// List intersection
+
+// Compare object suffixes
+
+// Recursion
+
+11 (cid:96)TR ← ContructPrefixTree(R, (cid:96));
+22 IS ← ConstructInvertedIndex(S);
+3 foreach child node c of the root in TR do
+4
+
+CL ← {s|s ∈ S};
+ProcessNode(c, (cid:96), CL, IS , J);
+
+5
+
+6 return J;
+
+7 Function ProcessNode(n, (cid:96), CL, IS , J)
+8 CL(cid:48) ← CL ∩ IS [n.item];
+9 foreach object s ∈ CL(cid:48) do
+
+foreach object r ∈ n.RL do
+
+10
+
+11
+
+12
+
+13
+
+14
+
+if |r| ≤ (cid:96) then
+
+J ← J ∪ (r, s);
+
+else
+
+Verify(r, s, (cid:96), J);
+
+15 foreach child node c of n do
+16
+
+ProcessNode(c, (cid:96), CL(cid:48), IS , J);
+
+(a) (cid:96) = 2
+
+(b) (cid:96) = 3
+
+Fig. 4 Limited preﬁx tree (cid:96)TR for collection R in Figure 2
+
+Example 2 We demonstrate LIMIT using collections R and S in Figure 2; in con-
+trast to PRETTI and Example 1, the objects of both collections are internally sorted.
+Consider ﬁrst the case of (cid:96) = 2. LIMIT constructs limited preﬁx tree (cid:96)TR shown in
+Figure 4(a) for collection R in Figure 2(a), and inverted index IS in Figure 3(b).
+Then, similar to PRETTI, it traverses (cid:96)TR. When considering path (cid:104)/, G, F(cid:105), can-
+didates list CL(cid:48) = {s2,s4,s5,s9,s10, s11,s12} is produced. The RL = {r1,r2,r5,r7}
+set of current node (F ) is non-empty and thus, the algorithm examines every pair
+of objects from RL × CL(cid:48) to report join results. As all objects in RL are of length
+larger than limit (cid:96) = 2, LIMIT compares the suﬃxes beyond length (cid:96) = 2 of all
+candidates by calling Verify, and ﬁnally, reports results (r5, s2), (r5, s5), (r5, s9),
+(r5, s10), (r5, s12), (r7, s2), (r7, s5), (r7, s9), (r7, s10), (r7, s12). At the next steps,
+the algorithm proceeds in a similar way to examine the rest of the preﬁx tree nodes
+performing 4 list intersections and verifying 37 candidate pairs by comparing their
+
+GGGGSet Containment Join Revisited
+
+9
+
+suﬃxes. Finally, if (cid:96) = 3 LIMIT traverses similarly preﬁx tree (cid:96)TR in Figure 4(b)
+performing 8 this time list intersections but verifying only 10 candidate object pairs
+(cid:4)
+by comparing their suﬃxes.
+
+The advantage of LIMIT over PRETTI and the partition-based join strategy
+of [24] is two-fold. First, building the preﬁx tree up to (cid:96) is faster than building
+the entire tree, but most importantly, with (cid:96), the space needed to store the tree
+in main memory is reduced. If the unlimited TR does not ﬁt in memory, PRETTI
+would partition R and construct a separate (memory-based) TRi for each partition
+Ri; therefore, two objects ri, rj of R that have the same (cid:96)-preﬁx but belong to
+diﬀerent partitions Ri and Rj, would be considered separately, which increases the
+evaluation cost of the join. In other words, reducing the size of TR to ﬁt in memory
+can have high impact on performance. In contrast, LIMIT guarantees that, for every
+path of length up to (cid:96) on limited (cid:96)TR, all redundant intersections are avoided
+similar to utilizing the unlimited preﬁx tree. Finally, an interesting aftermath of
+employing (cid:96) for set containment joins is related to the second shortcoming of
+PRETTI. For instance, with (cid:96) = 3 and preﬁx tree (cid:96)TR in Figure 3(b), LIMIT will
+verify object r1 against CL ={s2,s5,s9,s10,s12} and quickly determine that it is not
+part of the join result without performing two additional inverted list intersections.
+An issue still open involves how limit (cid:96) is deﬁned and most importantly,
+whether there is an optimal value of (cid:96) that balances the beneﬁts of using the
+limited preﬁx tree over the cost of including a veriﬁcation stage. Determining the
+optimal value for (cid:96) is a time-consuming task which involves more than an extra
+pass over the input collections. In speciﬁc, it requires computing expensive statis-
+tics with a process reminiscent to frequent itemsets mining; note that this process
+must take place online before building (cid:96)TR. Instead, in Section 5.4 we discuss and
+evaluate four strategies for estimating a good (cid:96) value based on simple and cheap-
+to-compute statistics. Our analysis shows that typically these strategies tend to
+overestimate the optimal (cid:96). Besides, we also observe that the optimal (cid:96) value may
+in fact vary between diﬀerent subtrees of (cid:96)TR depending on the number of objects
+stored inside the nodes. In view of this, we next propose an adaptive extension
+to LIMIT which employs an ad-hoc limit (cid:96) for each path of (cid:96)TR by dynamically
+choosing between list intersection and veriﬁcation of the objects under the current
+subtree.
+
+3.2 The LIMIT+ Algorithm
+
+As Example 2 shows, using limit (cid:96) for set containment joins introduces an interest-
+ing trade-oﬀ between list intersection and candidates veriﬁcation which is directly
+related to the second shortcoming of the PRETTI algorithm. Speciﬁcally, as (cid:96) in-
+creases and LIMIT traverses longer paths of (cid:96)TR, candidates lists CL shorten due
+to the additional list intersections performed. Consequently, the number of object
+pairs to be veriﬁed by accessing their suﬃxes also reduces. However, from some
+point on, the number of candidates in CL no longer signiﬁcantly reduces or, even
+worst, it remains unchanged; therefore, performing additional list intersections be-
+comes a bottleneck. Similarly, if for a node n, CL is already too short, verifying
+the candidate pairs between the contents of CL and the objects contained under
+the subtree rooted at n can be faster than performing additional list intersections.
+
+10
+
+P. Bouros et al.
+
+Algorithm 3: LIMIT+(R, S, (cid:96))
+
+input : Collections R and S, limit (cid:96); every object r∈ R and s∈ S is internally sorted
+output: the set J of all object pairs (r, s) such that r ∈ R, s ∈ S and r ⊆ s
+
+such that the most frequent item in R ∪ S appears ﬁrst
+
+11 (cid:96)TR ← ContructPrefixTree(R, (cid:96));
+22 IS ← ConstructInvertedIndex(S);
+3 foreach child node c of the root in TR do
+4
+
+CL ← {s|s ∈ S};
+ProcessNode(c, (cid:96), CL, IS , J);
+
+5
+
+6 return J;
+
+7 Function ProcessNode(n, (cid:96), CL, IS , J)
+8 if ContinueAsLIMIT(n, CL, IS ) then
+9
+
+CL(cid:48) ← CL ∩ IS [n.item];
+foreach object s ∈ CL(cid:48) do
+
+foreach object r ∈ n.RL do
+
+if |r| ≤ (cid:96) then
+
+J ← J ∪ (r, s);
+
+else
+
+Verify(r, s, (cid:96), J);
+
+foreach child node c of n do
+
+ProcessNode(c, (cid:96), CL(cid:48), IS , J);
+
+18 else
+19
+
+foreach object s ∈ CL do
+foreach object r ∈ (cid:96)T n
+Verify(r, s, (cid:96)−1, J);
+
+R do
+
+10
+
+11
+
+12
+
+13
+
+14
+
+15
+
+16
+
+17
+
+20
+
+21
+
+// Candidates list
+
+// List intersection
+
+// Compare object suffixes
+
+// Recursion
+
+// (cid:96)T n
+
+R :subtree under n
+// Compare object suffixes
+
+The LIMIT algorithm addresses only a few of the cases when candidates ver-
+iﬁcation is preferred over list intersection, for instance the case of object r1 in
+Figure 2(a) with limit (cid:96) = 3. Due to global limit (cid:96), the “blind” approach of LIMIT
+processes every path of the preﬁx tree in the same manner. To tackle this prob-
+lem, we devise an adaptive strategy of processing (cid:96)TR adopted by the LIMIT+
+algorithm. Apart from global limit (cid:96), LIMIT+ also employs a dynamically deter-
+mined local limit (cid:96)p for each path p of the preﬁx tree. The basic idea behind this
+process is to decide on-the-ﬂy for every node n of the preﬁx tree between:
+(A) performing the CL(cid:48) = CL ∩ IS[n.item] intersection, reporting the pairs in
+n.RL× CL(cid:48), and then, processing the descendant nodes of n in a similar way,
+or
+
+(B) stopping the traversal of the current path and verifying the candidates be-
+tween the objects of R contained in the subtree rooted at n denoted by (cid:96)T n
+R
+and those in CL, i.e., all candidate pairs in (cid:96)T n
+
+R × CL.
+
+In the ﬁrst case, LIMIT+ would operate exactly as LIMIT does for the internal
+nodes of (cid:96)TR while in the second case, it would treat node n as a leaf node but
+without performing the corresponding list intersection. Therefore, in practice, a
+local limit for current path n.path is employed by LIMIT+.
+
+Algorithm 3 illustrates the pseudocode of LIMIT+. Compared to LIMIT (Algo-
+rithm 2), LIMIT+ only diﬀers on how a node of (cid:96)TR is processed. Speciﬁcally, given
+a node n, ProcessNode calls the ContinueAsLIMIT function (Line 8) to determine
+
+Set Containment Join Revisited
+
+11
+
+(a) strategy for CA
+
+(b) strategy for CB
+
+Fig. 5 The two strategies considered by LIMIT+
+
+whether the algorithm will continue processing n similar to LIMIT (Lines 10–17),
+or it will stop traversing current path n.path and start verifying all candidates in
+R × CL invoking the Verify function (Lines 18–21). In the latter case, notice
+(cid:96)T n
+that for every verifying pair (r, s) with r ∈ (cid:96)T n
+R × CL and s ∈ CL, the algorithm
+accesses the suﬃxes of r and s beyond length (cid:96)−1 and not (cid:96) as the CL∩IS[n.item]
+intersection has not taken place for current node n (Line 21).
+
+Next, we elaborate on ContinueAsLIMIT. Intuitively, in order to determine how
+LIMIT+ will process current node n the function has to ﬁrst estimate and then
+compare the computational costs CA and CB of the two alternative strategies: (A)
+processing current node and its descendants in the subtree (cid:96)T n
+R similar to LIMIT,
+R × CL. In practice, it is not possible to estimate
+or (B) verifying candidates in (cid:96)T n
+the cost of processing current node n and its descendants in (cid:96)T n
+R similar to LIMIT
+since the involved intersections are not known in advance with the exception of
+CL ∩ IS[n.item]. Therefore, we estimate CA as the cost of computing the list
+intersection at current node n and, verifying, for each child node ci of n, the
+R and the objects in CL(cid:48).
+candidate pairs between all objects under subtree (cid:96)T ci
+Figure 5 illustrates the two alternative strategies, the costs of which are compared
+by ContinueAsLIMIT.
+We now discuss how costs CA and CB can be estimated. For this purpose, we
+ﬁrst break n.RL set into two parts: n.RL = n.RL=∪n.RL⊃, where n.RL= denotes
+the objects r in n.RL with r = n.path, while n.RL⊃ the objects with r ⊃ n.path.
+Note that according to the deﬁnition of limited preﬁx tree (cid:96)TR, n.RL = n.RL=
+holds for every internal node n, as n.RL⊃ = ∅. Second, we introduce the following
+cost functions to capture the computational cost of the three tasks involved in
+strategies (A) and (B):
+(i) List intersection. The cost of computing CL(cid:48) = CL∩ IS[n.item] in current
+node n, denoted by C∩, depends on the lengths of the involved lists and it is
+also related to the way list intersection is actually implemented. For instance,
+if list intersection is performed in a merge-sort manner, then C∩ is linear to
+the sum of the lists’ length, i.e., C∩ = α1 · |CL| + β1 · |IS[n.item]| + γ1.
+On the other hand, if the intersection is based on a binary search over the
+IS[n.item] list then C∩ = α2·|CL|·log2(|IS[n.item]|)+β2. Note that constants
+α1, α2, β1, β2 and γ1 can be approximated by executing list intersection
+for several inputs and then, employing regression analysis over the collected
+measurements.
+
+12
+
+P. Bouros et al.
+
+(ii) Direct output of results. Similar to PRETTI and LIMIT, after list intersec-
+tion CL(cid:48) = CL ∩ IS[n.item], every pair (r, s) with r ∈ n.RL and s ∈ CL(cid:48)
+such that r = n.path, i.e., r ∈ n.RL=, is guaranteed to be among the join
+results and it would be directly reported. The cost of this task, denoted
+by Cd, is linear to the number of object pairs to be reported, and thus,
+Cd = α3 ·|CL(cid:48)|·|n.RL=| + β3. Constants α3 and β3 can be approximated by
+regression analysis.
+
+(iii) Veriﬁcation. To determine whether an (r, s) pair is part of the join result
+Verify would compare their suﬃxes in a merge-sort manner. Under this, the
+veriﬁcation cost for each candidate pair is linear to the sum of their suﬃxes’
+length. Both alternative strategies considered by ContinueAsLIMIT involve
+verifying all candidate pairs between a subset of objects in R and a subset in
+S (candidates list CL or CL(cid:48)). Without loss of generality consider the case
+of strategy (A). In total, |(cid:96)T n
+R (cid:114) n.RL=| · |CL(cid:48)| candidates would be veriﬁed.
+R and of the objects in CL(cid:48),
+Considering the length sum of the objects in (cid:96)T n
+the total veriﬁcation cost for (A) is
+
+(|r| − (cid:96))
+
+(|s| − (cid:96)) + γ4
+
+Cv = α4 · |CL
+
++ β4 · |(cid:96)T n
+
+(cid:48)| · (cid:88)
+R (cid:114) n.RL=| · (cid:88)
+
+r∈{(cid:96)T n
+
+(cid:114)n.RL=}
+
+R
+
+s∈CL(cid:48)
+
+where |r| − (cid:96) (|s| − (cid:96)) equals the length of the suﬃx for a object r (s) with
+respect to limit (cid:96). Similar to the previous tasks, constants α4, β4 and γ4 can
+be approximated by regression analysis. On the other hand, to approximate
+s∈CL(cid:48) (|s| − (cid:96)), we adopt an independent
+assumption approach based on the frequency of the item contained in current
+node n. Under this, |CL(cid:48)| ≈ |CL| · |IS [n.item]|
+while the length sum of the
+|CL(cid:48)|
+|CL| ≈ |IS [n.item]|
+objects in CL(cid:48) can be estimated with respect to the
+s∈CL(cid:48) (|s| − (cid:96)) ≈ |IS [n.item]|
+|S|
+
+|CL(cid:48)| = |CL ∩ IS[n.item]| and (cid:80)
+crease ratio, hence, we have(cid:80)
+Finally, note that (cid:80)
+tics gathered while building preﬁx tree (cid:96)TR and that(cid:80)
+
+de-
+s∈CL (|s| − (cid:96)).
+(cid:114)n.RL=} (|r| − (cid:96)) can be computed using statis-
+s∈CL (|s| − (cid:96)) can be
+computed while performing the list intersection at the parent of current node
+n.
+
+·(cid:80)
+
+r∈{(cid:96)T n
+
+|S|
+
+|S|
+
+R
+
+With C∩, Cd, and Cv, the computational costs of the (A) and (B) strategies con-
+sidered by ContinueAsLIMIT are estimated by:
+(cid:48)
+CA = C∩(CL, IS[n.item]) + Cd(n.RL=, CL
+CB = Cv((cid:96)T n
+
+R (cid:114) n.RL=}, CL
+
+) + Cv({(cid:96)T n
+
+R, CL, (cid:96) − 1)
+
+, (cid:96))
+
+(cid:48)
+
+As intersection CL(cid:48) = CL∩ IS[n.item] is not computed in (B), candidates list CL
+and object suﬃxes beyond (cid:96) − 1 are considered by CB in place of CL(cid:48) and suﬃxes
+beyond (cid:96) considered by CA.
+
+Example 3 We illustrate the functionality of LIMIT+ using Example 2. Assuming
+(cid:96) = 3, LIMIT+ constructs preﬁx tree (cid:96)TR of Figure 4(b) and inverted index IS
+of Figure 3(b). First, the algorithm traverses the subtree of (cid:96)TR under the node
+labeled by item G. The computational cost of the alternative strategies for this
+
+Set Containment Join Revisited
+
+13
+
+node are as follows. CA involves the cost of computing CL(cid:48) = {s1, . . . , s12} ∩
+IS[G] = {s2, s4, s5, s7, s8, s9, s10, s11, s12} and based on the two child nodes, the
+cost of verifying all candidates in {r1, r2, r5, r7}×CL(cid:48) and {r3}×CL(cid:48); note that
+no direct join results exist as RL for current node is empty. On the other hand,
+CB captures the cost of verifying all candidates in {r1, r2, r3, r5, r7}× CL. Without
+loss of generality assume CA < CB. Hence, LIMIT+ processes current node (G)
+similar to LIMIT: path (cid:104)/, G, F(cid:105) and the node labeled by F are next considered.
+Assuming CA >CB for this node, LIMIT+ imposes a local limit equal to 2 and veriﬁes
+all candidates in {r1, r2, r5, r7}×CL with CL = {s2, s4, s5, s7, s8, s9, s10, s11, s12}
+(objects in S containing item G). Notice the resemblance to Example 2 for (cid:96) = 2
+with the exception that {s2, s4, s5, s7, s8, s9, s10, s11, s12} ∩ IS[F ] is not computed.
+(cid:4)
+
+4 A Novel Join Paradigm
+
+As discussed in Section 2, the join paradigm of PRETTI [24], which is also followed
+by LIMIT and LIMIT+, constructs the entire preﬁx tree TR (or (cid:96)TR) and the entire
+inverted index IS before joining them. However, we observe that the construction
+of TR and IS can be interleaved with the join process since for joining a set of
+objects from R that lie in a subtree of TR it is not necessary to have constructed
+the entire IS. For example, consider again the TR and IS indices of Figure 3. When
+performing the join for the nodes in the subtree rooted at node G, obviously, we
+need not have constructed the subtrees rooted at nodes F and E already. At the
+same time, only the objects from S that contain item G can be joined with each
+object in that subtree. Therefore, we only need a partially built IS which includes
+just these objects. In this section, we propose a new paradigm, termed Order and
+Partition Join (OPJ), which is based on this observation. OPJ operates as follows:
+
+(i) Assume that for each object (in either R or S), the items are considered
+in a certain order (i.e., in decreasing order of their frequency in R ∪ S). OPJ
+partitions the objects of each collection into groups based on their ﬁrst item.2
+Thus, for each item i, there is a partition Ri (Si) of R (S) that includes all
+objects r ∈ R (s ∈ S), for which the ﬁrst item is i. For example, partition
+RG of collection R in Figure 2(a) includes {r1, r2, r3, r5, r7}, while partition
+RE includes just r6. Due to the internal sorting of the objects, an object in
+Ri or Si includes i but does not include any item j, which comes before i
+in the order (e.g., r6 ∈ RE cannot contain G or F ). Then, OPJ initializes an
+empty inverted index IS for S.
+
+(ii) For each item i in order, OPJ creates a preﬁx tree TRi for partition Ri and
+updates IS to include all objects from partition Si. Then, TRi is joined with
+IS using PRETTI (or our algorithms LIMIT and LIMIT+). After the join, TRi
+is dumped from the memory and OPJ proceeds with the next item i + 1 in
+order to construct TRi+1 using Ri+1, update IS using Si+1 and join TRi+1
+with IS.
+
+OPJ has several advantages over the PRETTI join paradigm. First, the entire TR
+needs not be constructed and held in memory. For each item i the subtree of TR
+
+2 This is diﬀerent than the external-memory partitioning of the PRETTI paradigm, discussed
+
+at the end of Section 2.
+
+14
+
+P. Bouros et al.
+
+Algorithm 4: OPJ(R, S, (cid:96))
+
+input : Collections R and S, limit (cid:96); every Object r∈ R and s∈ S is internally sorted
+output: the set J of all Object pairs (r, s) such that r ∈ R, s ∈ S and r ⊆ s
+
+such that the most frequent item in R ∪ S appears ﬁrst
+
+// w.r.t. the first item in each Object
+
+11 Partition(S); Partition(R);
+22 IS ← ∅;
+3 foreach item i in decreasing frequency order do
+4
+
+(cid:96)TRi ← ContructPrefixTree(Ri, (cid:96));
+IS ← UpdateInvertedIndex(IS , Si);
+c ← child node of (cid:96)TRi ’s root;
+c.item = i
+CL ← Objects in S seen so far;
+ProcessNode(c, CL, IS , J, (cid:96));
+delete (cid:96)TRi ;
+
+5
+
+6
+
+7
+
+8
+
+9
+
+// (cid:96)TRi ’s root has a single child c with
+
+// Candidates list
+
+// PRETTI,LIMIT,LIMIT+
+
+10 return J;
+
+rooted at i (i.e., TRi ) is built, joined, and then removed from memory. Second,
+the inverted index IS is incrementally constructed, therefore TRi for each item i
+in order is joined with a smaller IS which (correctly) excludes objects of S having
+only items that come after i. Thus, the inverted lists of the partially constructed
+IS are shorter and the join is faster.3 Finally, the overall memory requirements of
+OPJ are much lower compared to PRETTI join paradigm as OPJ only keeps one TRi
+in memory at a time (instead of the entire TR).
+Algorithm 4 illustrates a high-level sketch of the OPJ paradigm. OPJ receives as
+input collections R and S, and limit (cid:96); for PRETTI (cid:96) = ∞ (i.e., (cid:96)TRi becomes TRi ).
+Initially, collections R and S are partitioned to put all objects having i as their
+ﬁrst item inside partitions Ri and Si, respectively (Line 1). Also, IS (the inverted
+index of S) is initialized (Line 2). Then, for each item i, OPJ computes the join
+results between objects from R having i as their ﬁrst item and objects from S
+having i or a previous item in order as their ﬁrst item (Lines 3–9). Speciﬁcally,
+for each item i in order, OPJ builds a (limited) preﬁx tree (cid:96)TRi using partition
+Ri, adds all objects of partition Si into IS, and ﬁnally joins (cid:96)TRi with IS using
+the methodology of PRETTI, LIMIT, or LIMIT+. Note that for each (cid:96)TRi the root
+has a single child c with c.item = i, because all objects in Ri have i as their
+ﬁrst item. Thus, OPJ has to invoke the ProcessNode function (of either PRETTI,
+LIMIT or LIMIT+) only for c. In addition, note that candidates list CL is initialized
+with only the objects in S accessed so far instead of all objects in S according to
+the PRETTI join paradigm; the examination order guarantees that the rest of the
+objects in S cannot be joined with the objects in R under node c.
+
+Example 4 We demonstrate OPJ on collections R and S in Figure 2. The items in
+decreasing frequency order over R ∪ S are G(14), F (13), E(12), D(11), C(9), B(9),
+A(3), resulting in the internally sorted objects shown in the ﬁgure. Without loss of
+generality, assume that the PRETTI algorithm is used to perform the join between
+each (cid:96)TRi and IS (i.e., (cid:96) = ∞ and (cid:96)TRi = TRi ). Initially, the objects are partitioned
+according to their ﬁrst item. The partitions for R are RG = {r1, r2, r3, r5, r7},
+RF ={r4}, and RE ={r6}; the partitions for S are shown in Figure 6(a). OPJ ﬁrst
+
+3 Note that OPJ and PRETTI perform the same number of list intersections; i.e., OPJ does not
+
+save list intersections, but makes them cheaper.
+
+Set Containment Join Revisited
+
+15
+
+SG
+
+s2: {G, F, E, D, C, A}
+s4: {G, F, C, B}
+s5: {G, F, E, B}
+s7: {G, E, D, C, B}
+s8: {G, E, D, C, B}
+s9: {G, F, E, D}
+s10: {G, F, E, D}
+s11: {G, F}
+s12: {G, F, E}
+
+SF
+
+s6: {F, E, D, C, B}
+
+s1: {D, C, A}
+s3: {D, B}
+
+SD
+
+A: {s2}
+B: {s4,s5,s7,s8}
+C: {s2,s4,s7,s8}
+D: {s2,s7,s8,s9,s10}
+E: {s2,s5,s7,s8,s9,s10,s12}
+F: {s2,s4,s5,s9,s10,s11,s12}
+G: {s2,s4,s5,s7,s8,s9,s10,s11,s12}
+
+B: {s4,s5,s6,s7,s8}
+C: {s2,s4,s6,s7,s8}
+D: {s2,s6,s7,s8,s9,s10}
+E: {s2,s5,s6,s7,s8,s9,s10,s12}
+F: {s2,s4,s5,s6,s9,s10,s11,s12}
+A: {s1,s2}
+B: {s3,s4,s5,s6,s7,s8}
+C: {s1,s2,s4,s6,s7,s8}
+D: {s1,s2,s3,s6,s7,s8,s9,s10}
+
+(a) Partitions of S
+
+(b) Updates in IS
+
+Fig. 6 Employing the OPJ join paradigm
+
+accesses partition RG and builds TRG , which is identical to the leftmost subtree of
+the unlimited TR in Figure 3(a). Then, OPJ updates the (initially empty) inverted
+index IS to include the objects of SG; the resulting IS is shown on the right of SG,
+at the top of Figure 6(b). After joining TRG with IS, TRG is deleted from memory,
+and the next item F in order is processed. OPJ builds TRF (which is identical to
+the 2nd subtree of TR in Figure 3(a)) and updates IS to include the objects in
+SF ; these updates are shown on the right of SF in Figure 6(b). Then, TRF is
+joined with IS, and OPJ proceeds to the next item E. In this case, TRE is built (the
+rightmost subtree of TR in Figure 3(a)), but IS is not updated as SE is empty.
+Still, TRE is joined with current IS. In the next round (item D), there is no join
+to be performed, because RD is empty. If there were additional partitions Ri to
+be processed, IS would have to be updated to include the objects in SD, as shown
+on the right of SD in Figure 6(b). However, since all objects from R have been
+(cid:4)
+processed, OPJ can terminate without processing SD.
+
+5 Experimental Evaluation
+
+In this section, we present an experimental evaluation of our methodology for set
+containment joins. Section 5.1 details the setup of our analysis. Section 5.2 inves-
+tigates the preferred global ordering of the items, while Section 5.3 demonstrates
+the advantage of the OPJ join paradigm. Section 5.4 shows how limit (cid:96) aﬀects the
+eﬃciency of our methodology and presents four strategies for estimating its op-
+timal value. Finally, Section 5.5 conducts a performance analysis of our methods
+against the state-of-the-art PRETTI [24].
+
+16
+
+P. Bouros et al.
+
+Table 1 Characteristics of real datasets
+
+characteristic
+Cardinality
+Domain size
+Avg object length
+Weighted avg
+object length
+Max object length
+File size (Mb)
+
+BMS
+515K
+1.6K
+
+63
+
+7
+
+164
+11
+
+FLICKR KOSARAK NETFLIX
+
+1.7M
+810K
+
+52
+
+10
+
+102
+76
+
+990K
+41K
+398
+
+9
+
+2497
+
+31
+
+480K
+18K
+1,557
+
+210
+
+17,653
+
+407
+
+Table 2 Characteristics of synthetic datasets
+
+characteristic
+Cardinality
+Domain size
+Weighted avg
+object length
+Zipﬁan
+distribution
+
+values
+
+default value
+
+ﬁle size (Gb)
+
+1M , 3M , 5M , 7M , 10M
+
+10K, 50K, 100K, 500K, 1M
+
+10, 30, 50, 70, 100
+
+0, 0.3, 0.5, 0.7, 1
+
+5M
+100K
+
+50
+
+0.5
+
+0.3, 0.8, 1.4, 1.9, 2.7
+1.1, 1.3, 1.4, 1.6, 1.6
+
+0.3, 0.8, 1.4, 1.9, 2.7
+
+1.4, 1.4, 1.4, 1.3, 1.1
+
+5.1 Setup
+
+Our experimental analysis involves both real and synthetic collections. Particu-
+larly, we use the following real datasets:
+
+– BMS is a collection of click-stream data from Blue Martini Software and KDD
+
+2000 cup [43].
+
+– FLICKR is a collection of photographs from Flickr website for the city of
+
+London [10]. Each object contains the union of “tags” and “title” elements.
+
+– KOSARAK is a collection of click-stream data from a hungarian on-line news
+
+portal available at http://ﬁmi.ua.ac.be/data/.
+
+– NETFLIX is a collection of user ratings on movie titles over a period of 7 years
+
+from the Netﬂix Prize and KDD 2007 cup.
+
+Table 1 summarizes the characteristics of the real datasets. BMS covers the case
+of small domain collections while FLICKR the case of datasets with very large
+domains. NETFLIX is a collection of extremely long objects. In addition, to study
+the scalability of the methods, we generated synthetic datasets with respect to
+(i) the collection cardinality, (ii) the domain size, (iii) the weighted average object
+length and (iv) the order of the Zipﬁan distribution for the item frequency. Table 2
+summarizes the characteristics of the synthetic collections. On each test, we vary
+one of the above parameters while the rest are set to their default values.
+
+Similar to [24] for set containment joins (and other works on set similarity joins
+[9, 41]), our experiments involve only self-joins, i.e., R = S (note, however, that
+our methods operate exactly as in case of non self-joins, i.e., they take as input two
+copies of the same dataset). The collections and the indexing structures used by all
+join methods are stored entirely in main memory; as discussed in the introduction
+we focus on the main module of the evaluation methods which joins two in-memory
+partitions, but our proposed methodology is easily integrated in the block-based
+
+Set Containment Join Revisited
+
+17
+
+approaches of [24, 27]. Further, we do not consider any compression techniques, as
+they are orthogonal to our methodology.
+
+To assess the performance of each method, we measure its response time, the
+total number of intersections performed and the total number of candidates; note
+that the response time includes both the indexing and joining cost of the method,
+and in case of the OPJ paradigm, also the cost of sorting and partitioning the inputs.
+Finally, all tested methods are written in C++ and the evaluation is carried out
+on an 3.6Ghz Intel Core i7 CPU with 64GB RAM running Debian Linux.
+
+5.2 Items Global Ordering
+
+The goal of the ﬁrst experiment is to determine the most appropriate ordering for
+the items inside an object. In practice, only the characteristics of preﬁx tree TR and
+how it is utilized are aﬀected by how we order the items inside each object (neither
+the size of inverted index IS nor the number of objects accessed from S depend
+on this ordering). Therefore, in this experiment, we only focus on the PRETTI join
+paradigm. In [24], to construct a compact preﬁx tree TR the items inside an object
+are arranged in decreasing order of their frequency. On the other hand, arranging
+the items in increasing frequency order allows for faster candidate pruning as the
+candidates list CL rapidly shrinks after a small number of list intersections. In
+other words, the ordering of the items aﬀects not only the building cost and the
+storage requirements of TR, but most importantly, the response time of the join
+method. In practice, we observe that the best ordering is also related to how the
+CL ∩ IS[n.item] list intersection is implemented. Although the problem of list
+intersection is out of scope of this paper per se, we implemented: (i) a merge-sort
+based approach, and (ii) a hybrid approach based on [4] that either adopts the
+merge-sort approach or binary searches every object of CL inside the IS[n.item]
+postings list. Table 3 conﬁrms our claim regarding the correlation between the
+global ordering of the items and the response time of the PRETTI join algorithm
+(note that the reported time involves both the indexing and the join phase of the
+method). Arranging the items in decreasing order of their frequency is generally
+better only if the merge-sort based approach is adopted for the list intersections,
+while in case of the hybrid approach, the objects should be arranged in increasing
+order; an exception arises for NETFLIX where adopting the increasing ordering
+is always more beneﬁcial because of its extremely long objects. In summary, the
+combination of the hybrid approach and the increasing frequency global ordering
+minimizes the response time of the PRETTI algorithm in all cases. Thus, for the rest
+of this analysis, we employ the hybrid approach for list intersection and arrange
+the items inside an object in the increasing order of their frequency. Note that
+for matters of reference and completion we also include the original version of
+[24] denoted by orgPRETTI corresponding to the Decreasing-Hybrid combination
+of Table 3.
+
+5.3 Employing the OPJ Join Paradigm
+
+Next, we investigate the advantage of OPJ (Section 4) over the PRETTI join paradigm
+of [24]. For this purpose we devise an extension to the PRETTI algorithm that fol-
+
+18
+
+P. Bouros et al.
+
+Table 3 Determining items global ordering, response time (sec) of the PRETTI algorithm
+
+Dataset
+
+BMS
+FLICKR
+KOSARAK
+NETFLIX
+
+Increasing
+
+Decreasing
+
+Merge-sort Hybrid Merge-sort Hybrid
+
+407
+1606
+1606
+18,399
+
+42
+30
+73
+504
+
+106
+187
+282
+
+71
+108
+136
+
+35,169
+
+14,051
+
+Table 4 Employing the OPJ join paradigm, response time (sec)
+
+Dataset
+
+orgPRETTI
+
+PRETTI
+
+BMS
+FLICKR
+KOSARAK
+NETFLIX
+
+71
+108
+136
+
+14,051
+
+42
+30
+73
+504
+
+PRETTI∗
+
+28
+20
+54
+391
+
+2.5×
+5.4×
+2.5×
+38.5×
+
+Improvement ratio over
+orgPRETTI
+
+PRETTI
+1.5×
+1.5×
+1.4×
+1.3×
+
+Table 5 Limit (cid:96) determined by each estimation strategy
+
+Dataset
+BMS
+FLICKR
+KOSARAK
+NETFLIX
+
+Optimal AV G W –AV G M DN F RQ
+
+2
+2
+4
+6
+
+63
+52
+398
+1,557
+
+7
+10
+9
+
+210
+
+4
+8
+3
+96
+
+4
+3
+5
+6
+
+lows OPJ, denoted by PRETTI∗. Table 4 reports the response time of the algorithms.
+The results experimentally prove the superiority of the OPJ paradigm; PRETTI∗ is
+from 1.3 to 1.5 times faster than PRETTI. Recall at this point that compared to the
+algorithm discussed in [24], our version of PRETTI arranges the items in increasing
+order of their frequency as discussed in Section 5.2; thus, the overall improvement
+of PRETTI∗ (which follows OPJ) over the original method of [24] orgPRETTI is even
+greater: 2.5× for BMS-POS, 5.4× for FLICKR, 2.5× for KOSARAK and 38.5×
+for NETFLIX. For the rest of our analysis we adopt the OPJ paradigm for all tested
+methods.
+
+5.4 The Eﬀect of Limit (cid:96)
+
+As discussed in Section 3, employing limit (cid:96) for set containment joins introduces
+a trade-oﬀ between list intersection and candidates veriﬁcation. To demonstrate
+this eﬀect, we run the LIMIT algorithm (adopting OPJ) while varying limit (cid:96) from
+1 to the average object length in R, and then plot its response time (Figure 7),
+the number of list intersections performed (Figure 8) and the total number of
+candidates (Figure 9). The total number of candidates includes both (r, s) pairs
+which are directly reported as results, i.e., with |r| ≤ (cid:96), and those that are veriﬁed
+by comparing their preﬁxes beyond (cid:96), i.e., with |r| > (cid:96). To have a better under-
+standing of this experiment we also include the measurements for PRETTI∗ which
+uses an unlimited TR. The ﬁgures clearly show the trade-oﬀ introduced by limit (cid:96)
+and conﬁrm the existence of an optimal value that balances the beneﬁts of using
+
+Set Containment Join Revisited
+
+19
+
+(cid:96) (log scale)
+
+(a) BMS
+
+(cid:96) (log scale)
+(b) FLICKR
+
+(cid:96) (log scale)
+
+(c) KOSARAK
+
+(cid:96) (log scale)
+
+(d) NETFLIX
+
+Fig. 7 Vary limit (cid:96), response time
+
+the limited preﬁx tree over the cost of including a veriﬁcation stage. According to
+Figures 8 and 9, as (cid:96) increases, LIMIT naturally performs more list intersections,
+and thus, the number of candidate pairs decreases until it becomes equal to the
+join results, i.e., the number of candidates for PRETTI∗. However, regarding its
+performance shown in Figure 7, although LIMIT initially beneﬁts from having to
+verify fewer candidate pairs, when (cid:96) increases beyond a speciﬁc value, performing
+additional list intersections becomes a bottleneck and the algorithm slows down
+until its response time becomes almost equal to the time of PRETTI∗.
+Apart from the trade-oﬀ introduced by limit (cid:96), Figures 7, 8 and 9 also show
+that the LIMIT algorithm can be faster than PRETTI∗ as long as (cid:96) is properly set,
+i.e., close to its optimal value. However, as discussed in Section 3, determining the
+optimal (cid:96) value is a time-consuming procedure, reminiscent to frequent itemsets
+mining which cannot be employed in practice; recall that (cid:96) must be determined
+online. For this purpose, we propose the following simple strategies to select a
+good (cid:96) value based on cheap-to-compute statistics that require no more than a
+pass over the input collection R. First, strategies AV G and W –AV G set (cid:96) equal to
+the average and the weighted average object length in R, respectively. Similarly,
+strategy M DN sets (cid:96) to the median value of the object length in R. Last, we
+also devise a frequency-based strategy termed F RQ. The idea behind F RQ is to
+estimate when paths greater than (cid:96) would only be contained in very few objects. We
+start with a path p that contains the most frequent item in R and progressively
+
+ 10 20 30 40 50 60 70124763Response time (sec)PRETTI*LIMIT 10 12 14 16 18 201238  1052Response time (sec)PRETTI*LIMIT 100134 59398Response time (sec)PRETTI*LIMIT 240 260 280 300 320 340 360 380 400 420 440 4601696 2101557Response time (sec)PRETTI*LIMIT20
+
+P. Bouros et al.
+
+(cid:96) (log scale)
+
+(a) BMS
+
+(cid:96) (log scale)
+(b) FLICKR
+
+(cid:96) (log scale)
+
+(c) KOSARAK
+
+(cid:96) (log scale)
+
+(d) NETFLIX
+
+Fig. 8 Vary limit (cid:96), number of intersections.
+
+add the next items in decreasing frequency order. We estimate the probability
+that this path appears in a object by considering only the support of the items.
+When this probability falls under a threshold, which makes the expected cost of
+list intersection greater than the cost of veriﬁcation (according to our analysis in
+Section 3.2), we stop adding items in p and set (cid:96) =|p|. Note that this probability
+serves as an upper bound for all paths of length (cid:96) (assuming item independence),
+since p includes the most frequent items. Table 5 summarizes the values of (cid:96)
+determined by each strategy for the experimental datasets. Overall F RQ provides
+the best estimation of optimal (cid:96); in fact for NETFLIX it identiﬁes the actual
+optimal value. Figures 7, 8 and 9 conﬁrm this observation as the performance of
+LIMIT with a limit set by F RQ is very close to its performance for the optimal (cid:96).
+Thus, for the rest of our analysis we adopt F RQ to set limit (cid:96) value.
+
+5.5 Comparison of the Join Methods
+
+In Section 5.4, we showed that by properly selecting limit (cid:96) (F RQ strategy),
+LIMIT outperforms PRETTI∗ and, based on Sections 5.3 and 5.2, also PRETTI and
+orgPRETTI. Next, we experiment with LIMIT+ which (like LIMIT) employs F RQ.
+Figure 10 reports the response time of orgPRETTI, PRETTI, PRETTI∗, LIMIT and
+LIMIT+ on all four real datasets. To further investigate the properties of LIMIT+,
+
+ 0 0.5 1 1.5 2 2.5124763# of intersections (in millions)PRETTI*LIMIT 0 2 4 6 8 10 121238  1052# of intersections (in millions)PRETTI*LIMIT 0 1 2 3 4 5 6 7134 59398# of intersections (in millions)PRETTI*LIMIT 0 20 40 60 80 1001696 2101557# of intersections (in millions)PRETTI*LIMITSet Containment Join Revisited
+
+21
+
+(cid:96) (log scale)
+
+(a) BMS
+
+(cid:96) (log scale)
+(b) FLICKR
+
+(cid:96) (log scale)
+
+(c) KOSARAK
+
+(cid:96) (log scale)
+
+(d) NETFLIX
+
+Fig. 9 Vary limit (cid:96), number of candidates (for PRETTI∗ equals the number of results)
+
+we also include the response time of two oracle methods4: (i) L−ORACLE corre-
+sponds to LIMIT with (cid:96) set to its optimal value (see Table 5), (ii) T−ORACLE is a
+version of LIMIT+ which compares the actual execution time of the two alterna-
+tive strategies for current preﬁx tree node instead of utilizing the cost model of
+Section 3.2; note that for this purpose we run oﬄine both alternative strategies
+for every preﬁx tree node and store their execution time. With the exception of
+orgPRETTI and PRETTI the rest of the algorithms follow the OPJ join paradigm.
+We break the response time of all methods into three parts, (i) building preﬁx
+tree TR, (ii) building inverted index IS and (iii) computing the join results. Note
+that for PRETTI+, LIMIT, LIMIT+ and the oracles, the indexing time additionally
+includes the sorting and partitioning cost of the input objects. As expected the
+total indexing time is negligible compared to the joining time; an exception arises
+for FLICKR due its large number of objects.
+
+Figure 10 shows that LIMIT+ is the most eﬃcient method for set containment
+joins. It is at least two times faster than PRETTI. LIMIT+ also outperforms LIMIT
+for the BMS, FLICKR and KOSARAK datasets while for NETFLIX, both algo-
+rithms perform similarly as (i) the F RQ strategy sets limit (cid:96) to its optimal value
+and (ii) the TR preﬁx tree for NETFLIX is quite balanced. The adaptive approach
+
+4 These are infeasible methods using apriori knowledge which is not known at runtime and
+
+it is extremely expensive to compute before the join.
+
+ 3000 3500 4000 4500 5000 5500 6000124763# of candidates (in millions)LIMITPRETTI* 1500 1600 1700 1800 1900 2000 2100 22001238  1052# of candidates (in millions)LIMITPRETTI* 54000 56000 58000 60000 62000 64000 66000 68000134 59398# of candidates (in millions)LIMITPRETTI* 0 200 400 600 800 1000 1200 1400 1600 1800 20001696 2101557# of candidates (in millions)LIMITPRETTI*22
+
+P. Bouros et al.
+
+(a) BMS
+
+(b) FLICKR
+
+(c) KOSARAK
+
+(d) NETFLIX
+
+Fig. 10 Comparison of the set containment join methods on real datasets (limit (cid:96) set by FRQ
+according to Table 5)
+
+of LIMIT+ that dynamically chooses between list intersection and candidates ver-
+iﬁcation, copes better with (i) overestimated (cid:96) values and (ii) cases where TR is
+unbalanced. Speciﬁcally, due to employing an ad-hoc limit for each path of the
+preﬁx tree, LIMIT+ can be faster than LIMIT even with optimal (cid:96), i.e., faster than
+L−ORACLE (see Figures 10(b) and (c)). For these datasets, TR is quite unbalanced
+and thus, there is no ﬁxed value of (cid:96) to outperform the adaptive strategy. Note
+that even if (cid:96) is overestimated, e.g., using strategy W –AV G, the performance of
+LIMIT+ is almost the same as when an optimal (or close to optimal) (cid:96) is used.
+Note also that the response time of LIMIT+ is very close to that of T−ORACLE
+which proves the accuracy of our cost model proposed in Section 3.2. We would
+like to stress at this point that the overall performance improvement achieved by
+LIMIT+ over the original method of [24] which arranges the items inside an object
+in decreasing frequency order is as expected even larger compared to our version of
+PRETTI; LIMIT+ is 5 times faster than orgPRETTI for BMS, 11 times for FLICKR,
+3.5 times for KOSARAK and 70 times for NETFLIX.
+
+Next, we analyze the advantage of LIMIT+ (using F RQ) over orgPRETTI of
+[24] that arranges the items in decreasing frequency order, with respect to their
+memory requirements. Figure 11(a) shows the space for indexing only the left-hand
+collection R when neither method follows the OPJ paradigm. We observe that by
+constructing limited preﬁx tree (cid:96)TR instead of unlimited TR, LIMIT+ saves at least
+50% of space compared to orgPRETTI; for NETFLIX, where TR has the highest
+storing cost due to its extremely long objects, the savings are over 90%. Then, in
+
+ 0 20 40 60 80orgPRETTIPRETTIPRETTI*LIMITLIMIT+L-ORACLET-ORACLEResponse time (sec)Prefix treeInverted indexJoin 0 20 40 60 80 100 120orgPRETTIPRETTIPRETTI*LIMITLIMIT+L-ORACLET-ORACLEResponse time (sec)Prefix treeInverted indexJoin 0 20 40 60 80 100 120 140orgPRETTIPRETTIPRETTI*LIMITLIMIT+L-ORACLET-ORACLEResponse time (sec)Prefix treeInverted indexJoin050010001500200014000orgPRETTIPRETTIPRETTI*LIMITLIMIT+L-ORACLET-ORACLEResponse time (sec)Prefix treeInverted indexJoinSet Containment Join Revisited
+
+23
+
+Dataset
+
+BMS
+FLICKR
+KOSARAK
+NETFLIX
+
+memory ratio
+
+(cid:96)TR/TR
+
+50%
+44%
+46%
+3%
+
+(a) LIMIT+ (not OPJ) Vs orgPRETTI
+
+(b) LIMIT+ (OPJ) Vs orgPRETTI
+
+Fig. 11 Memory requirements (LIMIT+ using F RQ)
+
+Figure 11(b) we consider LIMIT+ adopting OPJ and report the space for indexing
+both input collections while evaluating the join, compared to orgPRETTI which
+does not follow the OPJ paradigm. We observe that by incrementally building (cid:96)TR
+and IS, LIMIT+ uses at least 50% less space than orgPRETTI. Naturally, the amount
+of space used by LIMIT+ increases while examining the collection partitions, but
+it is always lower than the space for orgPRETTI due to never actually building and
+storing the entire preﬁx tree; only one subtree of (cid:96)TR is kept in memory at a time.
+Finally, notice the diﬀerent trend for NETFLIX as its partitions have balanced
+sizes; in contrast for BMS, FLICKR and KOSARAK, the ﬁrst partitions contain
+very few objects while the last ones are very large.
+
+Finally, we present the results of our scalability tests on the synthetic datasets
+of Table 2. Figure 12 reports the response time of our best method LIMIT+ and
+the orgPRETTI and PRETTI competitors. The purpose of these tests is twofold:
+(i) to demonstrate how the characteristics of a dataset aﬀect the performance of
+the methods, and (ii) to determine their “breaking point”. First, we notice that
+all methods are aﬀected in a similar manner; their response time increases as the
+input contains more or longer objects and decreases while the domain size becomes
+larger. An exception arises in Figure 12(d). The performance of orgPRETTI is
+severely aﬀected when increasing the order of the Zipﬁan distribution; recall that
+orgPRETTI arranges the items inside an object, in decreasing frequency order. As
+expected, LIMIT+ outperforms orgPRETTI and PRETTI under all setups, similar to
+the case of real datasets. Second, we also observe that both orgPRETTI and PRETTI
+are unable to cope with the increase of the cardinality and weighted average object
+length of the datasets. These two factors directly aﬀect the size of the TR preﬁx
+tree and the memory requirements. In practice, orgPRETTI and PRETTI failed to
+run for inputs with more than 5M objects and/or when their weighted average
+length is larger than 50, because the unlimited preﬁx tree cannot ﬁt inside the
+available memory; in these cases the methods would have to adopt a block-based
+evaluation approach similar [24, 27]. In contrast, LIMIT+ is able to index left-hand
+relation R due to employing limit (cid:96) and following OPJ, and hence, compute the
+join results.
+
+ 0 10 20 30 40 50 60 0 10 20 30 40 50 60 70 80 90 100Ratio of total memory (%)% of partitions processedBMSFLICKRKOSARAKNETFLIX24
+
+P. Bouros et al.
+
+(a) Cardinality
+
+(b) Domain size
+
+(c) Weighted avg object length
+
+(d) Zipﬁan distribution
+
+Fig. 12 Scalability tests on synthetic datasets (limit (cid:96) set by FRQ), default parameter values:
+candinality 5M objects, domain size 100K items, weighted avg object length 50 items, order
+of Zipﬁan distribution 0.5
+
+6 Related Work
+
+Our work is related to query operators on sets. In this section, we summarize
+previous work done for set containment queries, set containment joins, and set
+similarity joins. In addition, we review previous work on eﬃcient computation of
+list intersection, which is a core module of our algorithms.
+
+6.1 Set Containment Queries
+
+Signatures and inverted ﬁles are two alternative indexing structures for set-valued
+data. Signatures are bitmaps used to exactly or approximately represent sets.
+With |D| being the cardinality of the items domain, a set x is represented by
+a |D|-length signature sig(x). The i-th bit of sig(x) is set to 1 iﬀ the i-th item
+of domain D is present in x. If the sets are very small compared to |D|, exact
+signatures are expensive to store, and therefore, approximations of ﬁxed length
+l < |D| are typically used. Experimental studies [22, 44] showed that inverted ﬁles
+outperform signature-based indices for set containment queries on datasets with
+low cardinality set objects, e.g., typical text databases.
+
+In [37, 38], the authors proposed extensions of the classic inverted ﬁle data
+structure, which optimize the indexing set-valued data with skewed item distribu-
+
+ 0 200 400 600 800 1000 1200 1400 1600 1800 2000135710Response time (sec)# of objects (in millions)orgPRETTIPRETTILIMIT+ 0 500 1000 1500 2000 2500 3000 3500 4000 4500 500010501005001000Response time (sec)# of items (log scale, in thousands)orgPRETTIPRETTILIMIT+ 0 200 400 600 800 1000 1200 1400 1600 1800 200010305070100Response time (sec)# of itemsorgPRETTIPRETTILIMIT+ 100 1000 10000 10000000.30.50.71Response time (sec)orderorgPRETTIPRETTILIMIT+Set Containment Join Revisited
+
+25
+
+tions. In [14], the authors proposed an indexing scheme for text documents, which
+includes inverted lists for frequent word combinations. A main-memory method
+for addressing error-tolerant set containment queries was proposed in [1]. In [42],
+Zhang et al. addressed the problem of probabilistic set containment, where the
+contents of the sets are uncertain. The proposed solution relies on an inverted ﬁle
+where postings are populated with the item’s probability of belonging to a certain
+object. The study in [23] focused on containment queries on nested sets, and pro-
+poses an evaluation mechanism that relies on an inverted ﬁle which is populated
+with information for the placement of an element in the tree of nested sets. The
+above methods use classic inverted ﬁles or extend them either by trading update
+and creation costs for response time [1, 14, 37, 38] or by adding information that is
+needed for more complex queries [23, 42]. Employing these extended inverted ﬁles
+for set containment joins (i.e., in place of our IS) is orthogonal to our work.
+
+6.2 Set Containment Joins
+
+In [21], the Signature Nested Loops (SNL) Join and the Signature Hash Join (SHJ)
+algorithm for set containment joins were proposed, with SHJ shown to be the
+fastest. For each set object r in the left-hand collection R, both algorithms com-
+pare signatures to identify every object s in the right-hand collection S with
+sig(r) & ¬sig(s) = 0 and |r| ≤ |s| (ﬁlter phase), and then, perform explicit
+set comparison to discard false drops (veriﬁcation phase). Later, the hash-based
+algorithms Partitioned Set Join (PSJ) in [30] and Divide-and-Conquer Set Join
+(DCJ) in [28] aimed at reducing the quadratic cost of the algorithms in [21]. In
+these approaches, the input collections are partitioned based on hash functions
+such that object pairs of the join result fall in the same partition. Finally, Mel-
+nik and Molina [29] proposed adaptive extensions to PSJ and DCJ, termed APSJ
+and ADCJ, respectively, to overcome the problem of a potentially poor partitioning
+quality.
+
+Inverted ﬁles were employed by [24, 27] for set containment joins. Speciﬁcally,
+in [27], Mamoulis proposed a Block Nested Loops (BNL) Join algorithm that indexes
+the right-hand collection S by an inverted ﬁle IS. The algorithm iterates through
+each object r in the left-hand collection R and intersects the corresponding post-
+ings lists of IS to identify the objects in S that contain r. The experimental analysis
+in [27] showed that BNL is signiﬁcantly faster than previous signature-based meth-
+ods [21, 30]. In [24], Jampani and Pudi targeted the major weakness of BNL; the fact
+that the overlaps between set objects are not taken into account. The proposed
+algorithm PRETTI, employs a preﬁx tree on the left-hand collection, allowing list
+intersections for multiple objects with a common preﬁx to be performed just once.
+Experiments in [24] showed that PRETTI outperforms BNL and previous signature-
+based methods of [29, 30]. Our work ﬁrst identiﬁes and tackles the shortcomings
+of the PRETTI algorithm and then, proposes a new join paradigm.
+
+6.3 Set Similarity Joins
+
+The set similarity join ﬁnds object pairs (r, s) from input collections R and S,
+such that sim(r, s) ≥ θ, where sim(·,·) is a similarity function (e.g., Jaccard
+
+26
+
+P. Bouros et al.
+
+coeﬃcient) and θ is a given threshold. Computing set similarity joins based on
+inverted ﬁles was ﬁrst proposed in [34]: for each object in one input, e.g., r ∈ R, the
+inverted lists that correspond to r’s elements on the other collection are scanned to
+accumulate the overlap between r and all objects s ∈ S. Among the optimization
+techniques on top of this baseline, Chaudhuri et al. [15] proposed a ﬁlter-reﬁnement
+framework based on preﬁx ﬁltering; for two internally sorted set objects r and s
+to satisfy sim(r, s) ≥ θ their preﬁxes should have at least some minimum overlap.
+Later, [3, 9, 33, 41] built upon preﬁx ﬁltering to reduce the number of candidates
+generated. Recently, Bouros et al. [10] proposed a grouping optimization technique
+to boost the performance of the method in [41], and Wang et al. [40] devised a cost
+model to judiciously select the appropriate preﬁx for a set object. An experimental
+comparison of set similarity join methods can be found in [25]. In theory, the above
+methods can be employed for set containment joins, considering for instance the
+|r∩s|
+asymmetric containment Jaccard measure, sim(r, s) =
+|r| and threshold θ = 1.
+In practice, however, this approach is not eﬃcient as it generates a large number of
+candidates. For each object r ∈ R preﬁx ﬁltering can only prune objects in S that
+do not contain r’s ﬁrst item while the rest of the candidates need to be veriﬁed by
+comparing the actual set objects. Therefore, the ideas proposed in previous work
+on set similarity joins are not applicable to set containment joins.
+
+6.4 List Intersection
+
+In [19, 20], Demaine et al. presented an adaptive algorithm for computing set in-
+tersections, unions and diﬀerences. Speciﬁcally, the algorithm in [19] (ameliorated
+in [20] and extended in [7]) polls each list in a round robin fashion. Baeza-Yates [4]
+proposed an algorithm that adapts to the input values and performs quite well in
+average. It can be seen as a natural hybrid of the binary search and the merge-sort
+approach. Experimental comparison of the above, among others, methods of list
+intersection, with respect to their CPU cost can be found in [5, 6, 8]. The trade-oﬀ
+between the way sets are stored and the way they are accessed in the context of
+the intersection operator was studied in [18]. Finally, recent work [35, 36, 39] con-
+sidered list intersection with respect to the characteristics of modern hardware and
+focused on balancing the load between multiple cores. In [35, 36], Tatikonda et al.
+proposed inter-query parallelism and intra-query parallelism. The former exploits
+parallelism between diﬀerent queries, while the latter parallelizes the processing
+within a single query. On the other hand, the algorithm in [39] probes the lists in
+order to gather statistics that would allow eﬃcient exploration of the multi-level
+cache hierarchy. Eﬃcient list intersection is orthogonal to our set containment join
+problem. Yet, in Section 5.2, we employ a hybrid list intersection method based
+on [4] to determine the preferred ordering of the items inside the objects.
+
+6.5 Estimating Set Intersection Size
+
+Estimating the intersection size of two sets has received a lot of attention in the
+area of information retrieval [11, 12, 16, 17, 26], to determine the similarity between
+two documents modelled as sets of terms. Given sets A and B, the basic idea
+is to compute via sampling small sketches S(A) and S(B), respectively. Then,
+
+Set Containment Join Revisited
+
+27
+
+|S(A) ∩ S(B)| is used as an estimation of |A ∩ B|. Our adaptive methodology for
+set containment joins (Section 3.2) involves estimating the size of a list intersection.
+Yet, the methods discussed above are not applicable as they require an expensive
+preprocessing step, i.e., precomputing and indexing the sketches for every list of
+the inverted index at the right-hand collection. In addition, one of the two lists at
+each intersection (i.e., candidates list CL) is the result of previous intersections.
+Thus, computing the sketch of CL should be done on-the-ﬂy, i.e., the overall cost
+of the sketch-based intersection would exceed the cost of performing the exact list
+intersection (especially since CL becomes shorter every time it is intersected with
+a inverted list of the right-hand collection).
+
+7 Conclusion
+
+In this paper we revisited the set containment join R (cid:46)(cid:47)⊆ S between two collections
+R and S of set objects r and s, respectively. We presented a framework which
+improves the state-the-art method PRETTI, greatly reducing the space requirements
+and time cost of the join. Particularly, we ﬁrst proposed an adaptive methodology
+(algorithms LIMIT and LIMIT+) that limits the preﬁx tree constructed for the left-
+hand collection R. Second, we proposed a novel join paradigm termed OPJ that
+partitions the objects of each collection based on their ﬁrst contained item, and
+then examines these partitions to evaluate the join while progressively building the
+indices on R and S. Finally, we conducted extensive experiments on real datasets
+to demonstrate the advantage of our methodology.
+
+Besides the fact that the OPJ paradigm signiﬁcantly reduces both the join cost
+and the maximum memory requirements, it can be applied in a parallel processing
+environment. For instance, by assigning each partition Ri of the left-hand collec-
+tion to a single computer node vi while replicating the partitions of the right-hand
+collection such that node vi gets every object in S which starts either by item i or
+an item before i according to the global item ordering, our method runs at each
+node and there is no need for communication among the nodes, since join results
+are independent and there are no duplicates. In the future, we plan to investigate
+the potential of such an implementation.
+
+References
+
+1. P. Agrawal, A. Arasu, and R. Kaushik. On indexing error-tolerant set containment. In
+
+SIGMOD Conference, pages 927–938, 2010.
+
+2. R. Agrawal and R. Srikant. Fast algorithms for mining association rules in large databases.
+
+In VLDB, pages 487–499, 1994.
+
+3. A. Arasu, V. Ganti, and R. Kaushik. Eﬃcient exact set-similarity joins. In VLDB, pages
+
+918–929, 2006.
+
+4. R. A. Baeza-Yates. A fast set intersection algorithm for sorted sequences. In CPM, pages
+
+400–408, 2004.
+
+5. R. A. Baeza-Yates and A. Salinger. Experimental analysis of a fast intersection algorithm
+
+for sorted sequences. In SPIRE, pages 13–24, 2005.
+
+6. R. A. Baeza-Yates and A. Salinger. Fast intersection algorithms for sorted sequences. In
+Algorithms and Applications, Essays Dedicated to Esko Ukkonen on the Occasion of His
+60th Birthday, pages 45–61. 2010.
+
+7. J. Barbay and C. Kenyon. Adaptive intersection and t-threshold problems. In SODA,
+
+pages 390–399, 2002.
+
+28
+
+P. Bouros et al.
+
+8. J. Barbay, A. L´opez-Ortiz, T. Lu, and A. Salinger. An experimental investigation of set
+intersection algorithms for text searching. ACM Journal of Experimental Algorithmics,
+14:7:3.7–7:3.24, Jan. 2009.
+
+9. R. J. Bayardo, Y. Ma, and R. Srikant. Scaling up all pairs similarity search. In WWW,
+
+2007.
+
+10. P. Bouros, S. Ge, and N. Mamoulis. Spatio-textual similarity joins. PVLDB, 6(1):1–12,
+
+2012.
+
+11. A. Broder. On the resemblance and containment of documents. In SEQUENCES, pages
+
+21–29, 1997.
+
+12. A. Z. Broder. Identifying and ﬁltering near-duplicate documents. In CPM, pages 1–10,
+
+2000.
+
+13. B. Cao and A. Badia. A nested relational approach to processing sql subqueries.
+
+In
+
+SIGMOD Conference, pages 191–202, 2005.
+
+14. S. Chaudhuri, K. W. Church, A. C. K¨onig, and L. Sui. Heavy-tailed distributions and
+
+multi-keyword queries. In SIGIR, pages 663–670, 2007.
+
+15. S. Chaudhuri, V. Ganti, and R. Kaushik. A primitive operator for similarity joins in data
+
+cleaning. In ICDE, page 5, 2006.
+
+16. Z. Chen, F. Korn, N. Koudas, and S. Muthukrishnan. Selectivity estimation for boolean
+
+queries. In PODS, pages 216–225, 2000.
+
+17. Z. Chen, F. Korn, N. Koudas, and S. Muthukrishnan. Generalized substring selectivity
+
+estimation. J. Comput. Syst. Sci., 66(1):98–132, 2003.
+
+18. J. S. Culpepper and A. Moﬀat. Eﬃcient set intersection for inverted indexing. ACM
+
+Trans. Inf. Syst., 29(1):1, 2010.
+
+19. E. D. Demaine, A. L´opez-Ortiz, and J. I. Munro. Adaptive set intersections, unions, and
+
+diﬀerences. In SODA, pages 743–752, 2000.
+
+20. E. D. Demaine, A. L´opez-Ortiz, and J. I. Munro. Experiments on adaptive set intersections
+
+for text retrieval systems. In ALENEX, pages 91–104, 2001.
+
+21. S. Helmer and G. Moerkotte. Evaluation of main memory join algorithms for joins with
+
+set comparison join predicates. In VLDB, pages 386–395, 1997.
+
+22. S. Helmer and G. Moerkotte. A performance study of four index structures for set-valued
+
+attributes of low cardinality. VLDBJ, 12(3):244 – 261, 2003.
+
+23. A. Ibrahim and G. H. L. Fletcher. Eﬃcient processing of containment queries on nested
+
+sets. In EDBT, pages 227–238, 2013.
+
+24. R. Jampani and V. Pudi. Using preﬁx-trees for eﬃciently computing set joins. In DASFAA,
+
+pages 761–772, 2005.
+
+25. Y. Jiang, G. Li, J. Feng, and W. Li. String similarity joins: An experimental evaluation.
+
+PVLDB, 7(8):625–636, 2014.
+
+26. H. K¨ohler. Estimating set intersection using small samples. In ACSC, pages 71–78, 2010.
+27. N. Mamoulis. Eﬃcient processing of joins on set-valued attributes. In SIGMOD Confer-
+
+ence, pages 157–168, 2003.
+
+28. S. Melnik and H. Garcia-Molina. Divide-and-conquer algorithm for computing set con-
+
+tainment joins. In EDBT, pages 427–444, 2002.
+
+29. S. Melnik and H. Garcia-Molina. Adaptive algorithms for set containment joins. ACM
+
+Trans. Database Syst., 28:56–99, 2003.
+
+30. K. Ramasamy, J. M. Patel, J. F. Naughton, and R. Kaushik. Set containment joins: The
+
+good, the bad and the ugly. In VLDB, pages 351–362, 2000.
+
+31. R. Rantzau. Processing frequent itemset discovery queries by division and set containment
+
+join operators. In DMKD, pages 20–27, 2003.
+
+32. R. Rantzau, L. D. Shapiro, B. Mitschang, and Q. Wang. Algorithms and applications for
+
+universal quantiﬁcation in relational databases. Inf. Syst., 28(1-2):3–32, 2003.
+
+33. L. Ribeiro and T. H¨arder. Eﬃcient set similarity joins using min-preﬁxes. In Advances
+in Databases and Information Systems, 13th East European Conference, ADBIS 2009,
+Riga, Latvia, September 7-10, 2009. Proceedings, pages 88–102, 2009.
+
+34. S. Sarawagi and A. Kirpal. Eﬃcient set joins on similarity predicates.
+
+In SIGMOD
+
+Conference, pages 743–754, 2004.
+
+35. S. Tatikonda, B. B. Cambazoglu, and F. P. Junqueira. Posting list intersection on multicore
+
+architectures. In SIGIR, pages 963–972, 2011.
+
+36. S. Tatikonda, F. Junqueira, B. B. Cambazoglu, and V. Plachouras. On eﬃcient posting
+
+list intersection with multicore processors. In SIGIR, pages 738–739, 2009.
+
+37. M. Terrovitis, P. Bouros, P. Vassiliadis, T. K. Sellis, and N. Mamoulis. Eﬃcient answering
+of set containment queries for skewed item distributions. In EDBT, pages 225–236, 2011.
+
+Set Containment Join Revisited
+
+29
+
+38. M. Terrovitis, S. Passas, P. Vassiliadis, and T. K. Sellis. A combination of trie-trees and
+
+inverted ﬁles for the indexing of set-valued attributes. In CIKM, pages 728–737, 2006.
+
+39. D. Tsirogiannis, S. Guha, and N. Koudas. Improving the performance of list intersection.
+
+PVLDB, 2(1):838–849, 2009.
+
+40. J. Wang, G. Li, and J. Feng. Can we beat the preﬁx ﬁltering?: an adaptive framework for
+
+similarity join and search. In SIGMOD Conference, pages 85–96, 2012.
+
+41. C. Xiao, W. Wang, X. Lin, and J. X. Yu. Eﬃcient similarity joins for near duplicate
+
+detection. In WWW, pages 131–140, 2008.
+
+42. X. Zhang, K. Chen, L. Shou, G. Chen, Y. Gao, and K.-L. Tan. Eﬃcient processing of
+probabilistic set-containment queries on uncertain set-valued data. Inf. Sci., 196:97–117,
+2012.
+
+43. Z. Zheng, R. Kohavi, and L. Mason. Real world performance of association rule algorithms.
+
+In KDD, pages 401–406, 2001.
+
+44. J. Zobel, A. Moﬀat, and K. Ramamohanarao. Inverted ﬁles versus signature ﬁles for text
+
+indexing. TOIS, 23(4):453–490, 1998.
+
+

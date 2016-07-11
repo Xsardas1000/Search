@@ -1,0 +1,3213 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+7
+1
+
+ 
+ 
+]
+P
+A
+
+.
+t
+a
+t
+s
+[
+ 
+ 
+
+1
+v
+2
+2
+5
+5
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Tracking multiple moving objects in images using Markov
+
+Chain Monte Carlo
+
+Lan Jiang & Sumeetpal S. Singh ∗†
+
+March 18, 2016
+
+Abstract
+
+A new Bayesian state and parameter learning algorithm for multiple target tracking
+(MTT) models with image observations is proposed. Speciﬁcally, a Markov chain Monte
+Carlo algorithm is designed to sample from the posterior distribution of the unknown num-
+ber of targets, their birth and death times, states and model parameters, which constitutes
+the complete solution to the tracking problem. The conventional approach is to pre-process
+the images to extract point observations and then perform tracking. We model the image
+generation process directly to avoid potential loss of information when extracting point
+observations. Numerical examples show that our algorithm has improved tracking per-
+formance over commonly used techniques, for both synthetic examples and real ﬂorescent
+microscopy data, especially in the case of dim targets with overlapping illuminated regions.
+
+1
+
+Introduction
+
+The multiple target tracking (MTT) problem is to infer the states or tracks of multiple mov-
+ing objects from noisy measurements. The problem is diﬃcult since the number of targets is
+unknown and changes over time as it is a birth-death process. Other compounding factors
+include the non-linearity of both the target’s motion and observation models. In many appli-
+cations such as radar/sonar tracking [1] and Fluorescence Microscopy [2], the measurements
+(or observations) are images.
+(For example, a pixel’s illumination intensity is a measure of
+nearby targets energy and background noise.) These images are usually pre-processed prior to
+actual tracking to extract point measurements where each point is a spatial coordinate, which
+are then assumed to be either noisy measurements of the target state or spuriously generated.
+The latter is an artefact of the method that extracts point measurements. Converting images
+to point measurements is advantageous because it yields a simpler observation model and also
+simpliﬁes the design of tracking algorithms [1, 3], e.g. [2] connects the point measurements using
+a nearest neighbour method to form target trajectories. However, the pre-processing step can
+introduce information loss in the low signal-to-noise (SNR) regime, which can be near complete
+as the targets become more closely spaced and background noise intensiﬁes. In low SNR it can
+be diﬃcult to isolate bright regions in the image, whose centres would be the candidate point
+measurements, and then attribute them to distinct targets. Thus, MTT algorithms that work
+with the images directly can be preferable and there is a sizeable literature on it. A selection
+
+∗The authors are at the Department of Engineering, University of Cambridge, United Kingdom.
+†This work was supported by the Engineering and Physical Sciences Research Council
+
+[grant numbers
+
+EP/G037590/1, EP/K020153/1.]
+
+1
+
+of works is [4, 5, 6, 7, 8, 9, 10] and they diﬀer in how tracking is achieved (Bayesian, maximum
+likelihood or otherwise) and the speciﬁc assumptions imposed on the image model.
+
+Given images recorded over a length of time, say from time 1 to n, our aim is to jointly
+infer the target tracks and the MTT model parameters. We adopt a Bayesian approach and
+one of our main contributions is the design of a new Markov chain Monte Carlo (MCMC)
+algorithm for an image measurement model that can jointly track and calibrate. The MCMC
+algorithm is a trans-dimensional sampler that combines Particle Markov Chain Monte Carlo
+(PMCMC) steps [11] to sample from the exact MTT posterior distribution for entire target
+tracks and model parameters. This is in contrast to numerous techniques that use speciﬁc
+variational approximations, e.g. spatial Poisson, of the MTT posterior to simplify inference [3].
+Entire tracks, as opposed to point estimates of target locations at each time [9], are needed as
+these are then used to infer the aggregate diﬀusion characteristics of the molecules [2]. Model
+calibration is needed because in real ﬂuorescence microscopy data, the molecules to be tracked
+bleach over time and the noise characteristics of the acquired images also drift. These changes
+can be captured by time varying image model parameters, which are indeed unknown to the
+analyst, as are other parameters such as those describing the molecule motion model. To the
+best of our knowledge, our trans-dimensional MCMC tracker for image observations addresses
+this practical tracking problem in greater generality without major limiting assumptions like well
+separated molecules with non-overlapping illumination regions [9] or aforementioned principled
+simpliﬁcations of the MTT posterior [10]. In numerical examples we demonstrate the superior
+performance of our method over [9] for closely spaced targets. We also apply it to real ﬂorescence
+microscopy data and show it outperforms a method currently used by biologists [2] which pre-
+processes the images to extract point observations. Such comparisons, which are absent in the
+literature, highlight the gain in performance by targeting the exact MTT posterior and avoiding
+simpliﬁcations like disallowing overlaps.
+
+We do not advocate that our MCMC technique should replace techniques that extract point
+observations, those that use variational approximations to simplify the posterior [3, 9, 10], or
+those that do not extract point observations but are optimised for non-overlapping targets [9].
+Our MCMC technique should be viewed as a compliment to these other techniques. It could
+be applied in an online tracking scenario by processing a window of data at a time or as a
+post-processing tool to reﬁne the trajectories identiﬁed by any other online algorithm [12]. This
+is similar to the role MCMC plays in the related ﬁeld of Particle Filtering, which is an online
+estimation method, where MCMC is used to reﬁne the online estimates [13].
+
+There is a growing literature on using MCMC for tracking as it is recognised that sampling
+the true MTT posterior, although challenging, is feasible in oﬄine applications and can serve
+as a track reﬁnement tool in the online setting [14, 15]. There exists several MCMC based
+MTT algorithms for point observation models. [14, 16] assume the underlying state-space and
+observation model is linear and Gaussian, [15, 17] consider the non-linear and non-Gaussian
+setting while [16, 17, 18] simultaneously estimate the model parameters. (Although some of
+the above works incorporate parameter estimation, it is a topic in MTT that has only recently
+gained attention, see [19, 20].) Tracking using images are also known as track-before-detect
+(TBD) techniques.
+[7, 9, 10] use speciﬁc but diﬀerent Poisson approximations for the MTT
+posterior (assuming known model parameters) which is then approximated using a Particle
+Filter.
+
+The remainder of the paper is organised as follows. Section 2 describes the MTT model and
+presents the framework for joint state and parameter learning algorithm. In Section 3, we present
+details of our novel MCMC kernel for detecting and maintaining tracks, which constitutes the
+core part of our tracking algorithm. (More detailed derivations are given in the Appendix.)
+Section 4 presents numerical results for both synthetic and real ﬂorescent microscopy data.
+
+2
+
+2 Multiple target tracking model
+
+2.1 The single target model
+
+We commence with a description of the image based tracking problem assuming a single tar-
+get and then enlarge the model for the multi-target case. Let the Markov process {Xt}t≥1
+represent the state values of a single evolving target.
+In this work it is assumed that Xt =
+(Xt(1), . . . , Xt(5)) ∈ R5 where Xt(i) denotes its ith component. Xt(1) is the target’s illu-
+mination intensity or amplitude (to be discussed in detail next), (Xt(2), Xt(3)) is the spatial
+coordinate of the target and (Xt(4), Xt(5)) are the corresponding spatial velocities. Frequent
+reference will be made to the intensity (amplitude), spatial coordinate and spatial velocity
+components of a target state Xt. As such we will denote these components by At = Xt(1),
+St = (St(1), St(2)) = (Xt(2), Xt(3)) and Vt = (Vt(1), Vt(2)) = (Xt(4), Xt(5)). Xt is a time-
+homogeneous Markov process,
+
+X1 ∼ µψ(·), Xt|X1:t−1 = x1:t−1 ∼ fψ(·|xt−1)
+
+(1)
+
+where µψ and fψ are, respectively, the initial and state transition probability density function
+(pdf), both parametrised by the common real valued vector ψ ∈ Ψ ⊂ Rdψ . (As a rule, a random
+variable (r.v.)
+is denoted by a capital letter and its realisation by small case.) For exam-
+ple, for linear and Gaussian state dynamics, µψ(x) = N (x; µb, Σb), fψ(x′|x) = N (x′; F x, W ),
+where N (·; m, Σ) denotes the Gaussian pdf with mean m and covariance matrix Σ. Thus
+ψ = (µb, Σb, F, W ).
+
+For the measurements, a two dimensional image measurement model is assumed with m
+
+pixels in total. Let
+
+Yt = (Yt,1, . . . , Yt,m),
+
+denote the observed image at time t where Yt,i is the value (illumination intensity) of pixel i.
+Yt,i is deﬁned as
+
+Yt,i = hi(Xt) + Et,i,
+
+(2)
+
+where Et,i is the observation noise of pixel i at time t and hi(Xt) is the illumination of pixel
+i by a single target with state Xt. As in [9], for x = (a, s, v) ∈ R × R2 × R2 where a is the
+intensity, s = (s(1), s(2)) the spatial coordinate and v = (v(1), v(2)) the spatial velocity, hi(x)
+is the point spread function
+
+hi(x) = I[i ∈ L(s)]
+
+a∆1∆2
+2πσ2
+h
+
+(∆1r − s(1))2 + (∆2c − s(2))2
+
+2σ2
+h
+
+}
+
+× exp{−
+
+=: a ¯hi(s)
+
+(3)
+
+where (r, c) denotes the row and column number of pixel i, ∆1 and ∆2 are constants that map
+pixel indices to spatial coordinates and σh is the blurring parameter. It is assumed that the
+spatial coordinate of the pixel with index corresponding to row and column number (0, 0) is
+the origin of R2. As in [9], we also assume for each state value x = (a, s, v) there is a square
+truncation region L(s) where hi(x) = 0 if i /∈ L(s). Speciﬁcally, L(s) is the set of l × l pixels,
+l an odd integer, whose centre pixel has spatial coordinate closest to s. Henceforth we assume
+∆1 = ∆2 = ∆.
+
+For later use, the function ¯hi(s) in (3) has been implicitly deﬁned.
+
+In addition, extend
+the domain of the truncation region L and point spread function ¯hi to included pixel indices
+
+3
+
+j ∈ {1, . . . , m}. That is, let (r′, c′) be the row and column number of pixel j and deﬁne
+
+L(j) = L(s),
+
+¯hi(j) = ¯hi(s) where s = (r′∆, c′∆).
+
+(4)
+
+Equivalently L(j) is the square of l × l pixels centered at pixel j.
+
+The pixel noise is assumed to be Gaussian with mean value bt, representing the background
+
+intensity, and variance σ2
+
+r,t, both time varying but common across pixels, i.e.1
+
+Et,i
+
+i.i.d.∼ N (·|bt, σ2
+
+r,t),
+
+i = 1, . . . , m, t = 1, . . . , n.
+
+Thus, the conditional pdf of the observed image at time t due to a single target with state Xt is
+
+gt(yt|xt) =
+
+m
+
+Yi=1
+
+N (yt,i; hi(xt) + bt, σ2
+
+r,t).
+
+where subscript t of gt indicates the observation model is time-inhomogeneous. Given n images,
+all the model parameters (ψ, b1, σr,1, . . . , bn, σr,n) described in this section will be estimated.
+
+2.2 The model for multiple targets
+
+In this section we partially adopt the formulation in [17] for the MTT model. (Note though
+that the observation model in [17] is for point-observations and not for images as in our case.)
+In an MTT model, the MTT state at time t is the concatenation of all individual target states
+at t:
+
+Xt =(cid:0)Xt,1, Xt,2, . . . , Xt,K x
+t(cid:1)
+
+where each sub-vector Xt,i is the state (as in (1)) of an individual target. The number of targets
+K x
+t under surveillance changes over time due to the death of existing targets and the birth of
+new targets. Independently of the other targets, a target survives to the next time with survival
+probability ps and its state evolves according to the transition density fψ, otherwise it ‘dies’. In
+addition to the surviving targets, new targets are ‘born’ from a Poisson process with intensity
+λb and each of their states is initialised by sampling from the initial density µψ. The states of
+the new born targets and surviving targets from time t make up Xt+1. We assume that at time
+t = 1 there are only new born targets, i.e. no surviving targets from the past.
+
+To describe the evolution of Xt due to survivals and births, a series of random variables
+t denote the number of targets and new births at time t
+
+are now deﬁned here. Let K x
+respectively. We start with K x
+
+t and K b
+1 = K b
+
+1. For t > 1 and i = 1, . . . , K x
+
+t−1, let
+
+Ct(i) =(1
+
+0
+
+ith target at time t − 1 survives to time t
+ith target at time t − 1 does not survive to t
+
+.
+
+Ct is the K x
+from time t − 1. Let K s
+
+t−1 × 1 binary vector where 1’s indicate survivals and 0’s indicate deaths of targets
+
+t denote the number of surviving targets at time t, thus
+
+K s
+
+t =
+
+K x
+
+t−1
+
+Xi=1
+
+Ct(i).
+
+1σr,t is the symbol for the observation noise and subscript r is not to be confused with row number mentioned
+
+before.
+
+4
+
+1 = 0, I1 = ()), three targets are born (K x
+
+Figure 1: A realisation from the MTT model: states of a target are connected with arrows and all targets at
+time t contribute to image yt.
+MTT random variables:
+Time t = 1 : No prior targets (C1 = (), K s
+X1,1, X1,2, X1,3;
+Time t = 2 : All targets X1,1, X1,2, X1,3 survive to X2,1, X2,2, X2,3. Thus C2 = (1, 1, 1), K s
+No new born targets, K b
+Time t = 3 : Targets X2,1 and X2,3 survive to X3,1 and X3,2 respectively while X2,2 dies, thus C3 = (1, 0, 1),
+K s
+Time t = 4 : All targets survive, no new born, same as time t = 2.
+MTT variables of the equivalent description of Sec. 2.4:
+b = 1, X1 = (X1,1, X2,1, X3,1, X4,1); t2
+t1
+X4 = (X3,3, X4,3).
+
+3 = 2, I3 = (1, 3). One new born target, K b
+
+b = 1, X3 = (X1,3, X2,3, X3,2, X4,2); t4
+
+b = 1, X2 = (X1,2, X2,2); t3
+
+2 = 3, I2 = (1, 2, 3).
+
+3 = 1, denoted X3,3. K x
+
+3 = K s
+
+1 = 3) with states
+
+1 = K b
+
+2 = 0, K x
+
+2 = K s
+
+2 + K b
+
+2 = 3.
+
+3 + K b
+
+3 = 3.
+
+b = 3,
+
+t surviving targets from time t−1 evolve to become the ﬁrst K s
+
+t targets in Xt. Speciﬁcally,
+
+The K s
+deﬁne the K s
+
+t × 1 ancestor vector It, t > 1, as
+
+It(i) = min(cid:8)k :
+
+k
+
+Xj=1
+
+Ct(j) = i(cid:9),
+
+i = 1, . . . , K s
+t ,
+
+t ), we have K b
+
+so that Xt−1,It(i) evolves to Xt,i for i = 1, . . . , K s
+In addition to the surviving targets
+t .
+t . The state Xt
+(Xt,1, . . . , Xt,K s
+is formed of the new born targets together with the surviving targets, and thus K x
+t + K s
+t .
+An ordering rule is adopted for the new born targets to avoid labelling ambiguity. Speciﬁcally,
+the new born targets at each time t are labelled in ascending order of their ﬁrst component
+value. Let Z1 = K b
+
+t newly born targets denoted by Xt,K s
+
+t +1, . . . , Xt,K x
+
+t = K b
+
+1 and
+
+which is the discrete component of the MTT state at time t. Figure 1 illustrates all the MTT
+random variables.
+
+Zt =(cid:0)Ct, K b
+t(cid:1) ,
+
+t > 1,
+
+2.3 The law of MTT model
+
+The image observation Yt = (Yt,1, . . . , Yt,m) generated by multiple targets at time t is the
+superposition of the contributions of all targets at time t, the background intensity and noise,
+
+5
+
+i.e.
+
+Yt,i = hi(Xt) + Et,i,
+
+hi(Xt) =
+
+K x
+t
+
+Xk=1
+
+hi(Xt,k),
+
+(5)
+
+where hi(Xt,k) is the contribution of the k-th target at time t to the illumination of pixel i (see
+(3)). The MTT observation model is
+
+gt(yt|xt) =
+
+m
+
+Yi=1
+
+N (yt,i; hi(xt) + bt, σ2
+
+r,t).
+
+Given the vector of the MTT model parameters
+
+θ = (ψ, ps, λb, b1, σ2
+
+r,1, . . . , bn, σ2
+
+r,n)
+
+(6)
+
+(7)
+
+the law of the MTT model can be expressed with the joint density of (Z1:n, X1:n, Y1:n) which is
+
+pθ(z1:n, x1:n, y1:n) = pθ(y1:n|x1:n, z1:n)pθ(x1:n|z1:n)pθ(z1:n)
+
+where ai:j, i ≤ j, denotes the sequence ai, ai+1 . . . aj.
+
+pθ(y1:n|x1:n, z1:n) =
+
+pθ(z1:n) = P(kb
+
+1; λb)
+
+n
+
+n
+
+Yt=1
+Yt=2
+
+gθ(yt|xt),
+
+pks
+s (1 − ps)kx
+
+t
+
+t−1−ks
+
+t P(kb
+
+t ; λb),
+
+pθ(x1:n|z1:n) =
+
+n
+
+Yt=1(cid:20)
+
+ks
+t
+
+Yj=1
+
+fψ(xt,j |xt−1,it(j))
+
+kb
+t !IO(xt,ks
+
+t )
+t +1:kx
+
+kx
+t
+
+Yj=ks
+
+t +1
+
+µψ(xt,j )(cid:21)
+
+(8)
+
+(9)
+
+(10)
+
+where P(k; λ) denotes the probability mass function of the Poisson distribution with mean λ
+and gθ(yt|xt) in (8) is only dependent on components (bt, σr,t) of θ and is precisely gt of (6). In
+(10), IO is the indicator function of the particular ordering rule O for the new born targets,
+
+IO(xt,ks
+
+t +1:kx
+
+t ) =(1
+
+0
+
+t +1(1) < · · · < xt,kx
+
+t (1),
+
+if xt,ks
+else.
+
+Note that ordering the latent variables is also done in other statistical problems where labelling
+ambiguity arises through the likelihood function, e.g. Bayesian inference of mixture distributions
+[21]. For MTT, the ordering will be very useful in Section 2.4 where, thanks to rule O, we are able
+to deterministically assign a unique label to each target track. Finally, the marginal likelihood
+of the data y1:n is given by
+
+pθ(y1:n) =Xz1:n
+
+pθ(z1:n)Z pθ(y1:n|x1:n, z1:n)pθ(x1:n|z1:n)dx1:n.
+
+6
+
+2.4 An equivalent representation of (Z1:n, X1:n)
+
+This section introduces an equivalent parameterization for the MTT problem. Essentially, we
+deﬁne a new set of random variables which are an alternative to those deﬁned in Section 2.3
+without any loss of information. The idea here is to introduce notation that explicitly isolates
+the state trajectories of individual targets, which will be very useful to describe the MCMC
+proposal distributions in Section 3.
+
+Let K = Pn
+
+t denote the total number of targets that have appeared from time 1 to n.
+Each target appearing in this time span can be assigned a distinct label or index k ∈ {1, . . . , K}
+with the convention that targets born earlier are given a smaller label than those born at a later
+time and targets born at the same time are sorted by the ordering rule O.
+
+t=1 kb
+
+Consider a target assigned labelled k ∈ {1, . . . , K}, let it’s birth time be tk
+d and its life span be lk = tk
+
+b , death time
+be tk
+d − 1 is the ﬁnal time of its existence.) The
+entire continuous state trajectory of this target can be extracted from the MTT state sequence
+(Xtk
+
+b . (Note tk
+
+d −1) and denote it by
+
+, . . . , Xtk
+
+d − tk
+
+b
+
+Xk = (X k
+
+0 , . . . , X k
+
+lk−1)
+
+where X k
+i−1 is the i-th state of target k. Note that Xk is a Markov process with initial and state
+transition densities µψ and fψ respectively.
+k=1
+from (Z1:n, X1:n) as illustrated in Figure 1. The main point is that we can use one of the two
+equivalent descriptions for latent variables of the MTT model, i.e.
+
+It is straightforward to extract {(k, tk
+
+b , Xk)}K
+
+(Z1:n, X1:n) ⇔ {(k, tk
+
+b , Xk)}K
+
+k=1.
+
+(11)
+
+On the other hand, (Z1:n, X1:n) can be obtained from {(k, tk
+transformation is a bijection. (Again see Figure 1 for an example.)
+
+b , Xk)}K
+
+k=1 since the underlying
+
+2.5 Bayesian tracking and parameter estimation for MTT
+
+The inference task is to estimate the discrete variables Z1:n, target states X1:n and the MTT
+parameter θ given the observations y1:n. Regarding θ as a random variable taking values in Θ
+with a prior density η(θ), the goal is to obtain Monte Carlo samples from
+
+p(z1:n, x1:n, θ|y1:n) ∝ η(θ)pθ(z1:n, x1:n, y1:n).
+
+(12)
+
+1:n, X′
+
+We achieve this by iteratively performing the MCMC sweeps given in Algorithm 1. A single call
+of Algorithm 1 will transform a current sample (θ, Z1:n, X1:n) from the posterior to a new sample
+(θ′, Z ′
+1:n). The entire sequence of samples yielded by the repeated calls to Algorithm 1 will
+constitute the desired set of Monte Carlo samples from (12). We need though to discard an initial
+sequence of this set so that the remaining samples retained are correctly distributed. Section 3
+is dedicated to the exposition of the ﬁrst loop of Algorithm 2. The remaining two loops are
+more easily described. The principal aim of the second loop is to resample the continuous state
+trajectory of each target using the particle Gibbs sampler [11] (but using the implementation
+in [22]) which we ﬁnd enhances our MCMC algorithm’s eﬃciency signiﬁcantly. This is done by
+ﬁrst explicitly isolating the state trajectories of individual targets as in Section 2.4 and then
+updating the targets’ trajectories in turn using the Particle Gibbs sampler. When conjugate
+it is possible to sample p(θ|z1:n, x1:n, y1:n) ∝
+priors are available for the components of θ,
+p(θ)pθ(z1:n, x1:n, y1:n) exactly in the ﬁnal loop, in which case set n3 = 1. Otherwise, one can
+run a Metropolis-Hastings (MH) algorithm to sample from this pdf. When the MTT parameters
+are known, the third loop can be omitted and we refer to the resulting algorithm as the MCMC
+tracker.
+
+7
+
+Algorithm 1: MCMC for state and parameter learning
+
+Input: Current sample (θ, z1:n, x1:n), data y1:n, number of inner loops n1, n2, n3.
+Output: Updated sample (θ′, z′
+
+1:n, x′
+
+1:n).
+
+1 for j = 1 : n1 do
+
+2
+
+Update (z1:n, x1:n) by invoking Algorithm 2.
+b , xk)}K
+
+3 Isolate target trajectories (see (11)) {(tk
+4 for j = 1 : n2 do
+
+k=1.
+
+5
+
+6
+
+for k = 1 : K do
+
+Update xk using particle Gibbs conditioned on other trajectories (6= k) and θ.
+
+7 Call the updated sample (z′
+8 for j = 1 : n3 do
+
+1:n, x′
+
+1:n).
+
+9
+
+Conditioned on (z′
+
+1:n, x′
+
+1:n), update θ to θ′ using a MH move or a Gibbs move.
+
+3 MCMC moves
+
+In this section, we present the MCMC moves to explore (Z1:n, X1:n) for the ﬁrst loop in Algo-
+t , changes with
+
+rithm 1. Notice that the dimension of X1:n, which is proportional to Pn
+
+Z1:n. Therefore, the posterior distribution pθ(z1:n, x1:n|y1:n) is said to be trans-dimensional.
+
+t=1 K x
+
+3.1 A brief on trans-dimensional MCMC
+
+A general method for sampling from a trans-dimensional distribution is the reversible jump
+MCMC (RJMCMC) algorithm of [23]. We brieﬂy describe RJMCMC for the (general) target
+distribution π(m, xm) where m is a discrete variable (e.g. m ∈ {1, 2 . . .}) known as the model
+index and xm ∈ Rdm. Note though that in general m′ 6= m does not imply dm′ 6= dm. We now
+deﬁne the procedure for generating samples from a diﬀerent dimension and either accepting or
+rejecting them.
+
+For each (m, xm), let Q(m′|m, xm) be a probability mass function satisfyingPm′ Q(m′|m, x) =
+
+1 and Q(m′|m, xm) = 0 if dm′ = dm. Furthermore, for each m′ such that dm′ > dm, let
+Q(u|m, xm, m′) be a pdf on Rdm′ −dm. Q will be the proposal distribution and Q(m′|m, xm) = 0
+if dm′ = dm implies Q only proposes moves across dimension. (Sampling from π can be achieved
+by combining this proposal with others that do not move across dimensions and then cycling be-
+tween them either randomly or deterministically. The derivation of the accept-reject probability
+is routine for intra-dimensional moves.)
+
+Let (m, xm) ∼ π. First sample m′ from Q(·|m, xm) and if dm′ > dm, then sample u from
+Q(·|m, xm, m′), which are the extra (so called dimension matching) continuous r.v.’s needed to
+generate the candidate sample xm′ ∈ Rdm′ . (Indeed it is equivalent to jointly sample (m′, u), as
+opposed to doing it one after the other. The order is application dependent.) Assume dm′ > dm.
+(The reverse case is considered below.) The candidate sample is obtained by applying a bijection
+(to be chosen by the practitioner just as Q was) to yield xm′ = βm,m′(xm, u). The acceptance
+probability for the proposed sample (m′, xm′) is α(m′, xm′ ; m, xm) = min{1, r(m′, xm′ ; m, xm)}
+where r(m′, xm′ ; m, xm) is
+
+π(m′, xm′ )
+π(m, xm)
+
+Q(m|m′, xm′ )
+Q(m′, u|m, xm)
+
+|∇βm,m′(xm, u)|
+
+(13)
+
+where the right most term is the Jacobian of βm,m′. (If xm′ = βm,m′(xm, u) is a mapping that
+permutes the components of the vector (xm, u) then the Jacobian is 1.) If however dm′ < dm,
+
+8
+
+let (x′
+is x′
+
+m, u) = β−1
+
+m′,m(xm) and the candidate sample for the move to the lower dimension model
+m. The proposal (m′, xm′) is accepted with probability min{1, r} where r(m′, xm′ ; m, xm) is
+
+π(m′, xm′ )
+π(m, xm)
+
+Q(m, u|m′, xm′ )
+
+Q(m′|m, xm)
+
+|∇βm′,m(xm′ , u)|−1
+
+(14)
+
+In the MTT model, each target conﬁguration z1:n corresponds to a model index m, x1:n
+corresponds to the continuous variable xm, and pθ(z1:n, x1:n|y1:n) corresponds to π(m, xm).
+The bijections βm,m′ will do nothing more than permute the input variables to preserve the
+MTT ordering rule O and thus all Jacobians are 1.
+
+3.2 MCMC to explore (Z1:n, X1:n) in loop 1 of Algorithm 1
+
+Algorithm 2 proposes a change to (Z1:n, X1:n) by selecting one of the following proposals at
+random:
+
+1. birth/death proposal to create or delete a target;
+
+2. multi-step extension/reduction proposal to extend/reduce an existing track by multiple
+
+time units;
+
+3. one-step extension/reduction proposal to extend/reduce an existing track by one time unit;
+
+4. state proposal to exchange states between targets.
+
+All but the state proposal changes the dimension of X1:n and hence the corresponding RJMCMC
+acceptance probability in (13) needs to be derived. However the bijections are such that the
+Jacobian in (13) is always 1. Each proposal type is now described in detail in the subsections
+below
+
+Algorithm 2: MCMC moves to explore (Z1:n, X1:n)
+Input: Sample (z1:n, x1:n), data y1:n, parameter θ
+Output: Updated sample (z′
+
+1:n)
+1 Randomly select a proposal type from
+
+1:n, x′
+
+{birth/death, multi-step extension/reduction, state, one-step extension/reduction}.
+
+2 Propose (z′
+3 Calculate acceptance prob. α(z′
+
+1:n, x′
+
+1:n) by executing the chosen proposal.
+
+Output (z′
+
+1:n, x′
+
+1:n) with prob. α, otherwise (z1:n, x1:n).
+
+1:n, x′
+
+1:n; z1:n, x1:n) (see (15)/(16), (23)/(24), (26)).
+
+3.3 Birth/Death Proposal
+
+The birth/death proposal of Algorithm 2 initiates a new track or deletes an existing track and
+thus only generates proposed samples (z′
+1:n) (in step 2 which are then tested for acceptance)
+that move across dimension, i.e. is never intra-dimensional. Birth creates a track sequentially
+in time, until a stopping rule is met, by using the observed images to increase the probability of
+acceptance (we describe this sequential process in detail in Sec. 3.4 below,) while death deletes
+a by choosing one at random.
+
+1:n, x′
+
+The current MCMC input sample (Algorithm 2) is (z1:n, x1:n) or {(k, tk
+
+k=1 in the
+alternative parameterization of 2.4. Sampling from the birth/death proposal commences by
+
+b , xk)}K
+
+9
+
+ﬁrst choosing to create or delete a track with probability 0.5. If birth is chosen, a new track
+with birth time tb and states
+
+x = [x0, . . . , xl−1],
+
+xi = (ai, si, vi)
+
+are proposed, where (ai, si, vi) denote the intensity, spatial coordinates and velocity components
+of the state at time t = tb + i. If death is chosen, one of the K targets are randomly deleted, say
+target k with probability qd,θ(k|z1:n, x1:n, y1:n). In the case of a birth, using (z1:n, x1:n) and the
+newly created track, the ordering rule of Section 2.4 is invoked to obtain the MTT proposed sam-
+1:n). Assume the newly created target has label k′ in the alternative parameterization
+ple (z′
+of (z′
+1:n). The acceptance probability is α1 = min{1, r1} where r1(z′
+
+1:n; z1:n, x1:n) is
+
+1:n, x′
+1:n, x′
+
+1:n, x′
+
+1:n, x′
+
+pθ(z′
+1:n, y1:n)
+pθ(z1:n, x1:n, y1:n)
+
+qd,θ(k′|z′
+1:n, y1:n)
+qb,θ(tb, x|z1:n, x1:n, y1:n)
+
+1:n, x′
+
+(15)
+
+The term qb,θ(tb, x|z1:n, x1:n, y1:n), deﬁned in Sec. 3.4 below, is the pdf of the newly created
+target states (which corresponds to term Q(m′, u|m, xm) in the denominator of (13).) The term
+qd,θ(k′|z′
+
+1:n, y1:n) is the probability of deleting this newly created target.
+
+1:n, x′
+
+If death is chosen, delete target k of {(i, ti
+
+i=1 with probability qd,θ(k|z1:n, x1:n, y1:n)
+1:n) be the new MTT state excluding target k. The acceptance probability is
+
+b, xi)}K
+
+and let (z′
+α1 = min{1, r1} where r1(z′
+
+1:n, x′
+
+1:n, x′
+
+1:n; z1:n, x1:n) is
+
+1:n, x′
+
+pθ(z′
+1:n, y1:n)
+pθ(z1:n, x1:n, y1:n)
+
+qb,θ(tk
+
+b , xk|z′
+
+1:n, x′
+
+1:n, y1:n)
+
+qd,θ(k|z1:n, x1:n, y1:n)
+
+(16)
+
+3.4 Birth/Death Proposal: Creating a new target
+
+The birth procedure below proposes a new track by using the residual images to ﬁrst construct
+the intensity and spatial coordinates of the track and then ﬁnally the velocity values of the track.
+For the current MCMC input sample (Algorithm 2) (z1:n, x1:n), subtract the contribution of the
+kx
+t targets and background intensity bt from the image yt to get the residual image yr
+
+t where
+
+yr
+t,i = yt,i − hi(xt) − bt,
+
+i = 1, . . . , m.
+
+Match ﬁlter yr
+
+t to get the image yf
+
+t where the j-th pixel in the ﬁltered image is
+
+(17)
+
+(18)
+
+m
+
+1
+E¯h
+
+yr
+t,i
+
+¯hi(j)
+
+yf
+t,j =
+
+Xi=1
+where ¯hi(j) is deﬁned in (3)-(4) and E¯h = Pm
+
+(The sum that deﬁnes yf
+a target at or close to pixel j will likely result in yf
+another way, local maxima of yf
+
+i=1.
+t,j can be truncated to i ∈ L(j).) The rationale is that the presence of
+t,j being a local maxima among pixels. Put
+
+¯hi(j)2 is the energy of the ﬁlter {¯hi(j)}m
+
+i=1
+
+t,j are likely locations of targets.
+
+3.4.1 Proposing the initial state
+
+The move is commenced by choosing the birth time t = tb randomly from 1, . . . , n and then
+followed by steps 1 and 2 below.
+
+10
+
+Step 1 Let
+
+Gt = {1 ≤ i ≤ m : yf
+
+t,i is a local maxima, yf
+
+t,i ≥ γt(θ)}
+
+and randomly choose i ∈ Gt. γt(θ) is a time-dependent threshold chosen to avoid peaks that
+are not likely to be target generated. A deﬁnition is given in the numerical section (Sec. 4.)
+
+As a local intensity maxima is not necessarily target generated, perform a hypothesis test on
+t,j, j ∈ L(i)},
+t,L(i) is generated by a new born target and H0 the converse that it is
+
+the square of l × l pixels L(i) centered at chosen maxima i ∈ Gt. Let yr
+H1 the hypothesis that yr
+purely background noise generated. Calculate the test ratio
+
+t,L(i) = {yr
+
+ρ(yr
+
+t,L(i)) =
+
+p(H1)
+p(H0)
+
+p(yr
+p(yr
+
+t,L(i)|H1)
+t,L(i)|H0)
+
+(19)
+
+t,j; 0, σ2
+
+r,t) can be calculated analytically, p(yr
+
+t,L(i)|H0) := Qj∈L(i) N (yr
+
+details.) The probability of H1 is p(H1) = Pk>kt
+
+While p(yr
+t,L(i)|H1) is in-
+tractable but can be estimated, e.g. we use the Laplace approximation. (See Appendix A for
+P(k, λb), which is the probability that the
+number of births exceeds kb
+t is the number of targets born at time t in the current
+MCMC sample z1:n. Set p(H0) = 1 − p(H1). H1 is accepted with probability min{1, ρ(yr
+t,L(i))}.
+Return (exit birth move) if H1 is rejected. (Alternatively, H1 could be accepted with probability
+ρ/(1 + ρ) which is less presumptuous than min{1, ρ}.)
+
+t where kb
+
+b
+
+Step 2 After accepting H1, sample the intensity and position components of the initial target
+state by
+
+(A0, S0) ∼ Nt,i(·),
+
+where Nt,i(·) is a Gaussian derived from the Laplace approximation of the hypothesis test and
+is given in Appendix A. The subscript (t, i) indicates this approximation is speciﬁc to pixels
+L(i) of time t.
+
+3.4.2 Proposing the remaining intensity-position trajectory
+
+The birth move continues for t = tb + k, k > 0, using steps 1 and 2 above until a stopping rule
+is met. To conserve computations and increase its eﬀectiveness, the range 1 ≤ i ≤ m in the
+deﬁnition of Gt is limited to a region of pixels Rt where the next state would almost surely lie
+in. For example, Rt can be determined by the previous position st−1 and the upper limit on
+the target velocity.
+
+The birth move stops at some time t = td, yielding a target lifespan l = td − tb, when either
+t > n, Gt is empty or H1 is rejected. The output of this move is (a1, s1), . . . , (al−1, sl−1) where
+(a0, s0) was generated before.
+
+3.4.3 Proposing the velocity trajectory
+
+The output of the birth move thus far is (a0, s0), . . . , (al−1, sl−1) which is the complete trajectory
+of intensity and positions of the new born target. The velocity components are now generated
+to yield
+
+x = [x0, . . . , xl−1],
+
+xi = (ai, si, vi).
+
+For linear Gaussian state dynamics, the velocity can be sampled conditioned on the spatial
+locations s0, . . . , sl−1 and more generally, a Gaussian approximation/quadrature technique could
+be employed.2
+
+2The numerical examples (synthetic and real data) assume Gaussian targets.
+
+11
+
+3.4.4 Proposal density of the birth move
+
+Denoting tk = tb + k, k = 0, . . . , l, we can write the pdf for proposing (tb, x) in the birth move
+as
+
+qb,θ(tb, x|z1:n, x1:n, y1:n) = q0(tb)q1(a0, s0|yr
+
+t0)
+
+l−1
+
+q2(ak, sk|a0:k−1, s0:k−1, yr
+
+tk )
+
+×
+
+Yk=1
+
+× q3(stop|a0:l−1, s0:l−1, yr
+
+tl) q4(v0:l−1|a0:l−1, s0:l−1)
+
+(20)
+
+where q0(tb) is the probability of choosing the birth time tb, q1 corresponds to proposing the
+target’s initial intensity and position, and can be written as
+
+q1(a0, s0|yr
+
+t0) = I[Gt0 6= ∅]
+
+q(i|Gt0 ) min(1, ρ(yr
+
+t0,L(i)))Nt0,i(a0, s0)
+
+(21)
+
+× Xi∈Gt0
+
+where I[Gt0 6= ∅] is 1 if Gt0 is non-empty; q(i|Gt0 ) is the probability of choosing local intensity
+peak i ∈ Gt0 ; min(1, ρ(yr
+t0,L(i))) is the probability of accepting hypothesis H1 at peak i ∈ Gt0 ;
+Nt0,i is the Gaussian density approximation for the initial value.
+
+The law q2 is that for adding more states sequentially and may be written as
+
+q2(ak, sk|a0:k−1, s0:k−1, yr
+
+tk ) = I[Gtk 6= ∅]
+
+q(i|Gtk ) min(1, ρ(yr
+
+tk,L(i)))Ntk,i(ak, sk)
+
+(22)
+
+× Xi∈Gtk
+
+which is similar to q1 except that the previously created states a0:k−1 and s0:k−1 are used to
+calculate ρ(yr
+tk,L(i)), which is deﬁned as in (19) with the diﬀerence here being p(H1) = ps (target
+survival probability.) The likelihood ratio term in (19) is derived in the Appendix, as is the
+Gaussian term Ntk,i in (22).
+
+When tl = tb + l > n stopping at tl is certain. Otherwise, the law q3 corresponds to stopping
+due to the target not surviving, Gtl being empty, or the hypothesis test failing and is given by
+
+q3(stop|a0:l−1, s0:l−1, yr
+tl)
+
+= 1 − psI[Gtl 6= ∅] Xi∈Gtl
+
+q(i|Gtl ) min(1, ρ(yr
+
+tl,L(i)))
+
+For linear and Gaussian state dynamics, conditioned on a0, s0, . . . , al−1, sl−1, the velocity can
+be sampled (exactly) since q4 will be a Gaussian distribution as well.
+
+3.5 Multi-step Extension/Reduction proposal
+
+This proposal extends or reduces the trajectory of a randomly chosen target. A target’s trajec-
+tory is extended (/reduced) by bringing forward its birth (/death) time or delaying its death
+(/birth) time. The extra state values are then appended (/discarded) accordingly. Like the
+birth/death proposal, this proposal only moves the MCMC sample across dimension.
+b , xk)}K
+
+k=1 in the
+alternative parameterization of 2.4. Sampling from the multi-step extension/reduction proposal
+commences with choosing between extension and reduction equiprobably.
+
+The current MCMC input sample (Algorithm 2) is (z1:n, x1:n) or {(k, tk
+
+12
+
+Extension From the subset of targets with lifetimes less than n, randomly select a target and
+extension direction.
+(Without the lifetime restriction the chosen target cannot be extended
+further.) The direction of extension is chosen equiprobably if both forward and backward
+extensions are permissible. Assume target k is selected for a forward extension, denoted k+.
+A new (delayed) death time and trajectory extension x = (x1, x2, . . .) is proposed to yield the
+new extended trajectory ˆxk = (xk, x). For a backward extension of target k, the event denoted
+by k−, a new (earlier) birth time, denoted τ k
+b and trajectory extension x is proposed to yield
+ˆxk = (x, xk). The ordering rule of Section 2.4 is invoked to obtain the MTT proposed sample
+b , ˆxk). The
+(z′
+acceptance probability is α2 = min{1, r2} where r2(z′
+
+i=1,i6=k and the extended target (τ k
+
+1:n) from the unaltered targets {(ti
+
+b, xi)}K
+
+1:n, x′
+
+1:n, x′
+
+1:n, x′
+
+pθ(z′
+1:n, y1:n)
+pθ(z1:n, x1:n, y1:n)
+
+qr,θ(z1:n, x1:n|z′
+
+qe,θ(k+/−, x|z1:n, x1:n, y1:n)
+
+1:n; z1:n, x1:n) is
+1:n, x′
+
+1:n)
+
+.
+
+(23)
+
+The probability density of choosing target k, extension direction and states x is denoted
+qe,θ(k+/−, x|z1:n, x1:n, y1:n) which is calculated similarly to the expression (20) of the birth move
+and it is not repeated here. We denote the total probability of making the return transition
+from (z′
+
+1:n) to (z1:n, x1:n) via the reduction, described next, with the term qr,θ above.
+
+1:n, x′
+
+b + 1, . . . , tk
+
+d − 1} is chosen randomly and discard the time {t, . . . , tk
+
+Reduction Randomly select a target from the subset of targets with lifetimes exceeding one
+and then the reduction direction, either forwards or backwards, equiprobably. Let k+ denote
+target k for forward reduction and k− for backward reduction. In the forward case, a reduction
+time point t ∈ {tk
+d − 1} section
+of the track, causing t to be the new death time. If backwards then t ∈ {tk
+d − 2} is chosen
+randomly and the {tk
+b denote
+the (possibly new) birth time, ˆxk the retained trajectory and x the discarded forward/backward
+state trajectory of target k. The ordering rule of Section 2.4 is invoked to obtain the MTT
+proposed sample (z′
+i=1,i6=k and the reduced
+b , ˆxk). Assume the reduced target has label k′ in the alternative parameterization of
+target (τ k
+1:n, x′
+1:n). Let qr,θ(z′
+(z′
+1:n|z1:n, x1:n) denote the total probability of making the transition
+1:n, x′
+from (z1:n, x1:n) to (z′
+1:n) via the described reduction step. The acceptance probability is
+α2 = min{1, r2} where r2(z′
+1:n, x′
+
+b , . . . , t} portion is discarded to yield a new birth time of t+1. Let τ k
+
+1:n) from the the unaltered targets {(ti
+
+b , . . . , tk
+
+b, xi)}K
+
+1:n, x′
+
+1:n, x′
+
+1:n; z1:n, x1:n) is
+qe,θ(k′
+
+1:n, x′
+
+pθ(z′
+1:n, y1:n)
+pθ(z1:n, x1:n, y1:n)
+
++/−, x|z′
+1:n, x′
+
+1:n, x′
+1:n|z1:n, x1:n)
+
+1:n, y1:n)
+
+qr,θ(z′
+
+(24)
+
+3.6 One-step Extension/Reduction proposal
+
+The intensity threshold γt(θ) used in the Birth (Sec. 3.3)) and Extension (Sec. 3.5) moves ignore
+the local intensity peaks Gt of the match ﬁltered image yf
+t that are below γt(θ). This may result
+in the next state of a momentarily dim target not being detected. As a remedy, a new one-step
+extension/reduction proposal is deﬁned. This proposal, which is to be regarded as a diﬀerent
+proposal to multi-step extension/reduction (Sec. 3.5), proceeds as multi-step except that it
+extends or truncates the trajectory of the selected target by one time point only. In particular,
+its acceptance probability is α3 = min{1, r3} with r3 deﬁned as in (23) and (24) but with the
+following diﬀerences. The expression qr,θ(z′
+1:n|z1:n, x1:n) in (23) (and (24)) is now 1/2K
+(assuming K targets have lifetimes exceeding one) since the probability of selecting a particular
+target is 1/K and then the reduction direction is 1/2. Let the trajectory of the selected target
+prior to extension be xk = (xk
+
+lk−1), then qe,θ in (23) for k+ is
+
+0, . . . , xk
+
+1:n, x′
+
+qe,θ(k+, x|z1:n, x1:n) = qe,θ(k+|z1:n, x1:n)fψ(x|xk
+
+lk −1)
+
+13
+
+where the ﬁrst factor is the probability of selecting k+ (target k and forward extension) and
+the extended state value is sampled from the prior model fψ. For a backward extension or k−,
+qe,θ(k−, x|z1:n, x1:n) is
+
+qe,θ(k−|z1:n, x1:n)
+
+µψ(x)fψ(xk
+
+R µψ(x′)fψ(xk
+
+0|x)
+0|x′)dx′
+
+,
+
+the extended state is sampled from initial distribution µψ of new targets conditioned on the
+value of its next state.
+
+3.7 State proposal
+
+In
+This proposal chooses a pair of targets and swaps a section of their state trajectories.
+particular, it randomly chooses a time t < n and then randomly changes It+1, which is the
+vector that links targets in Xt and Xt+1, as illustrated in Figure 2. When Xt,i has descendant
+Xt+1,g, it can propose to swap its descendant with that of Xt,j (case 1), or change its descendant
+to the initial state Xt+1,h of a target born at time t + 1 (case 2), or to delete the link (case 4).
+When Xt,i has no descendant, it can be merged with a new-born target at time t + 1 by linking
+to its initial state (case 3), or steal another surviving target’s descendant (case 5). The state
+proposal is purely intra-dimensional (or in the context of Sec. 3.1 it moves between models pairs
+(m, m′) satisfying dm = dm′ .)
+
+Xt,i
+
+Xt,j
+
+Xt,i
+
+Xt,j
+
+Xt+1,g
+
+Xt,i
+
+Xt+1,g
+
+(1)
+
+Xt+1,h
+
+Xt,j
+
+Xt+1,h
+
+Xt,i
+
+Xt+1,g
+
+(3)
+
+(4)
+
+Xt,i
+
+Xt+1,g
+
+Xt+1,g
+
+(2)
+
+Xt+1,h
+
+Xt,i
+
+Xt,j
+
+Xt+1,g
+
+Xt,i
+
+Xt+1,g
+
+Xt,i
+
+Xt+1,g
+
+(5)
+
+Xt+1,h
+
+Xt,j
+
+Xt+1,h
+
+Xt,j
+
+Xt+1,h
+
+Figure 2: State move.
+
+b , xk)}K
+
+The current MCMC input sample (Algorithm 2) is (z1:n, x1:n) or {(k, tk
+
+k=1 in the
+alternative parameterization of 2.4. Sampling from the state proposal commences with choosing
+a time t < n and a pair of targets (labels) U = {i, j} from the total set of targets {1, . . . , K}
+subject to targets i and j being alive at times t and t + 1 respectively. Choosing i = j is
+permitted (then U = {i}) and target i must be alive at time t and t + 1. (For example, in
+implementation we chose a target i from time t, and a target state value from the set of time
+t + 1 targets with probability inversely proportional to the distance from target i’s state value
+at time t.) We denote the probability of a particular selection by qs,θ(t, U |x1:n, z1:n). If i = j
+then split target i into two targets as in case 4 of Figure 2. If i 6= j, pair the ancestors of i with
+the descendants of j in the manner shown in Figure 2 (all cases except 4), i.e. the swap alters
+trajectories xi and xj to
+
+xi → (xi
+xj → (xj
+
+0, . . . , xi
+0, . . . , xj
+
+s, xj
+s, xi
+
+s′ , . . . , xj
+s′ , . . . , xi
+
+lj −1) =: ˆxi
+li−1) =: ˆxj
+
+(25)
+
+b + s = t, tj
+
+where ti
+the birth times after the swap τ i
+
+b , τ j
+
+b
+
+b + s′ = t + 1. Note the birth time (of at most one target) may change. Call
+
+14
+
+The next part of the state move then proposes a change to the continuous variables of the
+aﬀected targets k ∈ U = {i, j} form ˆxk to ˜xk to increase the chance of the move being accepted.
+This is because changing the links between targets at time t and t + 1 can cause a mismatch in
+the velocity and intensity of the newly formed links. As such, the state move will then propose
+a change to the velocity and intensity components of the aﬀected targets while retaining their
+original spatial position components. Let qs,θ(t, U, (˜xk)k∈U |x1:n, z1:n, y1:n) denote the joint pdf
+of selecting (t, U ) and the change (ˆxi, ˆxj) → (˜xi, ˜xj). (See Appendix B for the expression.)
+Finally, we let (z′
+1:n) denote MTT state (in the original parameterization) of the unaltered
+b , ˜xk}k∈U . The acceptance probability of the state
+{tk
+move is then α3 = min{1, r3} where r3(z′
+
+b , xk}k∈{1...,K}/U and altered targets {τ k
+
+1:n; z1:n, x1:n) is
+
+1:n, x′
+
+1:n, x′
+
+1:n, x′
+
+pθ(z′
+1:n, y1:n)
+pθ(z1:n, x1:n, y1:n)
+
+qs,θ(t, U ′, (xk)k∈U ′ |x′
+1:n, y1:n)
+qs,θ(t, U, (˜xk)k∈U |x1:n, z1:n, y1:n)
+
+1:n, z′
+
+(26)
+
+U ′ is the label set of the targets with swapped components in the alternate parameterisation of
+(z′
+
+1:n, x′
+
+1:n).
+
+4 Numerical examples
+
+This section presents the two main numerical examples. The ﬁrst one uses synthetic data
+and assumes known MTT parameters so that a fair comparison can be made between our
+MCMC tracker (Algortihm 1 excluding parameter learning) and the multi-Bernoulli (MB) ﬁlter
+of [9]. (The MB tracker does not learn parameters.) The numerical results will demonstrate the
+performance improvements of our method when tracking targets that are close to each other
+with overlapping illumination regions. The second example is a real-data example that applies
+Algorithm 1 to track Fab3 labelled Jurkat T-cells. The tracking method currently used by
+biochemists [2] extracts point measurements from the images and then connects them to form
+trajectories using a nearest neighbour type method. Our algorithm will be shown to outperform
+theirs when tracking dim targets as well as targets with overlapping illumination regions. All
+simulations were run in Matlab on a PC with an Intel i5 2.8 GHZ ×2 processor.
+
+Recall the deﬁnition of an individual target’s state Xt = (At, St(1), St(2), Vt(1), Vt(2)) in
+(1). For the numerical examples, we use a drifting intensity and near constant velocity motion
+model,
+
+At = At−1 + Ut, Ut
+
+i.i.d.∼ N (0, σ2
+
+i ),
+
+[St(j), Vt(j)] = [St−1(j) + δVt−1(j), Vt−1(j)] + Ut,j,
+i.i.d.∼ N (0, σ2
+
+i.i.d.∼ N (0, σ2
+
+xΣ), U T
+t,2
+
+U T
+t,1
+
+yΣ),
+
+where δ is the (known) sampling interval and
+
+Σ =(cid:18)δ3/3 δ2/2
+δ (cid:19) .
+
+δ2/2
+
+The initial hidden state is assumed to be Gaussian distributed with mean µb = (µbi, µbx, µby, 0, 0)T
+and covariance Σb = diag(σ2
+bv). The mean of the initial velocity is set to be 0
+in the absence of more information but this still can yield directional motion if the observations
+support this. All the parameters ψ of the hidden state dynamics are (see (1))
+
+bv, σ2
+
+bp, σ2
+
+bp, σ2
+
+bi, σ2
+
+ψ = (µbi, µbx, µby, σ2
+
+y).
+
+bi, σ2
+
+bp, σ2
+
+bv, σ2
+
+i , σ2
+
+x, σ2
+
+3 Fab (Fragment antigen-binding) is a region on an antibody that binds to antigens.
+
+15
+
+and augmenting ψ with the parameters of the target birth/death and observation models gives
+
+θ = (ψ, ps, λb, b1, σ2
+
+r,1, . . . , bn, σ2
+
+r,n).
+
+Prior for θ: All the variance components above have independent priors, which is the inverse
+gamma distribution IG(α0, β0) with (common) shape α0 and scale β0 parameters.
+(Setting
+α0 ≪ 1 and β0 ≪ 1 yields a less informative prior.) Given σ2
+bpy and σ2
+r,t (for t =
+1, . . . , n), the priors of µbi, µbx, µby and bt are µbi|σ2
+bp ∼ N (µ0, σ2
+bi ∼ N (µ0, σ2
+bp/n0),
+µby|σ2
+r,t/n0). These are made more diﬀused by setting n0
+and µ0 to be small. The conjugate priors of ps, λb are
+
+bpx, σ2
+bi, σ2
+bi/n0), µbx|σ2
+
+bp ∼ N (µ0, σ2
+
+r,t ∼ N (µ0, σ2
+
+bp/n0), bt|σ2
+
+ps ∼ Unif(0, 1),
+
+λb ∼ G(α0, β0),
+
+where Unif(a, b) and G(α, β) represent (respectively) the uniform distribution over (a, b) and the
+gamma distribution with shape parameter α and scale parameter β. We set α0 ≪ 1, β0 ≫ 1 to
+make the prior less informative. (If prior knowledge is available, a more appropriate choice of
+(α0, β0) can be made.) K s
+t is a Binomial r.v. with success probability ps and number of trials
+K x
+
+t is a Poisson r.v. with rate λb. Thus their posteriors are
+
+t−1. K b
+
+n
+
+n
+
+ks
+t , 1 +
+
+ps|z1:n, y1:n ∼ B(cid:18)1 +
+Xt=1
+λb|z1:n, y1:n ∼ G(cid:18)α0 +
+Xt=1
+
+n
+
+t )(cid:19),
+
+t−1 − ks
+
+(kx
+
+Xt=2
+0 + n)−1(cid:19).
+
+t , (β−1
+kb
+
+The illuminated region L(s) is an l × l square region of pixels centered at s, with l =
+1 + ⌈4σh⌉/∆ where ⌈·⌉ rounds up its argument. The intensity threshold γt(θ) is chosen to be
+t,j in (18) to
+exceed µbi − 3σb,i (mean birth illumination minus 3 times its standard deviation) with high
+probability if a target is present in pixel j of the residual image in (17). However, assuming no
+t,j.
+
+γt(θ) = min(µbi − 3σbi, 3σr,t/pE¯h) using the following rationale. We expect yf
+targets illuminate pixels L(j) of the residual image, σr,t/pE¯h is the standard deviation of yf
+t,j should not be exceed 3σr,t/pE¯h and avoids triggering detection.
+
+With high probability, yf
+
+4.1 Comparison with the multi-Bernoulli tracker
+
+We compared our algorithm with the MB tracker [9]. Unlike the subsequent real data example,
+this synthetic case assumed bt = 0 and σ2
+r for all t (see (6).) We synthesised 50 frames
+(images) of 168 × 184 pixels each using the parameter vector
+
+r,t = σ2
+
+ψ∗ = (30, 0, 0, 4, 25, 3, 0.5, 0.3, 0.7), θ∗ = (ψ∗, 0.95, 0.3, 1).
+
+(27)
+
+We set σ2
+
+h = 1, ∆ = 1. This gives a 5 × 5 pixel square for the illuminated region L(s)
+(see (3)). From (3), deﬁne SNR = 20 log( a∆2/2πσ2
+). For a = µbi = 30, the initial SNR is
+13.6 dB. The synthetic data had 20 targets whose trajectories are shown in Figure 3a along
+with the trajectories obtained by running the MCMC tracker with n1 = 30, n2 = 1 (and
+n3 = 0) and 15 particles per target for the particle Gibbs sampler. Figure 3a shows all targets
+being tracked completely. In contrast, Figure 3b shows the output of the MB tracker of [9].
+The birth process assumed by the MB tracker has four terms each of which has the same
+initial distribution N (·|µb, Σb) and existence probability 0.1. Pruning and merging targets are
+performed as suggested in [9] to eliminate tracks with existence probability less than 0.01 and
+
+σr
+
+h
+
+16
+
+n
+o
+
+i
+t
+c
+e
+r
+i
+d
+−
+X
+
+50
+
+0
+
+−50
+
+50
+
+0
+
+−50
+
+n
+o
+
+i
+t
+c
+e
+r
+i
+d
+−
+Y
+
+n
+o
+
+i
+t
+c
+e
+r
+i
+d
+−
+X
+
+50
+
+0
+
+−50
+
+5
+
+10
+
+15
+
+20
+
+25
+time
+
+30
+
+35
+
+40
+
+45
+
+50
+
+5
+
+10
+
+15
+
+20
+
+30
+
+35
+
+40
+
+45
+
+50
+
+25
+time
+
+50
+
+0
+
+−50
+
+n
+o
+
+i
+t
+c
+e
+r
+i
+d
+−
+Y
+
+−80
+
+−60
+
+−40
+
+−20
+
+0
+
+X−direction
+
+20
+
+40
+
+60
+
+80
+
+−80
+
+−60
+
+−40
+
+−20
+
+0
+
+X−direction
+
+20
+
+40
+
+60
+
+80
+
+(a) MCMC tracker
+
+(b) multi-Bernoulli tracker
+
+Figure 3: Comparison with the multi-Bernoulli ﬁlter in [9]. Tracks labelled − ∗ − (red) is ground truth while
+(blue) circles are the estimates.
+
+merge two tracks when they fall within a fraction (3/4) of a pixel size in distance. The number
+of particles assigned for each hypothesised target in MB tracker is restricted between 5000 and
+8000.
+In Figure 3b, it is seen that some tracks are lost after they cross, which is the main
+limitation of the MB tracker as pointed out in [9]. This is because crossing targets invalidates
+the crucial assumption, necessary to derive the MB tracker, that the illuminated region of the
+targets do not overlap. In terms of the computation time, the MB tracker take less than one
+minute to run while the MCMC tracker takes 6 minutes. Closely spaced targets are common
+place in many applications, an example being the real-data experiment reported below. Our
+MCMC tracker should be viewed as a method applicable to closely spaced targets and not as a
+competitor of a technique optimized for non-overlapping targets like the MB tracker.
+
+The previous comparison was done assuming known model parameters. The current example
+revisits the same data set assuming θ∗ in (27) is unknown to Algorithm 1, which was re-run
+with the initial parameter set to
+
+θ(0) = (45, 10, 5, 8, 50, 6, 3, 1, 1.5, 0.6, 1, 4),
+
+while MB output of the previous example was used. (The MB was given the true parameter
+as it does not incorporated parameter learning. The MCMC outputs of Algorithm 1 will be
+denoted (z(i)
+1:n, θ(i)).) OSPA distances [9] of the three algorithms are plotted in Figure
+4a. Figure 4a shows that the tracking performance with unknown parameters is similar to the
+known case reported earlier. A further veriﬁcation is the probability density values plotted in
+Figure 4b where pθ∗(z(i)
+1:n, y1:n) was calculated from the previous experiment (Algorithm 1
+with known parameters) and pθ(i)(z(i)
+1:n, y1:n) are the density values from Algorithm 1 with
+parameter learning.
+
+1:n, x(i)
+
+1:n, x(i)
+
+1:n, x(i)
+
+Figure 5 shows the histograms of 2000 post burn-in parameter samples of Algorithm 1 as
+the approximation of p(θ|y1:n). The (red) dashed lines show the MLE estimate ˆθ obtained using
+
+17
+
+ 
+
+x 106
+
+−2.192
+
+ 
+
+14
+
+12
+
+10
+
+8
+
+6
+
+4
+
+2
+
+e
+c
+n
+a
+
+ 
+
+t
+i
+s
+d
+A
+P
+S
+O
+
+)
+n
+
+:
+1
+y
+,
+n
+
+:
+1
+x
+
+,
+n
+
+:
+1
+z
+(
+θ
+p
+g
+o
+l
+
+−2.1925
+
+−2.193
+
+−2.1935
+
+−2.194
+
+−2.1945
+
+Multi−Bernoulli
+MCMC tracker
+MCMC joint tracker
+
+0
+
+ 
+0
+
+5
+
+10
+
+15
+
+20
+
+25
+
+time
+
+30
+
+35
+
+40
+
+45
+
+50
+
+−2.195
+
+ 
+0
+
+200
+
+400
+
+600
+
+800
+
+1000
+
+iteration
+
+1200
+
+1400
+
+(a) OSPA
+
+(b) Log density
+
+MCMC tracker
+MCMC joint tracker
+ground truth
+1600
+
+1800
+
+2000
+
+Figure 4: (a) Comparing OSPA tracking error of the multi-Bernoulli ﬁlter (top solid black line) with Alg. 1 with
+and without parameter learning (lower traces.) OSPA error of MCMC almost equal when θ∗ is known or learnt
+during tracking. (b) Plot of pθ∗(z
+1:n, y1:n) (Alg. 1 with
+parameter learning) against MCMC iteration i. Horizontal (red) line indicates ground truth pθ∗ (z∗
+1:n, y1:n).
+
+1:n, y1:n) (Alg. 1 with known θ∗) and pθ(i) (z
+
+1:n, x(i)
+
+(i)
+
+1:n, x(i)
+
+1:n, x∗
+
+(i)
+
+the true value of the latent variables, i.e. (z∗
+(9), (10))
+
+1:n, x∗
+
+1:n). Speciﬁcally, ˆθ is comprised of (see (8),
+
+(ˆps, ˆλb) = arg max
+ps,λb
+ˆσr = arg max
+
+σr
+
+p(z∗
+
+1:n),
+
+ˆψ = arg max
+
+ψ
+
+p(y1:n|x∗
+
+1:n, z∗
+
+1:n).
+
+p(x∗
+
+1:n|z∗
+
+1:n),
+
+(28)
+
+As a correctness check, for an uninformative prior, the posterior modes should be consistent
+with MLE of θ∗. The true MLE is arg maxθ pθ(y1:n), which will be diﬀerent from (27), is not
+available as pθ(y1:n) is intractable. We use ˆθ of (28) as the surrogate. Note the modes of the
+posterior do coincide with the surrogate MLE.
+
+4.2 Experiments on Fab labelled Jurkat T-cells
+
+The source of the data were Jurkat T-cells, an immortalised cell line of human T-lymphocytes
+which plays an important function in immune response. Cells were imaged using a microscopy
+technique called total internal reﬂection ﬂuorescence microscopy. The cell’s molecules of interest
+were bound to antibodies labelled with a bright green-ﬂuorescent dye (Alexaﬂuo48). It is known
+that the number of labeled molecules (or ‘targets’) can be high; at physiological levels there can
+be several molecules per square micron.
+
+The data is comprised of 20 frames of 115 × 120 pixel images with a pixel size 176nm and a
+frame rate of 17.8 frame/s. The diﬀusion coeﬃcient D is expected to be in the region of 0.01-
+0.1um2/s. This implies the displacement of molecules between consecutive frames is expected
+to be in the order of 0.1-1 pixel. The estimated initial SNR here is around 10dB (estimated
+from the tracking result). Figure 7 (left) shows one frame of the observed images.
+
+4.2.1 Parameter initialisation
+
+In choosing the initial parameter vector θ(0), some components were chosen arbitrarily while
+others were guided by the observed images. (Note that the initialisation step does not need to
+be overly precise as our algorithm does not depend on speciﬁc initial values to work.) We set
+ps = 0.6, λb = 0.2 arbitrarily; µ(0)
+by = 60 to coincide with the image centres since the
+
+bx = µ(0)
+
+18
+
+1
+
+0.5
+
+0
+0.9
+
+1
+
+0.5
+
+0
+
+1
+
+0.5
+
+0
+
+p s
+
+1
+
+0.95
+
+µ b i
+
+28
+
+30
+
+32
+
+σ 2
+x
+
+0.2
+
+0.4
+
+0.6
+
+λ b
+
+0.2
+
+0.4
+
+0.6
+
+σ 2
+b p
+
+15
+
+25
+
+σ 2
+y
+
+0.6
+
+0.8
+
+1
+
+µ b x
+
+−2
+
+0
+
+2
+
+σ 2
+b v
+
+2
+
+4
+
+6
+
+8
+
+10
+
+σ 2
+i
+
+0.5
+
+1
+
+1
+
+0.5
+
+0
+
+1
+
+0.5
+
+0
+
+1
+
+0.5
+
+0
+
+0
+
+1
+
+0.5
+
+0
+
+1
+
+0.5
+
+0
+
+0
+
+1
+
+0.5
+
+0
+0.99
+
+1
+
+0.5
+
+0
+
+0
+
+1
+
+0.5
+
+0
+
+5
+
+1
+
+0.5
+
+0
+0.4
+
+µ b y
+
+−2
+
+0
+
+2
+
+σ 2
+b i
+
+2
+
+4
+
+6
+
+σ 2
+r
+
+0.995
+
+1
+
+1.005
+
+Figure 5: Histograms of 2000 parameter samples obtained by Algorithm 1. Vertical (red) lines indicate the
+MLE estimate in (28).
+
+19
+
+centres appear much brighter than the periphery; µ(0)
+bi = 70 is calculated from (3) assuming a
+target is in the middle of the brightest pixel of the ﬁrst frame; set (σ2
+bp)(0) = 400 by roughly
+bv)(0) = 1 covers the
+observing that the bright spots are sparse and span the whole image; (σ2
+velocity range of the molecules (0.1-1 pixel per image) and ﬂat enough to allow diﬀerent possible
+diﬀusion coeﬃcients; (σ2
+y)(0) = 0.1 for small initial driving
+i )(0) = 25 arbitrarily. The time-varying observation noise statistics, mean (bt)(0)
+state noise; (σ2
+and variance (σ2
+r,t)(0), are initialised to equal the mean and variance of the pixel intensities at
+that time since bright pixels are sparse in the images.
+
+bi)(0) = 100 arbitrarily; (σ2
+
+x)(0) = (σ2
+
+The point spread parameter σh is not estimated and ﬁxed at σh = 2 (normalised with
+∆2). The illuminated region L(s) has 9 × 9 pixels. The value of σh if often known to the
+experimentalist otherwise, a bit tuning is required.4 It could also be estimated as part of θ.
+
+4.2.2 Comparison with [2]
+
+The tracking algorithm of [2] is a nearest-neighbour method which has an image pre-processing
+step to extract point measurements. Tracks are then created by connecting point measurements
+nearest to each other. A set of consecutive frames are considered at the same time to allow
+temporary mis-detections. (See [2] for more details.) One of the main disadvantages of this
+heuristic method is that it may miss targets moving close to each other with overlapping illumi-
+nation regions, as only one point measurement may be extracted from a comparably big bright
+region; another disadvantage is the user-deﬁned hard-threshold which may cause the targets
+with lower intensities completely missed. Take frame 15 in Figure 6 as an example. Algorithm 1
+detects more targets in the centre and marginal regions of the frame, compared to the method
+in [2]. ([2] mentions indeed targets were missed in the marginal regions.) Figure 6 compares the
+tracked positions of the molecules of these two algorithms. As a veriﬁcation of our result, in the
+absence of ground truth, we compare in Figure 7 the true and synthesised image (based on our
+estimated tracks and model parameters) at frame t = 15. Their likeness oﬀers some reassurance.
+
+5 Conclusion
+
+We have proposed a new MCMC based MTT algorithm for joint tracking and parameter learn-
+ing that works directly with image data and avoids the need to pre-process to extract point
+observations. In numerical examples, we demonstrated improved performance in diﬃcult track-
+ing scenarios involving many targets with overlapping illumination regions, over competing
+methods [2, 9], which was achieved by targeting the exact posterior using MCMC. We do not
+advocate that our MCMC technique should replace an online method or optimised methods
+for non-overlapping targets such [9]. It is an alternative that works without major underlying
+limiting assumptions (like non-overlapping) and can be used to reﬁne online estimates. Possible
+future works include the design of more eﬃcient proposals for our MCMC routine, parellelization
+and performance optimization for very high density tracking.
+
+4When σh is too small, the illuminated region taken into account is smaller than it should be which would
+
+cause many more targets than expected. In that case, we should increase σh.
+
+20
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+←
+
+←
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+←
+
+←
+
+←
+
+←
+
+←
+←
+
+←
+
+←
+
+←
+
+←
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+←
+
+40
+
+0
+
+20
+
+60
+
+Time=15, #of targets=71
+
+80
+
+100
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+n
+o
+
+i
+t
+c
+e
+r
+i
+d
+−
+Y
+
+ ←
+
+ ←
+
+ ←
+
+ ←
+
+ ←
+
+ ←
+
+ ←
+
+ ←
+
+ ←
+ ←
+
+ ←
+
+ ←
+
+ ←
+
+ ←
+
+ ←
+
+ ←
+
+ ←
+
+ ←
+
+ ←
+
+40
+
+ ←
+
+20
+
+ ←
+
+ ←
+
+ ←
+
+ ←
+ ←
+
+ ←
+
+ ←
+
+ ←
+
+ ←
+
+60
+
+Time=15, #of targets=29
+
+80
+
+100
+
+120
+
+10
+
+20
+
+30
+
+40
+
+50
+
+60
+
+70
+
+80
+
+90
+
+100
+
+110
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+n
+o
+
+i
+t
+c
+e
+r
+i
+d
+−
+Y
+
+0
+
+20
+
+40
+
+60
+
+X−direction
+
+80
+
+100
+
+120
+
+0
+
+20
+
+40
+
+60
+
+X−direction
+
+80
+
+100
+
+120
+
+Figure 6: Estimated target positions in frame t = 15 of a video of ﬂuorophore labelled molecules diﬀusing
+in the cell membrane of a Jurkat-T cell indicated by the (cyan) arrows. Top-left gives the estimated positions
+derived from one (representative) sample of the tracking result of Algorithm 1, top-right for the method in [2].
+Bottom-left is the tracking result of our method, bottom-right the method in [2].
+
+Replicated Image at t=15
+
+Observed Image at t=15
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Figure 7: Comparison of the observed image (left) and the replicated one (right) at frame t = 15 for the
+real-data experiment.
+
+21
+
+A Hypothesis testing
+
+The term of (19) to be calculated is p(yr
+pixel that is a local maximum of yf
+
+t,L(i)|H1) where yr
+
+t,L(i) = {yr
+
+t,j}j∈L(i) and i ∈ Gt is a
+
+t . Let (r, c) be its row and column number and
+
+(¯a, ¯s) = (yf
+
+t,i, ∆r, ∆c).
+
+Vector (¯a, ¯s) can be interpreted as the likely intensity ¯a and location ¯s of an undetected target.
+Below we just write L as the set of pixels under consideration instead of L(i).
+
+Let x = (a, s, v) ∈ R × R2 × R2 where as before a denotes intensity, s = (s(1), s(2)) spatial
+(Recall that a pixel illumination is not a
+
+coordinates and v = (v(1), v(2)) spatial velocity.
+function of velocity.) The aim is to calculate
+
+N (yr
+
+t,j; a¯hj(s), σ2
+
+× p(a, s, v|H1)dadsdv
+
+r,t)
+
+
+p(yr
+
+t,L|H1) =Z 
+Yj∈L
+=Z p(yr
+
+t,L|a, s)p(a, s|H1)dads
+
+(29)
+
+where p(a, s|H1) is either the marginal (or restriction to intensity and spatial position only) of
+the law of the birth µψ (see (1)) if proposing the initial state of the birth move, or the pdf
+p(a, s|a0:k, a0:k) (to be deﬁned below) if extending the target intensity and position trajectory
+after having created the initial intensity and position. p(yr
+
+t,L|a, s) is implicitly deﬁned.
+
+Let p(yr
+
+t,L, a, s|H1) = p(yr
+
+t,L|a, s)p(a, s|H1). Use the approximation
+
+ln p(yr
+
+t,L, a, s|H1) ≈ ln p(yr
+
+t,L, ¯a, ¯s|H1)
+
+−
+
+1
+2
+
+[(a, s) − (¯a, ¯s)]D[(a, s) − (¯a, ¯s)]T
+
+(30)
+
+where −D is the second order derivative ∇2 ln p(yr
+t,L, a, s|H1) evaluated at (¯a, ¯s). Expression (30)
+is like the Laplace approximation except that the second order Taylor expansion is computed at
+(yf
+t,L, a, s|H1) to save on the maximization
+step, which we ﬁnd in the numerical examples to be still eﬀective as a component of the birth
+move. (Moreover, it is a fair simpliﬁcation for a diﬀused prior.) Thus
+
+t,i, ∆r, ∆c) and not the true maximum arg maxa,s p(yr
+
+p(yr
+
+t,L|H1) ≈ p(yr
+
+t,L, ¯a, ¯s|H1)
+
+and the Gaussian distribution in (21) is
+
+(2π)3/2
+
+p|D|
+
+N (·|(¯a, ¯s), D−1).
+
+(31)
+
+Sec. 4 (numerical examples) assumes a linear and Gaussian model for the targets in both the
+
+synthetic and real data examples. The description is now completed by specifying p(¯a, ¯s|H1).
+
+When the birth move is constructing the initial/ﬁrst state of the target,
+
+and the expression in (19) now simpliﬁes to
+
+p(a, s|H1) =Z µψ(a, s, v)dv
+
+ρ(yr
+
+t,L(i)) =
+
+p(H1)
+p(H0)
+
+p(yr
+p(yr
+
+t,L|¯a, ¯s)
+t,L|H0)
+
+p(¯a, ¯s|H1)
+
+.
+
+(2π)3/2
+
+p|D|
+
+22
+
+(32)
+
+(33)
+
+Finally, we derive p(a, s|H1) in (29) when the birth move is extending the target intensity and po-
+sition trajectory after having created the initial intensity position pairs (a0, s0), . . . , (ak−1, sk−1)
+for some k ≥ 1. For a target with a linear Gaussian model (1), the pdf of vk−1 (or v0:k−1)
+conditioned on s0:k−1, which is denoted pψ(vk−1|s0:k−1), is a Gaussian. Thus p(a, s|H1) is
+
+Z fψ(a, s, v|ak−1, sk−1, vk−1)pψ(vk−1|s0:k−1)dvdvk−1
+
+and the corresponding expression for ρ(yr
+
+tk,L(i)) in (22) is the same as in (33).
+
+B State proposal
+
+The state proposal of Sec. 3.7 alters the state values of the targets whose trajectories have been
+partially exchanged. This proposal is deﬁned for the Gaussian model in Sec. 4.
+
+b
+
+b
+
+b , xk)(cid:9)K
+
+, y1:n) can be decomposed as the product of qs,θ(U, t|x1:K, t1:K
+
+k=1 be the MTT state and assume without loss of generality U = {1, 2}. The
+
+state porposal qs,θ(U, t, ˜x1, ˜x2|x1:K, t1:K
+and qs,θ(˜x1, ˜x2|x1:K , t1:K
+
+Let(cid:8)(k, tk
+is not y1:n dependent. Using y1:n and (cid:8)(k, tk
+
+, y1:n, U, t). The ﬁrst term is the probability of selecting (U, t) which
+k=3, generate the residual image as in (17)
+b, x1)
+t,m) denote the residual images at time t. The state proposal
+1:n) where (ˆx1, ˆx2) is deﬁned in (25). Note
+
+by subtracting the background intensity and the contribution from all targets except (t1
+and (t2
+samples (˜x1, ˜x2) from the pdf qs,θ(˜x1, ˜x2|ˆx1:2, τ 1:2
+the dependancy on targets k > 2 is captured through the residual image.
+0, vi
+
+li−1)
+is expressed as (ai, si, vi) to highlight the intensity, spatial coordinates and velocity components.
+
+For brevity, we write (x1, x2) instead of (ˆx1, ˆx2). Also xi = (ai
+
+b , xk)(cid:9)K
+
+b , x2). Let yr
+
+t,1, . . . , yr
+
+0, . . . , ai
+
+t = (yr
+
+li−1, vi
+
+li−1, si
+
+0, si
+
+, yr
+
+b
+
+b
+
+)
+
+If targets 1 and 2 exist at time t then their state values are x1
+
+The proposal qs,θ does not alter the spatial components, i.e. ˜s1 = s1 and ˜s2 = s2.
+The velocities (˜v1, ˜v2) ∼ pψ(˜v1|s1)pψ(˜v2|s2), i.e. are sampled independently from pψ, which
+is the prior pdf of the velocity conditioned on the spatial coordinates values, which is Gaussian.
+and respec-
+r,t) if targets 1 and 2 both do not exist at
+) +
+r,t) if both exists. The prior probability model (see (1)) for the intensities are in-
+b , s2), the pos-
+1:n).
+
+tively. We assume (for pixel i) yr
+time t, yr
+), σ2
+a2
+hi(s2
+t−τ 2
+b
+dependent Gaussians, denoted pψ(a1)pψ(a2). Conditioned on yr
+terior pdf for the joint intensities is also a Gaussian, which is denoted by qs,θ(˜a1, ˜a2|s1:2, τ 1:2
+Thus
+
+t,i ∼ N (·|0, σ2
+r,t) if only target 1 exists and yr
+
+b , s1) and (τ 2
+
+t,i ∼ N (·|a1
+
+t,i ∼ N (·|a1
+
+1:n, (τ 1
+
+and x2
+
+hi(s1
+
+hi(s1
+
+), σ2
+
+t−τ 1
+b
+
+t−τ 1
+b
+
+t−τ 1
+b
+
+t−τ 1
+b
+
+t−τ 1
+b
+
+t−τ 2
+b
+
+t−τ 2
+b
+
+, yr
+
+b
+
+qs,θ(˜x1, ˜x2|x1:2, τ 1:2
+
+b
+
+, yr
+
+1:n) = pψ(˜v1|s1)pψ(˜v2|s2)
+
+× qs,θ(˜a1, ˜a2|s1:2, τ 1:2
+
+b
+
+, yr
+
+1:n).
+
+Acknowledgement
+
+We thank Kristina Ganzinger and Professor David Klenerman for providing the real data and
+the code in [2] for the comparisons in Section 4.2, and Sinan Yıldırım for his careful reading of
+this paper.
+
+References
+
+[1] Y. Bar-Shalom and T. E. Fortmann, Tracking and data association. Boston: Academic Press,
+
+1988.
+
+23
+
+[2] L. Weimann, K. A. Ganzinger, J. McColl, K. L. Irvine, S. J. Davis, N. J. Gay, C. E. Bryant, and
+D. Klenerman, “A quantitative comparison of single-dye tracking analysis tools using monte carlo
+simulations,” PloS one, vol. 8, no. 5, p. e64287, 2013.
+
+[3] R. P. Mahler, Statistical multisource-multitarget information fusion. Boston: Artech House, 2007,
+
+vol. 685.
+
+[4] R. L. Streit, M. L. Graham, and M. J. Walsh, “Multitarget tracking of distributed targets using
+
+histogram-pmht,” Digital Signal Processing, vol. 12, no. 2, pp. 394–404, 2002.
+
+[5] M. G. Rutten, N. J. Gordon, and S. Maskell, “Recursive track-before-detect with target amplitude
+ﬂuctuations,” IEE Proceedings - Radar, Sonar and Navigation, vol. 152, no. 5, pp. 345–352, 2005.
+
+[6] Y. Boers and J. Driessen, “Multitarget particle ﬁlter track before detect application,” IEE
+
+Proceedings-Radar, Sonar and Navigation, vol. 151, no. 6, pp. 351–357, 2004.
+
+[7] K. Punithakumar, T. Kirubarajan, and A. Sinha, “A sequential monte carlo probability hypothesis
+International
+
+density algorithm for multitarget track-before-detect,” in Optics & Photonics 2005.
+Society for Optics and Photonics, 2005, pp. 59 131S–59 131S.
+
+[8] S. J. Davey, M. G. Rutten, and B. Cheung, “A comparison of detection performance for several
+track-before-detect algorithms,” EURASIP Journal on Advances in Signal Processing, vol. 2008,
+2007.
+
+[9] B.-N. Vo, B.-T. Vo, N.-T. Pham, and D. Suter, “Joint detection and estimation of multiple objects
+from image observations,” Signal Processing, IEEE Transactions on, vol. 58, no. 10, pp. 5129–5141,
+2010.
+
+[10] F. Papi and D. Y. Kim, “A particle multi-target tracker for superpositional measurements using
+labeled random ﬁnite sets,” IEEE Transactions on Signal Processing, vol. 63, no. 16, pp. 4348–4358,
+2015.
+
+[11] C. Andrieu, A. Doucet, and R. Holenstein, “Particle markov chain monte carlo methods,” Journal
+of the Royal Statistical Society: Series B (Statistical Methodology), vol. 72, no. 3, pp. 269–342,
+2010.
+
+[12] L. Jiang, S. Singh, and S. Yildirim, “A new particle ﬁltering algorithm for multiple target tracking
+with non-linear observations,” in Information Fusion (FUSION), 2014 17th International Confer-
+ence on, July 2014, pp. 1–8.
+
+[13] N. Kantas, A. Doucet, S. S. Singh, J. Maciejowski, and N. Chopin, “On particle methods for
+
+parameter estimation in state-space models,” Statist. Sci., vol. 30, no. 3, pp. 328–351, 08 2015.
+
+[14] S. Oh, S. Russell, and S. Sastry, “Markov chain monte carlo data association for multi-target
+
+tracking,” IEEE Trans. Automat. Control, vol. 54, no. 3, pp. 481–497, Mar. 2009.
+
+[15] T. Vu, B.-N. Vo, and R. Evans, “A particle marginal metropolis-hastings multi-target tracker,”
+
+IEEE Trans. Signal Process, vol. 62, no. 15, pp. 3953 – 3964, 2014.
+
+[16] J. Kokkala and S. Sarkka, “Combining particle MCMC with rao-blackwellized monte carlo data
+association for parameter estimation in multiple target tracking,” Digital Signal Processing, vol. 47,
+pp. 84 – 95, 2015.
+
+[17] L. Jiang, S. Singh, and S. Yıldırım, “Bayesian tracking and parameter learning for non-linear
+
+multiple target tracking models,” IEEE Tran. Signal Proc., vol. 63, pp. 5733–5745, 2015.
+
+[18] D. Duckworth, “Monte carlo methods for multiple target tracking and parameter estimation,”
+[Online].
+
+Master’s thesis, EECS Department, University of California, Berkeley, May 2012.
+Available: http://www.eecs.berkeley.edu/Pubs/TechRpts/2012/EECS-2012-68.html
+
+24
+
+[19] S. S. Singh, N. Whiteley, and S. J. Godsill, “Approximate likelihood estimation of static parameters
+in multi-target models,” in Bayesian Time Series Models, D. Barber, A. T. Cemgil, and S. Chiappa,
+Eds. Cambridge University Press, 2011, pp. 225–244.
+
+[20] S. Yıldırım, L. Jiang, S. S. Singh, and T. A. Dean, “Calibrating the gaussian multi-target tracking
+
+model,” Statistics and Computing, pp. 1–14, 2014.
+
+[21] A. Jasra, C. Holmes, and D. Stephens, “Markov chain monte carlo methods and the label switching
+
+problem in bayesian mixture modeling,” Statistical Science, pp. 50–67, 2005.
+
+[22] N. Whiteley, “Discussion on the paper by Andrieu, Doucet and Holenstein.”
+
+[23] P. J. Green, “Reversible jump Markov chain Monte Carlo computation and Bayesian model deter-
+
+mination,” Biometrika, vol. 82, no. 4, pp. 711–732, 1995.
+
+25
+
+

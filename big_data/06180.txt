@@ -1,0 +1,1157 @@
+Segmentation from Natural Language
+
+Expressions
+
+Ronghang Hu1 Marcus Rohrbach1,2 Trevor Darrell1
+{ronghang, rohrbach, trevor}@eecs.berkeley.edu
+
+1UC Berkeley EECS, CA, United States
+
+2ICSI, Berkeley, CA, United States
+
+Abstract. In this paper we approach the novel problem of segment-
+ing an image based on a natural language expression. This is diﬀerent
+from traditional semantic segmentation over a predeﬁned set of semantic
+classes, as e.g., the phrase “two men sitting on the right bench” requires
+segmenting only the two people on the right bench and no one standing
+or sitting on another bench. Previous approaches suitable for this task
+were limited to a ﬁxed set of categories and/or rectangular regions. To
+produce pixelwise segmentation for the language expression, we propose
+an end-to-end trainable recurrent and convolutional network model that
+jointly learns to process visual and linguistic information. In our model,
+a recurrent LSTM network is used to encode the referential expression
+into a vector representation, and a fully convolutional network is used
+to a extract a spatial feature map from the image and output a spatial
+response map for the target object. We demonstrate on a benchmark
+dataset that our model can produce quality segmentation output from
+the natural language expression, and outperforms baseline methods by
+a large margin.
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+0
+2
+
+ 
+ 
+]
+
+V
+C
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+0
+8
+1
+6
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+1 Introduction
+
+Semantic image segmentation is a core problem in computer vision and signiﬁ-
+cant progress has been made using large visual datasets and rich representations
+based on convolution neural networks [1,2,3,4,5,6]. Although these existing seg-
+mentation methods can predict precise pixelwise masks for query categories like
+“train” or “cat”, they are not capable of predicting segmentation for more com-
+plicated queries such as the natural language expression “the two people on the
+right side of the car wearing black shirt”.
+
+In this paper we address the following problem: given an image and a natu-
+ral language expression that describes a certain part of the image, we want to
+segment the corresponding region(s) that covers the visual entities described by
+the expression. For example, as shown in Figure 1 (d), for the phrase e.g. “people
+in blue coat” we want to predict a segmentation that covers the two people in
+the middle wearing blue coat, but not the other two people. This problem is
+related to but diﬀerent from the core computer vision problems of semantic seg-
+mentation (e.g. PASCAL VOC segmentation challenge on 20 object classes [7]),
+
+2
+
+Ronghang Hu, Marcus Rohrbach, Trevor Darrell
+
+(a) input image
+
+(b) object class
+segmentation of
+
+class people
+
+(c) object instance
+
+segmentation of
+
+(d) segmentation
+from expression
+
+class people
+
+“people in blue coat”
+
+Fig. 1. In this work we approach the novel problem of segmentation from natural
+language expressions, which is diﬀerent from traditional semantic image segmentation
+and object instance segmentation, as visualized in this ﬁgure.
+
+which is concerned with predicting the pixelwise label for a predeﬁned set of ob-
+ject or stuﬀ categories (Figure 1, b), and instance segmentation (e.g. [8]), which
+additionally distinguishes diﬀerent instances of an object class (Figure 1, c). It
+also diﬀers from language-independent foreground segmentation (e.g. [9]), where
+the goal is to generate a mask over the foreground (or the most salient) object.
+Instead of assigning a semantic label to every pixel in the image as in semantic
+image segmentation, the goal in this paper is to produce a segmentation mask for
+the visual entities of interest based on the given expression. Rather than being
+ﬁxed on a set of object and stuﬀ categories, natural language descriptions may
+involve also attributes such as “black” and “smooth”, actions such as “running”,
+spatial relationships such as “on the right” and interactions between diﬀerent
+visual entities such as “the person who is riding a horse”.
+
+The task of segmenting an image from natural language expressions has a
+wide range of applications, such as building language-based human-robot inter-
+face to give instructions like “pick up the jar on the table next to the apples”
+to a robot. Here, it is important to be able to use multi-word referential ex-
+pressions to distinguish between diﬀerent object instances but also important
+to get a precise segmentation in contrast to just a bounding box, especially for
+non-grid-aligned objects (see e.g. Figure 2). This could also be interesting for
+interactive photo editing where one could refer with natural language to certain
+parts or objects of the image to be manipulated, e.g. “blur the person with a red
+shirt”, or referring to parts of your meal to estimate their nutrition, “two large
+pieces of bacon”, to decide better if one should eat it rather than the full meal
+as in [10].
+
+As described in more details in Section 2, prior methods suitable for this task
+were limited to resolving only a bounding box in the image [11,12,13], and/or
+were limited to a ﬁxed set of categories determined a priori [1,3,4,6]. In this pa-
+per, we propose an end-to-end trainable recurrent convolutional network model
+that jointly learns to process visual and linguistic information, and produces
+segmentation output for the target image region described by the natural lan-
+guage expression, as illustrated in Figure 2. We encode the expression into a
+ﬁxed-length vector representation through a recurrent LSTM network, and use
+
+Segmentation from Natural Language Expressions
+
+3
+
+Fig. 2. Overview of our method for segmentation from natural language expressions.
+
+a convolutional network to extract a spatial feature map from the image. The
+encoded expression and the feature map are then processed by a multi-layer clas-
+siﬁer network in a fully convolutional manner to produce a coarse response map,
+which is upsampled with deconvolution [1,5] to obtain a pixel-level segmentation
+mask of the target image region. Experimental results on a benchmark dataset
+demonstrate that our model can generate quality segmentation predictions from
+natural language expressions, and outperforms baseline methods signiﬁcantly.
+Our model is trained using standard back-propagation, and is much more eﬃ-
+cient at test time than previous approaches relying on scoring each bounding
+box.
+
+2 Related work
+
+Our work is related to several areas as follows.
+
+Localizing objects with natural language. Our work is related to recent
+work on object localization with natural language, where the task is to localize
+a target object in a scene from its natural language description (by drawing a
+bounding box over it). The methods reported in [11] and [13] build upon image
+captioning frameworks such as LRCN [14] or mRNN [15], and localize objects
+by selecting the bounding box where the expression has the highest probability.
+Our model diﬀers from [11] and [13] in that we do not have to learn to generate
+expressions from image regions. In [12], the authors propose a model to localize
+a textual phrase by attending to a region on which the phrase can be best
+reconstructed. In [16], Canonical Correlation Analysis (CCA) is used to learn a
+joint embedding space of visual features and words, and given a natural language
+query, the corresponding target object is localized by ﬁnding the closest region
+to the text sequence in the joint embedding space.
+
+To the best of our knowledge, all these previous localization methods can
+only return a bounding box of the target object, and no prior work has learned
+to directly output a segmentation mask of an object given a natural language
+description as query. As a comparison, in Section 4.1 we also evaluate using
+foreground segmentation over the bounding box prediction from [11] and [12].
+
+Fully convolutional network for segmentation. Fully convolutional net-
+works are convolutional neural networks consisting of only convolutional (and
+pooling) layers, which are the state-of-the-art method for semantic segmentation
+over a pre-deﬁned set of semantic categories [1,3,4,6]. A nice property of fully
+
+LSTMCNNencoded expressionspatial feature mapfully convolutional classification“people on the right side”segmentation output4
+
+Ronghang Hu, Marcus Rohrbach, Trevor Darrell
+
+convolutional networks is that spatial information is preserved in the output,
+which makes these networks suitable for segmentation tasks that require spatial
+grid output. In our model, both feature extraction and segmentation output are
+performed through fully convolutional networks. We also use a fully convolution
+network for per-word segmentation as a baseline in Section 4.1.
+
+Attention and visual question answering. Recently, attention models
+have been used in several areas including image recognition, image captioning
+and visual question answering. In [17], image captions are generated through
+focusing on a speciﬁc image region for each word. In recent visual question an-
+swering models [18,19], the answer is determined through attending to one or
+multiple image regions. The authors of [20] propose a visual question answer-
+ing method that can learn to answer object reference questions like “where is
+the black cat” through parsing the sentence and generating attention maps for
+“black” and “cat”.
+
+These attention models are related to our work as they also learn to generate
+spatial grid “attention maps” which often cover the objects of interest. However,
+these attention models diﬀer from our work as they only learn to generate coarse
+spatial outputs and the purpose of the attention map is to facilitate other tasks
+such as image captioning, rather than precisely segment out the object.
+
+3 Our model
+
+Given an image and a natural language expression as query, the goal is to out-
+put a segmentation mask for the visual entities described by the expression.
+This problem requires both visual and linguistic understanding of the image and
+the expression. To accomplish this goal, we propose a model with three main
+components: a natural language expression encoder based on a recurrent LSTM
+network, a fully convolutional network to extract local image descriptors and
+generate a spatial feature map, and a fully convolutional classiﬁcation and up-
+sampling network that takes as input the encoded expression and the spatial
+feature map and outputs a pixelwise segmentation mask. Figure 3 shows the
+outline of our method; we introduce the details of these components in Section
+3.1, 3.2 and 3.3. The network architecture for feature map extraction and clas-
+siﬁcation is similar to the FCN model [1], which has been shown eﬀective for
+semantic image segmentation.
+
+Compared with related work [11,13], we do not explicitly produce a word se-
+quence corresponding to object descriptions given a visual representation, since
+we are interested in predicting image segmentation from an expression rather
+than predicting the expression. In this way, our model has less parameters com-
+pared with [11,13] as it does not have to learn to predict the next word, which
+can be a hard task.
+
+3.1 Spatial feature map extraction
+
+Given an image of a scene, we want to obtain a discriminative feature represen-
+tation of it while preserving the spatial information in the representation so that
+
+Segmentation from Natural Language Expressions
+
+5
+
+Fig. 3. Our model for segmentation from natural language expressions consists of three
+main components: an expression encoder based upon a recurrent LSTM network, a fully
+convolutional network to generate a spatial feature map, and a fully convolutional
+classiﬁcation and upsampling network to predict pixelwise segmentation.
+
+it is easier to predict a spatial segmentation mask. This is accomplished through
+a fully convolutional network model similar to FCN-32s [1], where the image is
+fed through a series of convolutional (and pooling) layers to obtain a spatial map
+output as feature representation. Given an input image of size W × H, we use a
+convolutional network on the image to obtain a w × h spatial feature map, with
+each position on the feature map containing Dim channels (Dim dimensional
+local descriptors).
+
+For each spatial location on the feature map, we apply L2-normalization to
+the Dim dimensional local descriptor at that position in order to obtain a more
+robust feature representation. In this way, we can extract a w × h × Dim spatial
+feature map as the representation for each image.
+
+Also, to allow the model to reason about spatial relationships such as “right
+woman” in Figure 3, two extra channels are added to the feature maps: the x
+and y coordinate of each spatial location. We use relative coordinates, where the
+upper left corner and the lower right corner of the feature map are represented
+as (−1,−1) and (+1, +1), respectively. In this way, we obtain a w×h×(Dim +2)
+representation containing local image descriptors and spatial coordinates.
+
+In our implementation, we adopt the VGG-16 architecture [21] as our fully
+convolutional network by treating fc6, fc7 and fc8 as convolutional layers, which
+outputs Dim = 1000 dimensional local descriptors. The resulting feature map
+size is w = W/s and h = H/s, where s = 32 is the pixel stride on fc8 layer
+output. The units on the spatial feature map have a very large receptive ﬁeld of
+384 pixels, so our method has the potential to aggregate contextual information
+from nearby regions, which can help to reason about interaction between visual
+entities, such as “the man next to the table”.
+
+segmentation outputinput imageinput natural language expression“right woman”word embeddingLSTM networkencoded expressionCNNw x h x Dim spatial feature mapL2-normalizedfully convolutional classification networkspatial coordinatesupsampling with deconvolution w x h low resolution response mapW x H high resolution response mapDtext dimensional final hidden state hTL2-normalized6
+
+Ronghang Hu, Marcus Rohrbach, Trevor Darrell
+
+3.2 Encoding expressions with LSTM network
+
+For the input natural language expression that describes an image region, we
+would like to represent the text sequence as a vector since it is easier to process
+ﬁxed-length vectors than variable-length sequences. To achieve this goal, we take
+the encoder approach in sequence to sequence learning methods [22,23]. In our
+encoder for the natural language expression, we ﬁrst embed each word into a
+vector through a word embedding matrix, and then use a recurrent Long-Short
+Term Memory (LSTM) [24] network with Dtext dimensional hidden state to scan
+through the embedded word sequence. For a text sequence S = (w1, ..., wT ) with
+T words (where wt is the vector embedding for the t-th word), at each time step
+t, the LSTM network takes as input the embedded word vector wt from the word
+embedding matrix. At the ﬁnal time step t = T after the LSTM network have
+seen the whole text sequence, we use the hidden state hT in LSTM network as
+the encoded vector representation of the expression. Similar to Section 3.1, we
+also L2-normalize the Dtext dimensions in hT . We use a LSTM network with
+Dtext = 1000 dimensional hidden state in our implementation.
+
+3.3 Spatial classiﬁcation and upsampling
+
+After extracting the spatial feature map from the image in Section 3.1 and the
+encoded expression hT in Section 3.2, we want to determine whether or not each
+spatial location on the feature map belongs the foreground (the visual entities
+described by the natural language expression). In our model, this is done by
+a fully convolutional classiﬁer over the local image descriptor and the encoded
+expression. We ﬁrst tile and concatenate hT to the local descriptor at each spatial
+location in the spatial grid to obtain a w× h× D∗ (where D∗ = Dim + Dtext + 2)
+spatial map containing both visual and linguistic features. Then, we train a two-
+layer classiﬁcation network, with a Dcls dimensional hidden layer, which takes at
+input the D∗ dimensional representation and output a score to indicate whether
+a spatial location belong to the target image region or not. We use Dcls = 500
+in our implementation.
+This classiﬁcation network is applied in a fully convolutional way over the
+underlying w× h feature map as two 1× 1 convolutional layers (with ReLU none
+linearity between them). The fully convolutional classiﬁcation network outputs a
+w × h coarse low-resolution response map containing classiﬁcation scores, which
+can be seen as a low-resolution segmentation of the referential expression, as
+shown in Figure 3.
+
+In order obtain a segmentation mask with higher resolution, we further per-
+form upsampling through deconvolution (swapping the forward and backward
+pass of convolution operation) [1,5]. Here we use a 2s × 2s deconvolution ﬁlter
+with stride s (where s = 32 for the VGG-16 network architecture we use), which
+is similar to the FCN-32s model [1]. The deconvolution operation produces a
+W × H high resolution response map that has the same size as the input image,
+and the values on the high resolution response map represent the conﬁdence of
+whether a pixel belongs to the target object. We use the pixelwise classiﬁcation
+
+Segmentation from Natural Language Expressions
+
+7
+
+results (i.e. whether or not a value on the response map is greater than 0) as the
+ﬁnal segmentation prediction.
+
+At training time, each training instance in our training set is a tuple (I, S, M ),
+where I is an image, S is a natural language expression describing a region
+within that image, and M is a binary segmentation mask of that region. The
+loss function during training is deﬁned as the average over pixelwise loss
+
+W(cid:88)
+
+H(cid:88)
+
+i=1
+
+j=1
+
+Loss =
+
+1
+
+W H
+
+L(vij, Mij)
+
+(1)
+
+where W and H are image width and height, vij is the response value (score)
+on the high resolution response map and Mij is the binary ground-truth label
+at pixel (i, j). L is the per-pixel weighed logistic regression loss as follows
+
+L(vij, Mij) =
+
+αf log(1 + exp(−vij))
+αb log(1 + exp(vij))
+
+if Mij = 1
+if Mij = 0
+
+(2)
+
+(cid:40)
+
+where αf and αb are loss weights for foreground and background pixels. In
+practice, we ﬁnd that training converges faster using higher loss weights for
+foreground pixels, and we use αf = 3 and αb = 1 in L(vij, Mij).
+
+The parameters in feature map extraction network are initialized from a
+VGG-16 network [21] pretrained on the 1000-class ILSVRC classiﬁcation task
+[25], the deconvolution ﬁlter for upsampling is initialized from bilinear interpola-
+tion. All other parameters in our model, including the word embedding matrix,
+the LSTM parameters and the classiﬁer parameters, are randomly initialized.
+The whole network is trained with standard back-propagation using SGD with
+momentum.
+
+4 Experiments
+
+Compared with the widely used datasets in image segmentation such as PASCAL
+VOC [7], there are only a few publicly available datasets with natural language
+annotations over segmented image regions. In our experiments, we train and test
+our method on the ReferIt dataset [26] with natural language descriptions of vi-
+sual entities and their segmentation masks. The ReferIt dataset [26] is built upon
+the IAPR TC-12 dataset [27] and has 20,000 images. There are 130,525 expres-
+sions annotated on 96,654 segmented image regions (some regions are annotated
+with multiple expressions). In this dataset, the ground-truth segmentation comes
+from the SAIAPR-12 dataset [28]. The expressions in the ReferIt dataset are dis-
+criminative for the regions, as they were collected in a two-player game whose
+goal was to make the target region easily distinguishable through the expression
+from the rest of the image. At the time of writing, the ReferIt dataset [26] is
+the biggest publicly available dataset that contains natural language expressions
+annotated on segmented image regions.
+
+8
+
+Ronghang Hu, Marcus Rohrbach, Trevor Darrell
+
+On this dataset, we use the same trainval and test split as in [11,12]. There
+are 10,000 images for training and validation, and 10,000 images for testing. The
+annotated regions in the ReferIt dataset contains both “object” regions such as
+car, person and bottle and “stuﬀ” regions such as sky, river and mountain.
+
+Although [13] also collected a separate Google-RefExp dataset containing
+natural language expressions with segmented regions available from MS COCO
+dataset annotations [29], this dataset only contains object annotations from 80
+object categories in COCO, and does not have “stuﬀ” regions such as snow. 1
+
+Since there has not been prior work that directly learns to predict segmen-
+tation based on natural language expressions as far as we know, to evaluate our
+method, we construct several strong baseline methods as described in Section
+4.1, and compare our approach with these methods.
+
+4.1 Baseline methods
+
+Combination of per-word segmentation. In this baseline method, instead
+of ﬁrst encoding the whole expression with a recurrent LSTM network, each
+word in the expression is segmented individually, and the per-word segmenta-
+tion results are then combined to obtain the ﬁnal prediction. This method can
+be seen as using a “bag-of-word” representation of the expression. We take the
+N most frequently appearing words in ReferIt dataset (after manually remov-
+ing some stop words like “the” and “towards”), and train a FCN model [1] to
+segment each word. Similar to the PASCAL VOC segmentation challenge [7], in
+this method, each word is treated as an independent semantic category. However,
+unlike in PASCAL VOC segmentation, here a pixel can belong to multiple cat-
+egories (words) simultaneously and thus have multiple labels. During training,
+we generate a per-word pixelwise label map for each training sample (an image
+and an expression) in the training set. For a given expression, the corresponding
+foreground pixels are labeled with a N -dimensional binary vector l, where li =
+1 if and only if word i is present in the expression, and background pixels are
+labeled with l equal to all zeros. In our experiments, we use N = 500 and ini-
+tialize the network from a FCN-32s network pretrained on PASCAL VOC 2011
+segmentation task [1], and train the whole network with a multi-label logistic
+regression loss over the words.
+
+At test time, given an image and a natural language expression as input, the
+network outputs pixelwise score maps for the N words, and the per-word scores
+are further combined to obtain the segmentation for the input expression. In our
+implementation, we experiment with three diﬀerent approaches to combine the
+per-word segmentation: for those words (among the N -word list) that appear in
+the expression, we a) take the average of their scores or b) take the intersection
+of their prediction or c) take the union of their prediction. In some rare cases
+(2.83% of the test samples), none of the words in the expression are among the N
+
+1 At the time of this writing, the test split of Google-RefExp dataset has not been
+
+released. Evaluation on this dataset is a part of our future work.
+
+Segmentation from Natural Language Expressions
+
+9
+
+most frequent words, and we do not output any segmentation for this expression,
+i.e. all pixels are predicted as background.
+
+Foreground segmentation from bounding boxes. In this baseline method,
+
+we ﬁrst use a localization method based on natural language input [11,12] to ob-
+tain a bounding box localization of the given expression, and then extract the
+foreground segmentation from the bounding box using GrabCut [9]. Given an
+image and a natural language expression, we use two recently proposed meth-
+ods SCRC [11] and GroundeR [12] to obtain a bounding box prediction from
+the image and the expression. In SCRC [11], the authors use a model adapted
+from image captioning and localize a referential expression by ﬁnding the can-
+didate bounding box where the expression receives the highest probability. In
+GroundeR [12], an attention model over candidate bounding boxes is used to
+ground (localize) a referential expression, either in an unsupervised manner by
+ﬁnding the region that can best reconstruct the expression, or in a supervised
+manner to directly train the model to attend to the best bounding box. Follow-
+ing [11,12], we use 100 top-scoring EdgeBox [30] proposals as a set of candidate
+bounding boxes for each image. At test time, given an input expression, we com-
+pute the scores of the 100 EdgeBox proposals using SCRC [11] or GroundeR
+[12], and evaluate two approaches: either using the entire rectangular region of
+the highest scoring bounding box, or the foreground segmentation from it using
+GrabCut [9]. We use the supervised version of [12] in our experiments.
+
+Classiﬁcation over segmentation proposals. In this baseline method, we
+ﬁrst extract a set of candidate segmentation proposals using MCG [31], and then
+train a binary classiﬁer to determine whether or not a candidate segmentation
+proposal matches the expression. We use a similar pipeline in this baseline as
+in the supervised version of [12]. First, visual features are extracted from each
+proposal and concatenated with the encoded sentence. Then, a classiﬁcation
+network is trained on concatenated features to classify a segmentation proposal
+into foreground or background. We use 100 top-scoring segmentation proposals
+from MCG, and extract visual features from each segmentation by ﬁrst resizing
+it to 224 × 224 (those pixels outside the segmentation region are ﬁlled with
+channel mean) and then extracting visual feature from the resized segmentation
+using a VGG-16 network pretrained on ILSVRC classiﬁcation task. The whole
+network is then trained end-to-end. The main diﬀerence between this baseline
+and our method is that our method performs pixelwise classiﬁcation through a
+fully convolutional network, while this baseline requires another proposal method
+to obtain candidate regions.
+
+Whole image. As an additional trivial baseline, we also evaluate using the
+
+whole image as a segmentation for every expression.
+
+4.2 Evaluation on ReferIt dataset
+
+We train our model and the baseline methods in Section 4.1 on the 10,000 trainval
+images in the ReferIt dataset [26] (leaving out a small proportion for validation),
+following the same split as in [11]. In our implementation, we resize and pad all
+images and ground-truth segmentation to a ﬁxed size W × H (where we set
+
+10
+
+Ronghang Hu, Marcus Rohrbach, Trevor Darrell
+
+prec@0.5 prec@0.6 prec@0.7 prec@0.8 prec@0.9 overall IoU
+Method
+15.12%
+whole image
+27.23%
+per-word average
+26.69%
+per-word intersection
+19.37%
+per-word union
+21.72%
+SCRC [11] bbox
+17.84%
+SCRC [11] grabcut
+20.50%
+GroundeR [12] bbox
+20.09%
+GroundeR [12] grabcut
+18.08%
+MCG classiﬁcation
+45.57%
+Ours (low resolution)
+Ours (high resolution) 34.02% 26.71% 19.32% 11.63% 3.92% 48.03%
+
+5.07% 2.85% 1.58% 0.81% 0.41%
+10.97% 5.94% 2.35% 0.45% 0.00%
+9.58% 5.35% 2.20% 0.43% 0.00%
+10.46% 5.65% 2.28% 0.44% 0.00%
+9.73% 4.43% 1.51% 0.27% 0.03%
+11.91% 7.71% 4.33% 1.78% 0.36%
+11.08% 6.20% 2.74% 0.78% 0.20%
+14.09% 9.62% 5.78% 2.65% 0.62%
+12.72% 9.88% 7.38% 4.73% 1.88%
+29.54% 21.61% 13.69% 5.94% 0.75%
+
+Table 1. The performance of our model and baseline methods on the ReferIt dataset
+under precision metric and overall IoU metric. See Section 4 for details.
+
+W = H = 512), keeping their aspect ratio and padding the outside regions with
+zero, and map the segmentation output back to the original image size to obtain
+the ﬁnal segmentation.
+
+In our experiments, we use a two-stage training strategy: we ﬁrst train a low
+resolution version of our model, and then ﬁne-tune from it to obtain the ﬁnal
+high resolution model (i.e. our full model in Figure 3). In our low resolution
+version, we do not add the deconvolution ﬁlter in Section 3.3, so the model only
+outputs a w× h = 16× 16 coarse response map in Figure 3. We also downsample
+the ground-truth label to w × h and directly train on the coarse response map
+to match the downsampled label. After training the low resolution model, we
+construct our ﬁnal high resolution model by adding a 2s × 2s deconvolution
+ﬁlter with stride s = 32, as described in Section 3.3, and initialize the ﬁlter
+weights from bilinear interpolation (all other parameters are initialized from low
+resolution model). The high resolution model is then ﬁne-tuned on the training
+set using W × H ground-truth segmentation mask labels. We empirically ﬁnd
+this two stage training converges faster than directly training our full model to
+predict W × H high resolution segmentation.
+
+We evaluate the performance of our model and the baseline methods in Sec-
+tion 4.1 on the 10,000 images in the test set. The following two metrics are used
+for evaluation: the overall intersection-over-union (overall IoU) metric and the
+precision metric. The overall IoU is the total intersection area divided by the
+total union area, where both intersection area and union area are accumulated
+over all test samples (each test sample is an image and a referential expression).
+Although the overall IoU metric is the standard metric used in PASCAL VOC
+segmentation [11], our evaluation is slighly diﬀerent as we would like to measure
+how accurate the model can segment the foreground region described by the
+input expression against the background, and the overall IoU metric favors large
+regions like sky and ground. So we also evaluate with the precision metric at 5
+diﬀerent IoU thresholds from easy to hard: 0.5, 0.6, 0.7, 0.8, 0.9. The precision
+
+Segmentation from Natural Language Expressions
+
+11
+
+input image
+
+our model
+
+per-word
+
+GroundeR [12]
+
+query expression=“person”
+
+query expression=“car”
+
+query expression=“the water at the bottom of the picture”
+
+query expression=“people”
+
+query expression=“person on raft”
+
+Fig. 4. Segmentation examples using our model and baseline methods. For GroundeR
+[12], the bounding box prediction is in orange and GrabCut segmentation is in red.
+
+metric is the percentage of test samples where the IoU between prediction and
+ground-truth passes the threshold. For example, precision@0.5 is the percentage
+of expressions where the predicted segmentation overlaps with the ground-truth
+region by at least 50% IoU.
+
+Results. The main results for our evaluation are summarized in Table 1.
+By simply returning the whole image, one already gets 15% overall IoU. This
+is partially due to the fact that the ReferIt dataset contains some large regions
+such as “sky” and “city” and the overall IoU metric put more weights on large
+regions. However, as expected, the whole image baseline has the lowest precision.
+It can be seen from Table 1 that one can get a reasonable overall IoU through
+per-word segmentation and combining the results from each word. Among the
+three diﬀerent ways to combine the per-word results in Section 4.1, it works best
+to average the scores from each word. Using the whole bounding box prediction
+
+12
+
+Ronghang Hu, Marcus Rohrbach, Trevor Darrell
+
+Method
+
+per-word
+
+SCRC [11]
+
+time (sec)
+
+0.169
+
+grabcut
+
+4.319
+
+GroundeR
+[12] grabcut
+
+MCG clas-
+siﬁcation
+
+Ours (high
+resolution)
+
+3.753
+
+9.375
+
+0.325
+
+Table 2. Average time consumption to segmentation an input (a given image and a
+natural language expression) using diﬀerent methods.
+
+from SCRC [11] (“SCRC bbox”) or GroundeR [12] (“GroundeR bbox”) achieves
+comparable precision to averaging per-word segmentation, while they are worse
+in terms of overall IoU, and using classiﬁcation over segmentation proposals from
+MCG (“MCG classiﬁcation”) leads to slightly higher precision than these two
+methods. Also, it can be seen that using GrabCut [9] to segment the foreground
+from bounding boxes (“SCRC grabcut” and “GroundeR grabcut”) results in
+higher precision for both SCRC and GroundeR than using the entire bounding
+box region. We believe that the precision metric is more reﬂective for the perfor-
+mance of segmentation methods over natural language expressions, since in real
+applications, one would often care more about how often a referential expression
+is correctly segmented.
+
+Our model outperforms all the baseline methods by a large margin under
+both precision metric and overall IoU metric. In Table 1, the second last row
+(“low resolution”) corresponds to directly using bilinear upsampling over the
+coarse response map from our low resolution model, and the last row (“high
+resolution”) shows the performance of our full model. It can be seen that our
+ﬁnal model achieves signiﬁcantly higher precision and overall IoU, compared
+with the baseline methods. Figure 4 shows some segmentation examples using
+our model and baseline methods.
+
+The ReferIt dataset contains both object regions and stuﬀ regions. Objects
+are those entities that have well-deﬁned structures and closed boundaries, such
+as person, dog and airplane, while stuﬀs are those entities that do not have a
+ﬁxed structure, such as sky, river, road and snow. Despite this diﬀerence, both
+object regions and stuﬀ regions can be segmented through our model using the
+same approach. Figure 5 shows some segmentation examples on object regions
+from our model, and Figure 6 shows examples on stuﬀ regions. It can be seen
+that our model can predict reasonable segmentation for both object expressions
+like “bird on the left” and stuﬀ expressions like “sky above the bridge”. Figure 8
+visualizes some examples of diﬀerent referential expressions on the same image.
+Figure 9 and Figure 10 show more segmentation examples on object and stuﬀ
+regions.
+
+Figure 7 shows some failure cases on the ReferIt dataset, where the IoU
+between prediction and ground-truth segmentation is less than 50%. In some
+failure cases (e.g. Figure 7, middle), our model produces reasonable response
+maps that cover the target regions of the natural language referential expressions,
+but fails to precisely segment out the boundary of objects or stuﬀs. Figure 11
+shows more failure cases.
+
+Segmentation from Natural Language Expressions
+
+13
+
+input image
+
+response map
+our prediction
+query expression=“bird on the left”
+
+ground-truth
+
+query expression=“three people on right”
+
+query expression=“anyone”
+
+query expression=“big black suitcase bottom left”
+
+query expression=“man far right”
+
+query expression=“bike”
+
+query expression=“guy in front”
+
+query expression=“left cactus”
+
+Fig. 5. Segmentation examples on object regions in the ReferIt dataset.
+
+14
+
+Ronghang Hu, Marcus Rohrbach, Trevor Darrell
+
+input image
+
+response map
+
+our prediction
+
+ground-truth
+
+query expression=“sky above the bridge”
+
+query expression=“water”
+
+query expression=“wall above the people”
+
+query expression=“the ground surrounding her”
+
+Fig. 6. Segmentation examples on stuﬀ regions in the ReferIt dataset.
+
+input image
+
+response map
+
+our prediction
+
+ground-truth
+
+query expression=“church”
+
+query expression=“right bird”
+
+query expression=“plants below sign”
+
+Fig. 7. Some failure cases where IoU < 50% between prediction and ground-truth.
+
+Segmentation from Natural Language Expressions
+
+15
+
+Speed. We also compare the speed of our method and baseline methods.
+Table 2 shows the average time consumption for diﬀerent models to predict a
+segmentation at test time, on a single machine with NVIDIA Tesla K40 GPU. It
+can be seen that although our method is slower than the per-word segmentation
+baseline, it is signiﬁcantly faster than proposal-based methods such as “SCRC
+grabcut” or “MCG classiﬁcation”.
+
+5 Conclusion
+
+In this paper, we address the challenging problem of segmenting natural lan-
+guage expressions, to generate a pixelwise segmentation output for the image
+region described by the referential expression. To solve this problem, we propose
+an end-to-end trainable recurrent convolutional neural network model to encode
+the expression into a vector representation, extract a spatial feature map rep-
+resentation from the image, and output pixelwise segmentation based on fully
+convolutional classiﬁer and upsampling. Our model can eﬃciently predict seg-
+mentation output for referential expressions that describe single or multiple ob-
+jects or stuﬀs. Experimental results on a benchmark dataset demonstrate that
+our model outperforms baseline methods by a large margin.
+
+Acknowledgments
+
+The authors are grateful to Lisa Hendricks and Marcel Simon for feedback
+on drafts. This work was supported by DARPA, AFRL, DoD MURI award
+N000141110688, NSF awards IIS-1427425 and IIS-1212798, and the Berkeley
+Vision and Learning Center. Marcus Rohrbach was supported by a fellowship
+within the FITweltweit-Program of the German Academic Exchange Service
+(DAAD).
+
+References
+
+1. Long, J., Shelhamer, E., Darrell, T.: Fully convolutional networks for semantic
+segmentation. In: Proceedings of the IEEE Conference on Computer Vision and
+Pattern Recognition. (2015) 3431–3440
+
+2. Carreira, J., Caseiro, R., Batista, J., Sminchisescu, C.: Semantic segmentation with
+second-order pooling. In: Computer Vision–ECCV 2012. Springer (2012) 430–443
+3. Chen, L.C., Papandreou, G., Kokkinos, I., Murphy, K., Yuille, A.L.: Semantic
+image segmentation with deep convolutional nets and fully connected crfs. arXiv
+preprint arXiv:1412.7062 (2014)
+
+4. Zheng, S., Jayasumana, S., Romera-Paredes, B., Vineet, V., Su, Z., Du, D., Huang,
+C., Torr, P.H.: Conditional random ﬁelds as recurrent neural networks. In: Proceed-
+ings of the IEEE International Conference on Computer Vision. (2015) 1529–1537
+5. Noh, H., Hong, S., Han, B.: Learning deconvolution network for semantic segmen-
+tation. In: Proceedings of the IEEE International Conference on Computer Vision.
+(2015) 1520–1528
+
+16
+
+Ronghang Hu, Marcus Rohrbach, Trevor Darrell
+
+6. Yu, F., Koltun, V.: Multi-scale context aggregation by dilated convolutions. arXiv
+
+preprint arXiv:1511.07122 (2015)
+
+7. Everingham, M., Van Gool, L., Williams, C.K.I., Winn, J., Zisserman, A.:
+The PASCAL Visual Object Classes Challenge 2012 (VOC2012) Results.
+http://www.pascal-network.org/challenges/VOC/voc2012/workshop/index.html
+
+8. Hariharan, B., Arbel´aez, P., Girshick, R., Malik, J.: Simultaneous detection and
+
+segmentation. In: Computer vision–ECCV 2014. Springer (2014) 297–312
+
+9. Rother, C., Kolmogorov, V., Blake, A.: Grabcut: Interactive foreground extraction
+using iterated graph cuts. In: ACM transactions on graphics (TOG). Volume 23.,
+ACM (2004) 309–314
+
+10. Meyers, A., Johnston, N., Rathod, V., Korattikara, A., Gorban, A., Silberman, N.,
+Guadarrama, S., Papandreou, G., Huang, J., Murphy, K.P.: Im2calories: towards
+an automated mobile vision food diary. In: Proceedings of the IEEE International
+Conference on Computer Vision. (2015) 1233–1241
+
+11. Hu, R., Xu, H., Rohrbach, M., Feng, J., Saenko, K., Darrell, T.: Natural language
+
+object retrieval. arXiv preprint arXiv:1511.04164 (2015)
+
+12. Rohrbach, A., Rohrbach, M., Hu, R., Darrell, T., Schiele, B.: Grounding of textual
+
+phrases in images by reconstruction. arXiv preprint arXiv:1511.03745 (2015)
+
+13. Mao, J., Huang, J., Toshev, A., Camburu, O., Yuille, A., Murphy, K.: Gen-
+eration and comprehension of unambiguous object descriptions. arXiv preprint
+arXiv:1511.02283 (2015)
+
+14. Donahue, J., Anne Hendricks, L., Guadarrama, S., Rohrbach, M., Venugopalan,
+S., Saenko, K., Darrell, T.: Long-term recurrent convolutional networks for visual
+recognition and description. In: Proceedings of the IEEE Conference on Computer
+Vision and Pattern Recognition. (2015) 2625–2634
+
+15. Mao, J., Xu, W., Yang, Y., Wang, J., Huang, Z., Yuille, A.: Deep captioning with
+multimodal recurrent neural networks (m-rnn). In: Proceedings of the International
+Conference on Learning Representations. (2015)
+
+16. Plummer, B., Wang, L., Cervantes, C., Caicedo, J., Hockenmaier, J., Lazebnik, S.:
+Flickr30k entities: Collecting region-to-phrase correspondences for richer image-to-
+sentence models. In: Proceedings of the IEEE International Conference on Com-
+puter Vision (ICCV). (2015)
+
+17. Xu, K., Ba, J., Kiros, R., Courville, A., Salakhutdinov, R., Zemel, R., Bengio,
+Y.: Show, attend and tell: Neural image caption generation with visual attention.
+arXiv preprint arXiv:1502.03044 (2015)
+
+18. Yang, Z., He, X., Gao, J., Deng, L., Smola, A.: Stacked attention networks for
+
+image question answering. arXiv preprint arXiv:1511.02274 (2015)
+
+19. Xu, H., Saenko, K.: Ask, attend and answer: Exploring question-guided spatial
+
+attention for visual question answering. arXiv preprint arXiv:1511.05234 (2015)
+
+20. Andreas, J., Rohrbach, M., Darrell, T., Klein, D.: Learning to compose neural
+
+networks for question answering. arXiv preprint arXiv:1601.01705 (2016)
+
+21. Simonyan, K., Zisserman, A.: Very deep convolutional networks for large-scale
+
+image recognition. arXiv preprint arXiv:1409.1556 (2014)
+
+22. Sutskever, I., Vinyals, O., Le, Q.V.: Sequence to sequence learning with neural
+In: Advances in neural information processing systems. (2014) 3104–
+
+networks.
+3112
+
+23. Cho, K., van Merri¨enboer, B., Bahdanau, D., Bengio, Y.: On the proper-
+ties of neural machine translation: Encoder-decoder approaches. arXiv preprint
+arXiv:1409.1259 (2014)
+
+24. Hochreiter, S., Schmidhuber, J.: Long short-term memory. Neural computation
+
+9(8) (1997) 1735–1780
+
+Segmentation from Natural Language Expressions
+
+17
+
+25. Russakovsky, O., Deng, J., Su, H., Krause, J., Satheesh, S., Ma, S., Huang, Z.,
+Karpathy, A., Khosla, A., Bernstein, M., et al.: Imagenet large scale visual recog-
+nition challenge. International Journal of Computer Vision 115(3) (2015) 211–252
+26. Kazemzadeh, S., Ordonez, V., Matten, M., Berg, T.L.: Referitgame: Referring to
+objects in photographs of natural scenes. In: Proceedings of the 2014 Conference
+on Empirical Methods in Natural Language Processing (EMNLP). (2014) 787–798
+27. Grubinger, M., Clough, P., M¨uller, H., Deselaers, T.: The iapr tc-12 benchmark: A
+new evaluation resource for visual information systems. In: International Workshop
+OntoImage. (2006) 13–23
+
+28. Escalante, H.J., Hern´andez, C.A., Gonzalez, J.A., L´opez-L´opez, A., Montes, M.,
+Morales, E.F., Sucar, L.E., Villase˜nor, L., Grubinger, M.: The segmented and an-
+notated iapr tc-12 benchmark. Computer Vision and Image Understanding 114(4)
+(2010) 419–428
+
+29. Lin, T.Y., Maire, M., Belongie, S., Hays, J., Perona, P., Ramanan, D., Doll´ar, P.,
+Zitnick, C.L.: Microsoft coco: Common objects in context. In: Computer Vision–
+ECCV 2014. Springer (2014) 740–755
+
+30. Zitnick, C.L., Doll´ar, P.: Edge boxes: Locating object proposals from edges. In:
+
+Computer Vision–ECCV 2014. Springer (2014) 391–405
+
+31. Arbel´aez, P., Pont-Tuset, J., Barron, J., Marques, F., Malik, J.: Multiscale com-
+binatorial grouping. In: Proceedings of the IEEE Conference on Computer Vision
+and Pattern Recognition. (2014) 328–335
+
+18
+
+Ronghang Hu, Marcus Rohrbach, Trevor Darrell
+
+input image
+
+response map
+our prediction
+query expression=“group of people”
+
+ground-truth
+
+query expression=“umbrella”
+
+query expression=“three people right”
+
+query expression=“person on left”
+
+query expression=“trees on right”
+
+query expression=“trees on left side”
+
+Segmentation from Natural Language Expressions
+
+19
+
+input image
+
+response map
+
+our prediction
+
+ground-truth
+
+query expression=“greenery in foreground”
+
+query expression=“sky”
+
+query expression=“the black sky in the middle”
+
+query expression=“bottom ground”
+
+query expression=“city building”
+
+query expression=“water”
+
+Fig. 8. Segmentation examples of diﬀerent referential expressions on the same image
+from the ReferIt dataset.
+
+20
+
+Ronghang Hu, Marcus Rohrbach, Trevor Darrell
+
+input image
+
+response map
+our prediction
+query expression=“dude on left”
+
+ground-truth
+
+query expression=“any one on boat”
+
+query expression=“white horse, left”
+
+query expression=“the people in the middle”
+
+query expression=“the cactus on the right with 2 arms”
+
+query expression=“llama left”
+
+Segmentation from Natural Language Expressions
+
+21
+
+input image
+
+response map
+
+our prediction
+
+ground-truth
+
+query expression=“bike wheel”
+
+query expression=“hat”
+
+query expression=“people farthest on the right”
+
+query expression=“angel”
+
+query expression=“biker”
+
+query expression=“two people on left”
+
+22
+
+Ronghang Hu, Marcus Rohrbach, Trevor Darrell
+
+input image
+
+response map
+
+our prediction
+
+ground-truth
+
+query expression=“plane”
+
+query expression=“animal in the tree”
+
+query expression=“woman on left”
+
+query expression=“squirrel”
+
+query expression=“left bed”
+
+query expression=“church tower”
+
+Fig. 9. More segmentation examples on object regions in the ReferIt dataset.
+
+Segmentation from Natural Language Expressions
+
+23
+
+input image
+
+response map
+
+our prediction
+
+ground-truth
+
+query expression=“stairs”
+
+query expression=“brown brick walkway”
+
+query expression=“court closest to us”
+
+query expression=“trees background”
+
+query expression=“the ruins”
+
+query expression=“bottom steps”
+
+24
+
+Ronghang Hu, Marcus Rohrbach, Trevor Darrell
+
+input image
+
+response map
+
+our prediction
+
+ground-truth
+
+query expression=“the water in the pool”
+
+query expression=“ledge on left”
+
+query expression=“dirt road on the left”
+
+query expression=“anywhere in the diamond designs”
+
+query expression=“grass right of people”
+
+query expression=“sand between people on bottom”
+
+Fig. 10. More segmentation examples on stuﬀ regions in the ReferIt dataset.
+
+Segmentation from Natural Language Expressions
+
+25
+
+input image
+
+response map
+
+our prediction
+
+ground-truth
+
+query expression=“window above woman on the left”
+
+query expression=“man in the blue shorts by the railing”
+
+query expression=“yellow sign top right”
+
+query expression=“rocks”
+
+query expression=“leaf above the fruit”
+
+query expression=“sun”
+
+Fig. 11. More failure cases on the ReferIt dataset, where IoU < 50% between prediction
+and ground-truth.
+
+

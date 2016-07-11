@@ -1,0 +1,1274 @@
+Hierarchical Decision Making In Electricity Grid Management
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+6
+
+ 
+
+ 
+ 
+]
+I
+
+A
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+0
+4
+8
+1
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Gal Dalal
+Technion, Israel
+Elad Gilboa
+Technion, Israel
+Shie Mannor
+Technion, Israel
+
+GALD@TX.TECHNION.AC.IL
+
+EGILBOA@TX.TECHNION.AC.IL
+
+SHIE@EE.TECHNION.AC.IL
+
+Abstract
+
+The power grid is a complex and vital sys-
+tem that necessitates careful reliability manage-
+ment. Managing the grid is a difﬁcult prob-
+lem with multiple time scales of decision making
+and stochastic behavior due to renewable energy
+generations, variable demand and unplanned out-
+ages. Solving this problem in the face of uncer-
+tainty requires a new methodology with tractable
+algorithms.
+In this work, we introduce a new
+model for hierarchical decision making in com-
+plex systems. We apply reinforcement learning
+(RL) methods to learn a proxy, i.e., a level of ab-
+straction, for real-time power grid reliability. We
+devise an algorithm that alternates between slow
+time-scale policy improvement, and fast time-
+scale value function approximation. We compare
+our results to prevailing heuristics, and show the
+strength of our method.
+
+1. Introduction
+The power grid is a complex and vital system that requires
+high level of reliability. Reliability is of utmost importance,
+as the consequences of outages can be catastrophic. System
+operators (SOs) achieve reliability by means of sophisti-
+cated control operations and planning, which often require
+solving sequential stochastic decision problems. Sequen-
+tial decision making under uncertainty in energy systems
+is studied in different communities such as control theory,
+dynamic programming, stochastic programming and ro-
+bust optimization (Powell & Meisel, 2015; Bertsimas et al.,
+2013; Bienstock, 2011; Koutsopoulos & Tassiulas, 2012;
+
+Proceedings of the 33 rd International Conference on Machine
+Learning, New York, NY, USA, 2016. JMLR: W&CP volume
+48. Copyright 2016 by the author(s).
+
+Bienstock et al., 2014).
+Reliability assessment and control are highly complicated
+tasks in complex real-world systems such as the power
+grid. Complications in the power grid arise because of
+strict physical restrictions, such as generation must meet
+consumption continuously and transmission lines can not
+exceed their limited thermal capacity. Further complica-
+tions stem from the structure of decision making in dif-
+ferent time-horizons. For example, long-term system ex-
+pansion and development such as building a new wind
+farm or a high-voltage line take years, mid-term asset man-
+agement decisions such as performing maintenance are
+decided upon months in advance, short-term generation
+schedules are planned daily, and real-time operational con-
+trol decisions are made on the scale of minutes. In these
+interdependent hierarchical decision making processes de-
+cisions are taken by multiple stakeholders. Furthermore,
+over the last decade, wind and solar energy sources become
+increasingly preeminent with further signiﬁcant expansion
+being envisaged (Talbot, 2009). These generators intro-
+duce high uncertainty to the system, making the control
+task signiﬁcantly more difﬁcult. The complex dependence
+between multiple time-horizon with growing uncertainty,
+the curse of dimensionality when dealing with large sys-
+tems, and the non-linear dependence of reliability measures
+to the multiple time-horizon decisions, make this problem
+extremely hard to tackle.
+To stress the dimensionality complexity, consider the IEEE
+RTS-96 power network used in our experiments (Wong
+et al., 1999). This network is an example for a power
+grid of a medium sized European country or a state in the
+USA. Its state-space is O(10300), and its action space is
+O(10100); see Sec. 5. Assessment of each control choice
+carries a computational burden as it requires solving a set of
+non-linear trigonometric equations named alternating cur-
+rent power ﬂow (ACPF); see Sec. 2.1.
+
+Hierarchical Decision Making In Electricity Grid Management
+
+Nowadays, the common practice in industry is solving
+large mixed integer programs (MIP), often with a linear re-
+laxation, in an attempt to reach a valid solution (Grainger
+& Stevenson, 1994; Allan et al., 2013). Although this
+model is extensive, its computational burden makes it hard
+even for deterministic predictions (taking an order of a day
+in real-world systems), and inappropriate in the stochastic
+case. This limits SOs to sample snapshots of future grid
+states or analyze a few sequential trajectories. The narrow
+view of possible outcomes is likely to miss important ben-
+eﬁts and increase the costs of decisions, thereby offering
+little in terms of dealing with uncertainty.
+To handle uncertainty, work has been done in stochastic
+optimization and control theory. These often use restrictive
+simpliﬁcations such as independence between the decision
+processes in the different time-scales or consider myopic
+decisions only (Abiri-Jahromi et al., 2009; Wu et al., 2010;
+Abiri-Jahromi et al., 2013).
+Another approach is to use approximate dynamic program-
+ming (Powell, 2007; Si, 2004). However, the natural hierar-
+chical structure of the problem, where several stakeholders
+operating in different time-scales and exposed to different
+information are making decisions with mutual inﬂuence,
+does not naturally ﬁt the standard Markov Decision Pro-
+cess (MDP) structure. Furthermore, the problem is heavily
+constrained, since physical electrical restrictions must be
+met at all times.
+Making this problem tractable requires a level of abstrac-
+tion in the form of fast proxy methods to approximate the
+impact of real-time decisions on longer-term reliability and
+costs. To our knowledge, few attempts have been made to
+construct such proxies using tools from machine learning.
+An example for such, is the work conducted in a recent
+European project, iTesla (iTe). This work focuses on an-
+alyzing snapshots of system states at different time points
+using data-mining methods. Then, classiﬁcation and clus-
+tering algorithms are used for constructing security rules
+for predicting reliability level, given a failure and an elec-
+trical network state (Anil, 2013). Such approaches can aid
+SOs in real-time control, but lack the dynamic perspective
+of state-action evolution needed to evaluate consequences
+of policies in a sequential decision making scenario.
+In this work we suggest a novel approach to mitigate the
+intractability of the hierarchical decision making problem
+of the day-ahead (DA) and real-time (RT) reliability of the
+power grid. The contributions of our work are:
+
+• We introduce an interleaved MDPs hierarchical struc-
+ture with separate state space, action space, and re-
+ward metric.
+
+• We devise an algorithm that alternates between high-
+level policy improvement and lower-level value ap-
+
+proximation, i.e., the policy improvement in the ﬁrst
+MDP is based on the second MDP’s value function.
+• We show the efﬁcacy of our method on a medium-
+
+sized power grid problem.
+
+• We introduce a new real-world application to the RL
+
+community and provide a simulation environment.
+
+In Sec. 2
+The rest of paper is organized as follows.
+we present background on power system engineering. In
+Sec. 3, we formulate the two-layer MDPs. In Sec. 4, we
+introduce our interleaved approximate policy improvement
+(IAPI) algorithm and present results on the IEEE RTS-96
+network. We conclude our work in Sec. 6.
+
+2. Background
+In this section we present a brief introduction to the ﬁeld of
+power systems engineering. This is vast a ﬁeld with exten-
+sive background and theory. For more information please
+refer to (Grainger & Stevenson, 1994; Allan et al., 2013).
+
+2.1. Decision Processes and Power Flow in Power Grids
+
+To better explain the multiple time-horizon decision pro-
+cesses we use a toy 6-bus power grid example (Wood &
+Wollenberg, 1996), shown in Fig. 1. The 6-bus system is
+composed of 6 electrical nodes referred to as “buses”. Each
+bus can have loads and generators attached to it. Loads
+(shown in blue) are consumers (e.g., large neighborhoods
+or cities and factories), and generators (shown in red) are
+power producers such as nuclear plants, coal plants, wind
+turbines, and solar panels. Load values change continu-
+ously throughout the day and closely follow daily, weekly,
+and yearly proﬁles. Controllable generators are operated
+such that the overall power generation meets the overall
+load at all times (up to transmission losses). The edges con-
+necting the buses represent transmission lines which, due to
+thermal restrictions, can only transfer a limited amount of
+power before risking tripping.
+Given a snapshot of loads and generation values, and the
+power grid topology (buses and transmission lines), it is
+possible to solve the complete alternating current power
+ﬂow (ACPF) equations. The ACPF is a set of non-convex
+trigonometric equations that model the physical electrical
+characteristics of the power grid, i.e., voltage magnitude
+and angles of each node (Cain et al., 2012). The ACPF so-
+lution includes the amount of power passing through each
+transmission line (shown in green in Fig. 1).
+In general, reliability of a power system is measured based
+on the avoidance of full or partial blackouts (both planned
+and unplanned) and their negative effect on social welfare.
+A blackout is an event where demand cannot be met. This
+
+Hierarchical Decision Making In Electricity Grid Management
+
+using dynamic programming. Of which, the majority of
+these works focus on energy storage (Lai et al., 2010; Xi
+et al., 2014; Jiang et al., 2014; Scott & Powell, 2012), unit
+commitment (Padhy, 2004; Dalal & Mannor, 2015; Ernst
+et al., 2007), and energy market bidding strategies (Song &
+Wang, 2003; Urieli & Stone, 2014; Jiang & Powell, 2015).
+To our knowledge, no work has been done to use MDPs for
+assessing the reliability in power grids.
+For our proxy abstraction devise a hierarchical model. Hi-
+erarchical models, offer several beneﬁts over ﬂat models
+when appropriate. They can improve exploration, enable
+learning from fewer trials, and allow faster learning for new
+problems by reusing subtasks learned on previous problems
+(Dietterich, 1998). Standard approaches for hierarchical
+models include: planning with options (often referred to
+as skills) (Sutton et al., 1999), task hierarchy (Barto & Ma-
+hadevan, 2003) and hierarchy of abstract machines (Parr
+& Russell, 1998). These models include levels of deci-
+sion making that share the same state-space and a termina-
+tion condition to switch between controllers. This structure
+does not ﬁt our problem well where two separate decision
+makers run on different state-spaces and temporal resolu-
+tions.
+
+3. Problem Formulation
+Here we present a formulation for the two sequential deci-
+sion processes occurring in the day ahead (DA) and real-
+time (RT) in terms of a hierarchal two MDP model. DA
+decisions are taken in order to maximize the system’s next
+day reliability. However, the next day reliability can only
+be assessed in RT, and is dependent on the system opera-
+tor decision taken in RT. This results in a complex depen-
+dence between DA and RT actions and system reliability.
+We therefore formulate the problem using two layers of
+interleaved MDPs: a RT-MDP, describing the state of the
+system, reliability, and decisions on an hourly basis, and
+a DA-MDP describing the DA action of choosing a daily
+subset of active generators based on the upcoming day pre-
+dictions. In our terminology, the former serves as a proxy
+for assessing decisions taken in the latter, see Fig. 2.
+
+3.1. Day-Ahead MDP
+The DA-MDP is a tuple (SDA,ADA,PDA,RDA). Time in-
+∈ SDA con-
+dex is td, denoting days. Day-ahead state sDA
+td
+sists of a day ahead prediction of hourly demand on each
+bus, and wind generation of each wind generator.1 There-
+fore, SDA = RTD·(nb+ng), where TD is the number of intra-
+day time steps (24 in our case), and nb, ng are the num-
+ber of buses and wind generators. For the day ahead ac-
+
+1In this work we consider only wind generation as a renewable
+
+source for simplicity.
+
+Figure 1. Wood & Wollenberg 6-bus system, with generation val-
+ues in red; load values in green; and transmission line ﬂow values
+in blue, obtained from an AC power-ﬂow solution.
+can occur predominantly because of contingencies (i.e., as-
+set malfunctions) which lead to unsafe operation and may
+require the SOs to disconnect loads in order to avoid catas-
+trophes. Contingencies can stem from multiple causes,
+such as a tree falling, lighting strike, poor maintenance or
+exceeding the thermal limits of a transmission line. To
+maintain a high reliability level at all times, the current
+practice of SOs is to immunize the system against a pre-
+determined contingency list. A common choice for this list
+is all single asset contingencies, resulting in the so-called
+N − 1 reliability criterion.
+However, contingency probabilities are difﬁcult to ob-
+tain and their impact is hard to assess. Furthermore, the
+high penetration of stochastic and often uncontrollable re-
+newable generators, makes the planing tasks signiﬁcantly
+harder for several reasons. First, generation must equal de-
+mand at all times. Second, multiple decision making pro-
+cesses are taking place simultaneously on multiple time-
+scales. Third, each decision process involves high dimen-
+sional decision variables, and complex non-linear (Powell
+& Meisel, 2015), often intractable mathematical formula-
+tions.
+For example, in the 6-bus system in Fig. 1, a system de-
+veloper might plan to expand the system by building a new
+transmission line between buses 3 and 4. Expanding the
+grid is a long term process and a decision must be taken
+years in advance. However, this decision affects the future
+maintenance decisions, which will affect future daily plan-
+ning that in turn affects the future real-time control room
+operations. Ideally, the system developer should consider
+all possible future realizations of the environment, grid, and
+the decision processes in all other time horizons.
+
+2.2. Related work
+
+Several works in the literature of power systems, oper-
+ational research and more recently machine learning of-
+fer approaches for solving sequential stochastic problems
+
+Hierarchical Decision Making In Electricity Grid Management
+
+Figure 2. Day-ahead and Real-Time hierarchical MDPs. The real-
+time process serves as a proxy for assessing decisions taken in
+day-ahead process.
+
+∈ ADA we use a simpliﬁed model which consid-
+tion aDA
+td
+ers a binary vector indicating which generators participate
+in the next day’s generation process. The sets of genera-
+tors contained in ADA represent common settings an SO
+can choose from. This set can be constructed by experts
+or inferred from data. An action aDA
+is chosen accord-
+td
+ing to a policy aDA
+). The next day state is
+chosen according to PDA, and is purely exogenous, i.e.,
+td
+P (sDA
+). The reward function
+RDA is a complicated function of the reliability in RT. Since
+we cannot obtain the day ahead reward directly, we revert
+to use the RT reward as a surrogate for comparing DA poli-
+cies. Notice that we cannot directly use the sum of RT
+rewards between consecutive days as a replacement for the
+DA reward since the model will no longer be Markovian.
+
+= πDA(sDA
+td
+td+1|sDA
+
+td+1|sDA
+
+) = P (sDA
+
+, aDA
+td
+
+td
+
+td
+
+3.2. Real-Time MDP
+The RT-MDP is a tuple (SRT,ART,PRT,RRT).
+It repre-
+sents the real time reliability control process. Time in-
+dex is t, denoting intra-day time steps (e.g., hours). In RT
+power network operation, an operator may choose preven-
+tive actions at each time step, trying to immunize the sys-
+tem against potential malfunctions by attempting to avoid
+unreliable states. We model this decision making process
+using post-states (Powell, 2007), where at the beginning
+of each time interval, the agent observes the current state
+t ∈ SRT, i.e., the realized demand and wind values for
+sRT
+t ∈ ART. Follow-
+this interval and chooses an action aRT
+ing the agent’s action, the system is now in a post-decision
+state sRT,a
+, which is the new state, after performing action
+aRT
+t . Next, exogenous random information
+t
+Wt is obtained, informing whether equipment malfunction
+(contingency) occurred during time interval t. Given sRT,a
+and Wt, the real time reward rRT
+, Wt) which rep-
+resents the system’s reliability, can be calculated, and a
+t+1|sRT,a
+transition to sRT
+, Wt).
+The history of this RT process can be written as hRT
+t =
+(sRT
+
+t+1 occurs, governed by P (sRT
+
+from state sRT
+
+t (sRT,a
+
+1 , . . . , sRT
+t ).
+
+, W0, rRT
+
+0 , aRT
+
+0 , sRT,a
+
+0 , sRT
+
+t
+
+t
+
+t
+
+t
+
+0
+
+3.2.1. REAL-TIME STATE SPACE
+We deﬁne a RT state sRT
+t
+d is a vector of stochastic nodal demand.
+
+to be the tuple (d, w, g, e), where:
+
+w is a vector of stochastic nodal wind generation.
+g is a vector of controllable generation values. The DA
+action aDA
+td determines which generators will have pos-
+itive values, and which will be set to 0 throughout the
+day. Each generator has minimal and maximal genera-
+tion limits while in operation.
+Includes information of
+e is the topology of the grid.
+current state of each edge (transmission line). e ∈
+{0, 1, . . . , E}, where 0 is operational and the rest is a
+countdown process till the line is ﬁxed.
+
+3.2.2. REAL-TIME ACTION SPACE
+A RT action aRT
+is a preventive action, that attempts to
+t
+achieve better reliability of the system by immunizing
+against potential contingencies. The action involves redis-
+patch ∆g, i.e., change the generation values of the working
+controllable generators (chosen in DA):
+
+sRT
+t
+
+t−−→ sRT,a
+aRT
+
+t = (d, w, g + ∆g, e).
+
+Any action is allowed as long as it is within the minimal
+and maximal generator limits. Notice that ∆gi (cid:54)= 0 for
+working generators only (aDA
+
+td,i = 1).
+
+3.2.3. REAL-TIME TRANSITION KERNEL
+
+The RT transition kernel can be factorized to exogenous
+transitions of demand, wind generation, and contingencies.
+It is conditioned on the last RT state and action (encoded in
+the RT post-state), and on the corresponding last DA deci-
+sion taken to determine participating generators:
+
+t+1 = f (sRT,a
+sRT
+
+t
+
+, Wt, aDA
+td
+
+).
+
+The dependence between RT and DA states is expressed
+using two sets of equations. The ﬁrst is RT demand process,
+based on DA demand prediction:
+
+dRT
+t = dDA
+t + δt
+δt+1 = δt + t,
+
+(1)
+(2)
+
+t
+
+is the RT demand vector at time t, and dDA
+
+where dRT
+is the
+t
+DA prediction vector for time t of the day. The dynamics in
+Eqs. (1)-(2) also hold for the wind generation process. For
+this work we chose this autoregressive random bias process
+for simplicity, however more complicated methods, such as
+in (Box et al., 2015; Papavasiliou & Oren, 2013; Taylor &
+Buizza, 2002), can be considered. The second equation
+coupling DA and RT determines the generators participat-
+ing in current day generation process:
+
+(cid:40)
+
+gt+1,i =
+
+gt,i + ∆gt,i
+0
+
+if i ∈ I(aDA
+td,i)
+otherwise,
+
+(3)
+
+Hierarchical Decision Making In Electricity Grid Management
+
+td,i) is the index set of generators chosen by DA
+
+where I(aDA
+action aDA
+td,i.
+Lastly,
+speciﬁes
+random exogenous
+whether a contingency happened in the system, causing
+transmission line i to fail, changing the network topology
+to et+1. The probability of line i to fail at each time-step is
+pi if at the last time-step ei was 0, and 0 otherwise.
+
+information Wt
+
+3.2.4. REAL-TIME REWARD
+
+We choose the RT reward to be the reliability level of the
+power system at the current time. To assess the level of
+reliability, we employ the common criterion used in the in-
+dustry, termed N − 1, which assesses the system ability to
+withstand any contingency of a single asset.
+To calculate the reliability of the system, it is examined us-
+ing a sequence of tests (contingency list), where each test is
+an attempt to take out a single line (contingency) and check
+if the system retains safe operation. Hence, the reward
+t (sRT,a
+rRT
+, Wt) is a number in [0, 1], expressing the por-
+tion of tests passed out of the predetermined contingency
+list, which includes all single contingencies c ∈ N−1. The
+reliability is calculated for a given state of the grid, and
+is dependent of current topology (et) and the changes to
+the topology due to possible new contingencies (Wt) . In
+practice, preserving the system in safe operation means be-
+ing able to obtain a feasible solution to the power ﬂow
+equations (see Sec. 2) of the network circuit. We deﬁne
+I
+,Wt)] to be 1 if a power ﬂow solution exists, and
+[PF(c,sRT,a
+0 otherwise. As a result, the RT reward is:
+
+t
+
+t
+
+t (sRT,a
+rRT
+
+t
+
+, Wt) =
+
+1
+
+|N−1|
+
+I
+[PF(c,sRT,a
+
+t
+
+,Wt)].
+
+(cid:88)
+
+c∈N−1
+
+4. Interleaved Approximate Policy
+
+Improvement
+
+In this section we present our algorithm, called Inter-
+leaved Approximate Policy Improvement (IAPI), presented
+in Alg. 1, for jointly learning the RT reliability value func-
+tion while searching for an optimal DA policy. We use the
+term interleaved since the policy improvement in one MDP
+is based on the second MDP’s value function. We use sim-
+ulation based value learning to assess the RT reliability of
+the system and the cross entropy method (De Boer et al.,
+2005; Szita & L¨orincz, 2006) for improving the DA pol-
+icy. Our method scales to large systems since it uses sim-
+ple models with carefully engineered features and design to
+run on distributed computing. Since the algorithm is mas-
+sively parallelizable, the more cores available, the faster the
+convergence will be.
+Our goal is to ﬁnd an optimal DA policy πDA, under the
+assumption that the RT policy πRT is known. Henceforth,
+
+we will use π to symbolize πDA. As explained in Sec. 3,
+reliability is not explicitly deﬁned on the DA level and we
+instead use the RT value function vπ as a surrogate for com-
+paring between different DA policies. Differently than the
+common notation, vπ denotes the RT value function, under
+the ﬁxed RT policy πRT, and a DA policy π.
+
+ψ for DA policy parameters
+
+test = ∅
+
+for i ≤ N do
+
+Algorithm 1 IAPI Algorithm
+Input: initial distribution P (0)
+Output: optimal DA policy π(ψ∗)
+1: initialize S RT
+2: repeat
+3:
+4:
+5:
+6:
+7:
+8:
+9:
+10:
+11:
+12:
+13: until convergence
+
+i =(cid:80)
+
+ψ
+
+draw ψi ∼ P (k)
+sample Nepisodes trajectories using πi = π(ψi)
+approximate vπi using TD(0)
+add TD(0) trajectories to S RT
+
+test
+
+end for
+set empirical mean ˆv(k)
+rank policies πi according to ˆvi
+use ψi of the top percentile πi to update P (k)
+ψ
+k = k + 1
+
+s∈SRT
+
+test
+
+vπi (s), ∀i ∈ [N ]
+
+Our method includes the following components:
+
+a
+
+Policy
+
+Ahead
+
+parametric DA policy
+
+Approximation We
+as π(sDA; ψ)
+is
+
+Day
+de-
+ﬁne
+=
+arg maxaDA∈ADA ψ(cid:62)Φ(sDA, aDA), where aDA
+the
+day ahead action dictating which generators will be active
+during the day, Φ(sDA, aDA) are features of DA state sDA
+and action aDA.
+A plausible choice for mapping DA state sDA to an ac-
+tion aDA is using multi-class classiﬁers. However, for
+large number of classes (20 in our experiments) these
+methods require a signiﬁcant number of simulations for
+training (Bishop, 2006).
+Furthermore, approaches for
+classiﬁcation-based policy learning often require obtaining
+multiple rollouts for all the actions from a state during the
+training procedure (Gabillon et al., 2011), which in our case
+will result in a full value evaluation per each action and
+might prove overly encumbering. To mitigate these com-
+plexities, our policy chooses the action that maximizes the
+inner product with ψ.
+
+Real Time Value Function Approximation For a ﬁxed
+DA policy π we approximate the RT value function using
+the TD(0) algorithm (Sutton & Barto, 1998); see Fig 3.
+The RT value function is parametrized as vπ(sRT; θπ) =
+θ(cid:62)
+π φ(sRT), with the parameter vector θπ depends on π, and
+φ(sRT) being the features of RT state sRT.
+
+Hierarchical Decision Making In Electricity Grid Management
+
+Figure 3. Day-ahead policy comparison using TD-learning of
+real-time value function.
+
+cal mean of RT value function Evπi ≈(cid:80)
+
+Day Ahead Policy Comparison A comparison between
+different DA policies πi is done by calculating the empiri-
+vπi(s), us-
+s∈SRT
+ing a set of representative RT initial states SRT
+test. This set is
+composed of the full history of all RT states visited during
+the current IAPI iteration, enabling expected value estima-
+tion using many probable states with only linear computa-
+test|.
+tional complexity in |SRT
+
+test
+
+i
+
+ψ
+
+i
+
+(cid:16)
+
+(cid:80)Ntop
+
+i=1
+
+ψ
+
+Day Ahead Policy Improvement using Cross Entropy
+DA policy improvement is achieved using the cross en-
+tropy method (De Boer et al., 2005; Szita & L¨orincz, 2006).
+In this method, initial policies are sampled from a distri-
+bution P (0)
+ψ . Following which, in each iteration k pol-
+icy parameters ψ are drawn from P (k)
+ψ , and their top per-
+centile, according to the RT value, is used to update P (k+1)
+(De Boer et al., 2005; Szita & L¨orincz, 2006). In our ex-
+periments we set P (0)
+ψ such that it includes ψ that equally
+separate ψ(cid:62)Φ(sDA
+0 , aDA
+i ), making this inner product equal,
+. The distribution P (k)
+for all the different actions aDA
+is a Gaussian mixture with means set to ψ(k−1) that be-
+long to the top percentile. The convergence criterion we
+use in our experiments with the difference between the
+top-percentile values average of two consecutive iterations
+< . By using the cross en-
+1
+Ntop
+tropy method, we avoid using gradient-based optimization
+which may be difﬁcult to compute in our case due to the
+discrete, non-linear nature of ACPF solutions and their de-
+pendence of generation (Cain et al., 2012), which dictate
+the level of reliability.
+The criterion for comparing policies is a parametric RT
+value function, vπ(sRT; θπ), as oppose to using rollouts for
+policy evaluation (Gabillon et al., 2011). The reason for
+this choice is three-fold. First, since a rollout only explores
+a small part of the space, assuming a structure allows us
+to better generalize to unvisited states. This assumption
+is supported by our experiments; see Fig. 5. Second, this
+functional representation allows us to fairly compare differ-
+ent DA policies using a common set of representative RT
+initial states SRT
+test. Third, our end-goal is to use the value
+
+i − ˆv(k−1)
+ˆv(k)
+
+(cid:17)2
+
+Figure 4. Diagram of the IEEE-RTS96 network we use for our
+experiments.
+
+function learned by this algorithm as a proxy for system
+reliability in RT.
+
+5. Experiments
+In this section we show results of IAPI algorithm on the
+IEEE RTS-96 test system, that is considered a standard test-
+case in the power systems literature (Wong et al., 1999); see
+Fig. 4. This test-case is an example for a power grid of a
+medium-sized country, containing 73 buses, 99 generators,
+and 120 transmission lines. We updated the test-case to in-
+clude 9 additional wind generators to better represent cur-
+rent power grids. We use daily demand and wind proﬁles
+based on real historical records as published in (Pandzic
+et al., 2015). As stated in Sec. 1, this is a complicated, high
+dimensional system, which cannot be solved using brute-
+force methods. The state space of this system can have
+O(2120) line conﬁgurations, with O(D73 · G9
+r ) demand
+values (D) and wind generation values (Gr) at each time,
+which are of a stochastic nature. This is without account-
+ing for the day-ahead prediction, which will be the power
+of 24 of this number (for each hour of the day). Control-
+ling which controllable generators are on/off makes O(299)
+integer decisions, and O(G99·24
+) generation levels for Gc
+possible values per each generator.
+To compose the DA action set ADA, we deﬁne 20 subsets
+of active generators chosen at random, and ﬁx it for the rest
+of the simulation. These subsets contain varying numbers
+of generators with different capacities, to enable meeting
+demand for the different possible daily proﬁles. For the
+DA we use a K + 4 feature vector
+Φ(sDA, aDA) = (1, Uv, Lv, P, I[aDA=a1], . . . , I[aDA=aK ]),
+where
+K is the number of actions (K = 20 in our experiments).
+
+c
+
+Hierarchical Decision Making In Electricity Grid Management
+
+Uv
+
+Lv
+
+indicates if generation can meet maximal predicted
+daily demand.
+indicates if generation can meet minimal predicted
+daily demand.
+
+P is a barrier penalty function that penalizes if the aver-
+age demand is close to the upper or lower generation
+bounds achieved by aDA.
+
+is an indicator function over the selected DA ac-
+
+I[aDA=ai]
+tion.
+
+is the generation entropy across the different buses,
+
+For the RT policy πRT we employ a simple heuristic, of
+shifting the hourly generation values to meet the realized
+effective demand. We consider effective demand to be de-
+mand values minus wind generation values. This is a nat-
+ural approach as wind generation is not under the deci-
+sion maker’s control and therefore is not considered a part
+of regular controllable generation. The RT feature vector
+φ(sRT) contains polynomial features of (D, ed, eg), where
+D is the total RT effective demand,
+ed is the demand entropy across the different buses, and
+eg
+resulting in a 10 dimensional vector. We use the entropy
+feature since it compactly maps the spread of generation
+and demand across the network. The spread is important as
+the concentrations of generation and demand are directly
+linked to reliability issues, see Fig. 5.
+For parameters for the dynamics described in Eqs. (1)-(2)
+0 ∼ N (0, 0.05· wRT
+we use (Lu et al., 2013) and choose δw
+0 )
+for the wind forecast error, and δd
+0 ) for
+the demand forecast error. The real time variation is chosen
+to be t ∼ N (0, 0.05 · δ0). Line failure probability pi is set
+to 5 · 10−4 for each line, and its time-ﬁll-ﬁx E = 5.
+In our simulation we use Nepisodes = 50 episodes, each
+with a 3 day horizon. Each episode starts from a random
+DA state sDA
+0 , drawn from several representing demand and
+wind proﬁles, to which we add normally distributed noise.
+The next day transition corresponds to adding a normally
+distributed bias to the previous day proﬁle. In each cross-
+entropy iteration we evaluate 200 DA policies (N = 200)
+and choose the top 20-th percentile for updating Pψ. The
+DA policies are evaluated in parallel, on a 200 cores cluster.
+For the TD(0) algorithm we use discounting with γ = 0.95.
+In Fig. 5 we show the learned RT value vπ(sRT
+t ; θπ), as a
+function of the deviation of the overall effective demand
+(demand minus wind) from the DA prediction, and gen-
+eration entropy across the different buses. The RT value
+shown is marginalized over the rest of the features, time,
+and daily proﬁles. As shown in the ﬁgure, as the real-
+time demand deviates from the predicted demand, relia-
+bility suffers in a quadratic dependence. This is because
+the generators chosen in the DA will reach their upper or
+
+0 ∼ N (0, 0.01 · dRT
+
+Figure 5. Learned RT value vπ(sRT; θπ) as a function of effective
+demand and generation entropy across the network.
+
+Figure 6. Convergence of the IAPI algorithm. We show the top
+20-th percentile, which is used in the algorithm to update the dis-
+tribution Pψ.
+
+lower thresholds, causing generation to not meet the de-
+mand. The monotonic dependence in generation entropy
+implies that the higher the entropy the more reliable the
+system. This can be understood since high entropy corre-
+sponds to a more distributed generation throughout the net-
+work, mitigating the consequence of line outages. The rea-
+son this mitigation occurs is that when less emphasis is put
+on speciﬁc areas of the network, the system has more ﬂexi-
+bility to ﬁnd alternative routes from generation to demand.
+This, however, incurs a price in real life since generation
+cannot be concentrated only on cheap generators.
+Next, in Fig. 6 we show the top 20-th percentile conver-
+gence of the IAPI algorithm. As can be seen, the average
+value is increasing and converging after 8 iterations, while
+the variance of the top percentile solutions is decreasing. In
+Fig. 7, we visualize the convergence of the IAPI algorithm
+by projecting on the top two principal components (PC) of
+the DA policy parameters ψ. We use the same PCs for all
+the plots. The ﬁgure shows the scattering of the drawn ψi
+in each iteration. As described in Alg. 1, each ψi deﬁnes a
+policy π(ψi) for which we calculate the estimated expected
+
+Hierarchical Decision Making In Electricity Grid Management
+
+that can satisfy the maximal effective demand according
+to that day’s DA prediction. The difference between them
+is the way they choose among the eligible subsets of each
+day. ’Random’ chooses one at random, ’Cost’ chooses the
+cheapest combination of generators, and ’Elastic’ chooses
+the subset with the most ﬂexible generators, having the
+largest ratio between upper and lower generation limits.
+We evaluate the performance of the different policies using
+rollouts of 2000 episodes per each policy. Fig. 9 presents
+the box-plots of the results. As can be seen, the value varies
+greatly between the different methods.
+In the ’Random’
+policy, there is an almost ﬂat spread, demonstrating a lack
+of preference for a single subset when encountering a new
+day. The ’Cost’ and ’Elastic’ policies produce a more con-
+centrated spread, corresponding to their preference of sub-
+set choices. The policy learned using IAPI obtains higher
+reward than the heuristics. This result shows the IAPI al-
+gorithm’s ability to learn a diverse DA policy.
+
+6. Discussion
+In this work we present an interleaved two-MDP model, in-
+spired by the hierarchical decision making problem of man-
+aging power grid reliability. The IAPI algorithm presented
+alternates between improving the DA policy, and learning
+the RT reliability value. The IEEE RTS-96 network in our
+experiments is a large enough network to capture computa-
+tional complexities that arise in real-world networks.
+In this work we focus on the power grid, however our
+model can be adapted to other important applications with
+an hierarchical decision making structure in different time-
+scales where high level of reliability and sustainability is
+required. Examples for such applications are sewer sys-
+tems, smart cities and trafﬁc control.
+The coarse model presented in this work was crafted jointly
+as an initial step with several SOs. This work is the tip of
+the iceberg and many enhancements can be considered. For
+example, an important aspect that is not covered by it is
+budget consideration. Following the practice in the power
+system industry, reliability and money are often treated
+as different “currencies”. Considering a budget will im-
+pose limitations on action selection and will complicate this
+problem even more. Another addition that can be made
+to extend the IAPI algorithm to interleave in reverse, i.e.,
+alternating the DA improvement with improving the RT
+policy. Suspected drawbacks in this case are convergence
+problems, and the need for even more intense simulation.
+Managing high reliability in stochastic complex systems,
+with interleaved decision making in different time hori-
+zons, is inherently difﬁcult and results in intractable for-
+mulations. To mitigate this, there is a growing interest in
+the power system community to utilize proxies that will
+
+Figure 7. Projection of the top two principal components of the
+DA policy parameters ψ. The ﬁgure shows the scattering of the
+drawn policies parameters ψi in each iteration, where the dark
+dots mark the ψs corresponding to top percentile ˆvi.
+
+Figure 8. Daily effective demand proﬁles, colored according to
+the chosen DA action using the policy learned by the IAPI al-
+gorithm.
+
+value ˆvi. The dark ’+’ mark the ψs corresponding to the
+top percentile of ˆvi. As can be seen, the IAPI algorithm
+explores the policy space until converging to local minima.
+In Fig. 8 we present different daily effective demand pro-
+ﬁles, colored according to the DA action chosen by the
+DA policy π(sDA; ψ), that was learned by the IAPI algo-
+rithm. A clear clustering can be observed between different
+daily demand proﬁles and the resulting action taken by the
+DA policy. The policy distinguishes between different con-
+sumption patterns and maps them to a corresponding set of
+active generators for reliable operation of the day to come.
+
+To test our algorithm we compare the learned DA policy
+to three common heuristics. Taking the daily state as an
+input, these heuristics choose an eligible generator subset
+
+Hierarchical Decision Making In Electricity Grid Management
+
+trol conference (CDC-ECC), 2011 50th IEEE conference
+on, pp. 2166–2173. IEEE, 2011.
+
+Bienstock, Daniel, Chertkov, Michael, and Harnett, Sean.
+Chance-constrained optimal power ﬂow: Risk-aware
+network control under uncertainty. SIAM Review, 56(3):
+461–495, 2014.
+
+Bishop, Christopher M. Pattern recognition. Machine
+
+Learning, 2006.
+
+Box, George EP, Jenkins, Gwilym M, Reinsel, Gregory C,
+and Ljung, Greta M. Time series analysis: forecasting
+and control. John Wiley & Sons, 2015.
+
+Cain, Mary B, Oneill, Richard P, and Castillo, Anya. His-
+tory of optimal power ﬂow and formulations. Federal
+Energy Regulatory Commission, 2012.
+
+Dalal, Gal and Mannor, Shie. Reinforcement learning for
+the unit commitment problem. In PowerTech, 2015 IEEE
+Eindhoven, pp. 1–6. IEEE, 2015.
+
+De Boer, Pieter-Tjerk, Kroese, Dirk P, Mannor, Shie, and
+Rubinstein, Reuven Y. A tutorial on the cross-entropy
+method. Annals of operations research, 134(1):19–67,
+2005.
+
+Dietterich, Thomas G. The MAXQ method for hierarchical
+reinforcement learning. In ICML, pp. 118–126. Citeseer,
+1998.
+
+Ernst, Damien, Glavic, Mevludin, Stan, Guy-Bart, Mannor,
+Shie, and Wehenkel, Louis. The cross-entropy method
+for power system combinatorial optimization problems.
+In 2007 Power Tech, 2007.
+
+Gabillon, Victor, Lazaric, Alessandro, Ghavamzadeh, Mo-
+hammad, and Scherrer, Bruno. Classiﬁcation-based pol-
+icy iteration with a critic. 2011.
+
+Grainger, John J and Stevenson, William D. Power system
+
+analysis. McGraw-Hill, 1994.
+
+Jiang, Daniel R and Powell, Warren B. Optimal hour-ahead
+bidding in the real-time electricity market with battery
+storage using approximate dynamic programming. IN-
+FORMS Journal on Computing, 27(3):525–543, 2015.
+
+Jiang, Daniel R, Pham, Thuy V, Powell, Warren B, Salas,
+Daniel F, and Scott, Waymond R. A comparison of ap-
+proximate dynamic programming techniques on bench-
+mark energy storage problems: Does anything work?
+In Adaptive Dynamic Programming and Reinforcement
+Learning (ADPRL), 2014 IEEE Symposium on, pp. 1–8.
+IEEE, 2014.
+
+Figure 9. Box-plot summary of the three heuristic policies and the
+policy learned using the IAPI algorithm. Higher is better.
+
+enable quick assessment of reliability for different states of
+the grid. In this work we introduce new models and for-
+mulations, along with a simulation environment. Our hope
+is that this will provide a platform for other researchers in
+the community to develop and explore their own innova-
+tive methods, and will help to bring these two ﬁelds closer.
+The code for the simulation environment is available at
+hidden to preserve anonymity.
+
+References
+Innovative tools for electrical system security within large
+areas. http://www.itesla-project.eu/. Ac-
+cessed: 2016-02-03.
+
+Abiri-Jahromi, A, Fotuhi-Firuzabad, M, and Abbasi, E. An
+efﬁcient mixed-integer linear formulation for long-term
+overhead lines maintenance scheduling in power distri-
+bution systems. Power Delivery, IEEE Transactions on,
+24(4):2043–2053, 2009.
+
+Abiri-Jahromi, Amir, Parvania, Masood, Bouffard, Fran-
+cois, and Fotuhi-Firuzabad, Mahmud. A two-stage
+framework for power transformer asset maintenance
+management – Part I: Models and formulations. Power
+Systems, IEEE Transactions on, 28(2):1395–1403, 2013.
+
+Allan, RN et al. Reliability evaluation of power systems.
+
+Springer Science & Business Media, 2013.
+
+Anil, Can. Benchmarking of data mining techniques as
+
+applied to power system analysis. 2013.
+
+Barto, Andrew G and Mahadevan, Sridhar. Recent ad-
+vances in hierarchical reinforcement learning. Discrete
+Event Dynamic Systems, 13(4):341–379, 2003.
+
+Bertsimas, Dimitris, Litvinov, Eugene, Sun, Xu Andy,
+Zhao, Jinye, and Zheng, Tongxin. Adaptive robust op-
+timization for the security constrained unit commitment
+problem. Power Systems, IEEE Transactions on, 28(1):
+52–63, 2013.
+
+Bienstock, Daniel. Optimal control of cascading power
+grid failures. In Decision and control and European con-
+
+Hierarchical Decision Making In Electricity Grid Management
+
+Koutsopoulos, Iordanis and Tassiulas, Leandros. Opti-
+mal control policies for power demand scheduling in the
+smart grid. Selected Areas in Communications, IEEE
+Journal on, 30(6):1049–1060, 2012.
+
+Sutton, Richard S, Precup, Doina, and Singh, Satinder. Be-
+tween MDPs and semi-MDPs: A framework for tempo-
+ral abstraction in reinforcement learning. Artiﬁcial intel-
+ligence, 112(1):181–211, 1999.
+
+Lai, Guoming, Margot, Franc¸ois, and Secomandi, Nicola.
+An approximate dynamic programming approach to
+benchmark practice-based heuristics for natural gas stor-
+age valuation. Operations research, 58(3):564–582,
+2010.
+
+Lu, Ning, Diao, Ruisheng, Hafen, Ryan P, Samaan, Nancy,
+and Makarov, Yuri V. A comparison of forecast error
+generators for modeling wind and load uncertainty. In
+Power and Energy Society General Meeting (PES), 2013
+IEEE, pp. 1–5. IEEE, 2013.
+
+Padhy, Narayana Prasad. Unit commitment-a bibliograph-
+ical survey. Power Systems, IEEE Transactions on, 19
+(2):1196–1205, 2004.
+
+Pandzic, Hrvoje, Wang, Yannan, Qiu, Ting, Dvorkin, Yury,
+and Kirschen, Daniel S. Near-optimal method for siting
+and sizing of distributed storage in a transmission net-
+work. 2015.
+
+Papavasiliou, Anthony and Oren, Shmuel S. Multiarea
+stochastic unit commitment for high wind penetration
+in a transmission constrained network. Operations Re-
+search, 61(3):578–592, 2013.
+
+Szita, Istv´an and L¨orincz, Andr´as. Learning Tetris using
+the noisy cross-entropy method. Neural computation, 18
+(12):2936–2941, 2006.
+
+Talbot, David. Lifeline for renewable power. Technol Rev,
+
+112:40–47, 2009.
+
+Taylor, James W and Buizza, Roberto. Neural network load
+forecasting with weather ensemble predictions. Power
+Systems, IEEE Transactions on, 17(3):626–632, 2002.
+
+Urieli, Daniel and Stone, Peter. Tactex’13: a champion
+In Proceedings of the
+adaptive power trading agent.
+2014 international conference on Autonomous agents
+and multi-agent systems, pp. 1447–1448. International
+Foundation for Autonomous Agents and Multiagent Sys-
+tems, 2014.
+
+Wong, Paul, Albrecht, P, Allan, R, Billinton, Roy, Chen,
+Qian, Fong, C, Haddad, Sandro, Li, Wenyuan, Mukerji,
+R, Patton, Diane, et al. The IEEE reliability test system-
+1996. a report prepared by the reliability test system task
+force of the application of probability methods subcom-
+mittee. Power Systems, IEEE Transactions on, 14(3):
+1010–1020, 1999.
+
+Parr, Ronald and Russell, Stuart. Reinforcement learning
+with hierarchies of machines. Advances in neural infor-
+mation processing systems, pp. 1043–1049, 1998.
+
+Wood, Allen J and Wollenberg, B. Power generation op-
+eration and control2nd edition. In Fuel and Energy Ab-
+stracts, volume 3, pp. 195, 1996.
+
+Wu, Lei, Shahidehpour, Mohammad, and Fu, Yong.
+Security-constrained generation and transmission outage
+scheduling with uncertainties. Power Systems, IEEE
+Transactions on, 25(3):1674–1685, 2010.
+
+Xi, Xiaomin, Sioshansi, Ramteen, and Marano, Vin-
+cenzo. A stochastic dynamic programming model for
+co-optimization of distributed energy storage. Energy
+Systems, 5(3):475–505, 2014.
+
+Powell, Warren B. Approximate Dynamic Programming:
+Solving the curses of dimensionality, volume 703. John
+Wiley & Sons, 2007.
+
+Powell, Warren B and Meisel, Stephan.
+
+Tutorial on
+stochastic optimization in energy – Part I: Modeling and
+Policies. 2015.
+
+Scott, W and Powell, Warren B. Approximate dynamic
+programming for energy storage with new results on in-
+strumental variables and projected bellman errors. Sub-
+mitted to Operations Research (Under Review), 2012.
+
+Si, Jennie. Handbook of learning and approximate dy-
+John Wiley & Sons,
+
+namic programming, volume 2.
+2004.
+
+Song, Yong-Hua and Wang, Xi-Fan. Operation of market-
+oriented power systems. Springer Science & Business
+Media, 2003.
+
+Sutton, Richard S and Barto, Andrew G. Reinforcement
+
+learning: An introduction. MIT press, 1998.
+
+

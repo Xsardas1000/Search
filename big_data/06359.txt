@@ -1,0 +1,1646 @@
+Uniﬁed Depth Prediction and Intrinsic Image
+
+Decomposition from a Single Image
+via Joint Convolutional Neural Fields
+
+Seungryong Kim1(cid:63), Kihong Park1, Kwanghoon Sohn1, and Stephen Lin2
+
+1Yonsei University, 2Microsoft Research
+
+Abstract. We present a method for jointly predicting a depth map and
+intrinsic images from single-image input. The two tasks are formulated in
+a synergistic manner through a joint conditional random ﬁeld (CRF) that
+is solved using a novel convolutional neural network (CNN) architecture,
+called the joint convolutional neural ﬁeld (JCNF) model. Tailored to our
+joint estimation problem, JCNF diﬀers from previous CNNs in its sharing
+of convolutional activations and layers between networks for each task,
+its inference in the gradient domain where there exists greater correlation
+between depth and intrinsic images, and the incorporation of a gradient
+scale network that learns the conﬁdence of estimated gradients in order
+to eﬀectively balance them in the solution. This approach is shown to
+surpass state-of-the-art methods both on single-image depth estimation
+and on intrinsic image decomposition.
+
+Keywords: single-image depth estimation, intrinsic image decomposi-
+tion, conditional random ﬁeld, convolutional neural networks
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+1
+2
+
+ 
+ 
+]
+
+V
+C
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+9
+5
+3
+6
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+1 Introduction
+
+Perceiving the physical properties of a scene undoubtedly plays a fundamental
+role in understanding real-world imagery. Such inherent properties include the
+3-D geometric conﬁguration, the illumination or shading, and the reﬂectance or
+albedo of each scene surface. Depth prediction and intrinsic image decomposi-
+tion, which aims to recover shading and albedo, are thus two fundamental yet
+challenging tasks in computer vision. While they address diﬀerent aspects of
+scene understanding, there exist strong consistencies among depth and intrinsic
+images, such that information about one provides valuable prior knowledge for
+recovering the other.
+
+In the intrinsic image decomposition literature, several works have exploited
+measured depth information to make the decomposition problem more tractable
+[1,2,3,4,5]. These techniques have all demonstrated better performance than us-
+ing RGB images alone. On the other hand, in the literature for single-image
+depth prediction, illumination-invariant features have been utilized for greater
+robustness in depth inference [6,7], and shading discontinuities have been used to
+
+(cid:63) This work is done while Seungryong Kim was an intern at Microsoft Research.
+
+2
+
+S. Kim et al.
+
+detect surface boundaries [8], suggesting that intrinsic images can be employed
+to enhance depth prediction performance. Although the two tasks are mutually
+beneﬁcial, previous research have solved for them only in sequence, by using
+estimated intrinsic images to constrain depth prediction [8], or vice versa [9]. We
+propose in this paper to instead jointly predict depth and intrinsic images in a
+manner where the two complementary tasks can assist each other.
+
+We address this joint prediction problem using convolutional neural networks
+(CNNs), which have yielded state-of-the-art performance for the individual prob-
+lems of single-image depth prediction [6,7] and intrinsic image decomposition
+[9,10,11], but are hampered by ambiguity issues that arise from limited training
+sets. In our work, the two tasks are formulated synergistically in a joint condi-
+tional random ﬁeld (CRF) that is solved using a novel CNN architecture, called
+the joint convolutional neural ﬁeld (JCNF) model. This architecture diﬀers from
+previous CNNs in several ways tailored to our particular problem. One is the
+sharing of convolutional activations and layers between networks for each task,
+which allows each network to account for inferences made in other networks. An-
+other is to perform learning in the gradient domain, where there exist stronger
+correlations between depth and intrinsic images than in the image value domain,
+which helps to deal with the ambiguity problem from limited training sets. A
+third is the incorporation of a gradient scale network which jointly learns the
+conﬁdence of the estimated gradients, to more robustly balance them in the so-
+lution. These networks of the JCNF model are jointly learned using a uniﬁed
+energy function in a joint CRF.
+
+Within this system, depth, shading and albedo are predicted in a coarse-to-
+ﬁne manner that yields more globally consistent results. Our experiments show
+that this joint prediction outperforms existing depth prediction methods and
+intrinsic image decomposition techniques on various benchmarks.
+
+2 Related Work
+
+Depth Prediction from a Single Image Traditional methods for this task
+have formulated the depth prediction as a Markov random ﬁeld (MRF) learning
+problem [12,13,14]. As exact MRF learning and inference are intractable in gen-
+eral, most of these approaches employ approximation methods, such as through
+linear regression of depth with image features [12], learning image-depth cor-
+relation with a non-linear kernel function [13], and training category-adaptive
+model parameters [14]. Although these parametric models infer plausible depth
+maps to some extent, they cannot estimate the depth of natural scenes reliably
+due to their limited learning capability.
+
+By leveraging the availability of large RGB-D databases, data-driven ap-
+proaches have been actively researched [15,16]. Konrad et al. [15] proposed a
+depth fusion scheme to infer the depth map by retrieving the nearest images in
+the dataset, followed by an aggregation via weighted median ﬁltering. Karsch et
+al. [16] presented the depth transfer (DT) approach which retrieves the nearest
+similar images and warps their depth maps using dense SIFT ﬂow. Inspired by
+this method, Choi et al. [17] proposed the depth analogy (DA) approach that
+
+Uniﬁed Depth Prediction and Intrinsic Image Decomposition via JCNF
+
+3
+
+transfers depth gradients from the nearest images, demonstrating the eﬀective-
+ness of gradient domain learning. Although these methods can extract reliable
+depth for certain scenes, there exist many others for which the nearest images are
+dissimilar and unsuitable. Recently, Kong et al. [8] extended the DT approach
+[16] by using albedo and shading for image matching as well as for detecting
+contours at surface boundaries. In contrast to our approach, the intrinsic images
+are estimated independently from the depth prediction.
+
+More recently, methods have been proposed based on CNNs. Eigen et al. [6]
+proposed multi-scale CNNs (MS-CNNs) for predicting depth maps directly from
+a single image. Other CNN models were later proposed for depth estimation
+[18], including a deep convolutional neural ﬁeld (DCNF) by Fayao et al. [7] that
+estimates depth on each superpixel while enforcing smoothness within a CRF.
+CNN-based methods clearly outperform conventional techniques, and we aim to
+elevate the performance further by accounting for intrinsic image information.
+
+Intrinsic Image Decomposition The notion of intrinsic images was ﬁrst
+introduced in [19]. Conventional methods are largely based on Retinex the-
+ory [20,21,22], which attributes large image gradients to albedo changes, and
+smaller gradients to shading. More recent approaches have employed a variety
+of techniques, based on gradient distribution priors [23], dense CRFs [24], and
+hybrid L2-Lp optimization to separate albedo and shading gradients [25]. These
+single-image based methods, however, are inherently limited by the fundamen-
+tal ill-posedness of the problem. To partially alleviate this limitation, several
+approaches have utilized additional input, such as multiple images [26,27,28],
+user interaction [29,30], and measured depth maps [1,2,3,4,5]. The use of addi-
+tional data such as measured depth clearly increases performance but reduces
+their applicability.
+
+Related to our work is the method of Barron and Malik [31], which esti-
+mates object shape in addition to intrinsic images. To regularize the estimation,
+the method utilizes statistical priors on object shape and albedo which are not
+generally applicable to images of full scenes.
+
+More recently, intrinsic image decomposition has been addressed using CNNs
+[9,10,11]. Zhou et al. [10] proposed a multi-stream CNN to predict the relative
+reﬂectance ordering between image patches from large-scale human annotations.
+Narihira et al. [11] learned a CNN that directly predicts albedo and shading
+from an RGB image patch. Shelhamer et al. [9] estimated depth through a fully
+convolutional network and used it to constrain the intrinsic image decomposition.
+Unlike our approach, the depth and intrinsic images are estimated sequentially.
+
+3 Formulation
+
+3.1 Problem Statement and Model Architecture
+Let us deﬁne a color image I such that Ip : I → R3 for pixel p, where I ⊂ N2
+is a discrete image domain. Similarly, depth, albedo and shading can be deﬁned
+as Dp : I → R and Ap, Sp : I → R3. All images are deﬁned in the log domain.
+Given a training set of color, depth, albedo, and shading images denoted by C =
+
+4
+
+S. Kim et al.
+
+(
+
+(a)
+
+(b)
+
+(c)
+
+(d)
+
+Fig. 1. For an example from the MPI-SINTEL dataset [32], its (a) color image I, (b)
+depth D, (c) albedo A, (d) shading S, and their corresponding gradient ﬁelds (cid:79)I, (cid:79)D,
+(cid:79)A, and (cid:79)S shown below. Compared to quantities in the value domain, correlations
+are stronger among gradient ﬁelds, such that estimates of one may help in learning
+others. Furthermore, the gradient consistency between (cid:79)I, (cid:79)D, (cid:79)A, and (cid:79)S can be
+used to estimate the conﬁdence of each gradient.
+
+{(cid:0)I i, Di, Ai, Si(cid:1)|i = 1, 2, ...,NC}, where NC is the number of training images, we
+
+ﬁrst aim to learn a prediction model that approximates depth Di, albedo Ai,
+and shading Si from each color image I i ∈ C. This prediction model will then
+be used to infer reliable depth D, albedo A, and shading S simultaneously from
+a single query image I.
+
+We speciﬁcally learn the joint prediction model in the gradient domain, where
+depth and intrinsic images generally exhibit stronger correlation than in the
+value domain, as exempliﬁed in Fig. 1. This greater correlation and reduced
+discrepancy among (cid:79)D, (cid:79)A, and (cid:79)S facilitate joint learning of the two tasks
+by allowing them to better leverage information from each other1. We therefore
+formulate our model to predict the depth, albedo, and shading gradient ﬁelds
+from the color image. Our method additionally learns the conﬁdence of predicted
+gradients based on their consistency among one another in the training set.
+
+We formulate this joint prediction using convolutional neural networks (CNNs)
+in a joint conditional random ﬁeld (CRF). Our system architecture is structured
+as three cooperating networks, namely a depth prediction network, an intrinsic
+prediction network, and a gradient scale network. The depth prediction network
+is modeled by two feed-forward processes F(I i; wDF ) and F(I i; w
+(cid:79)DF ), where
+(cid:79)DF represent the network parameters for depth and depth gradients.
+wDF and w
+The intrinsic prediction network is similarly modeled by feed-forward processes
+F(I i; w
+(cid:79)SF represent the network pa-
+rameters for albedo gradients and shading gradients. The gradient scale network
+learns the conﬁdence of depth, albedo and shading gradients using a feed-forward
+process for each, denoted by G((cid:79)I i, (cid:79)Ai, (cid:79)Si; w
+(cid:79)AG ),
+and G((cid:79)I i, (cid:79)Di, (cid:79)Ai; w
+are their respective
+network parameters. The three networks in our system are jointly learned in a
+manner where each can leverage information from the other networks.
+
+(cid:79)DG ), G((cid:79)I i, (cid:79)Di, (cid:79)Si; w
+
+(cid:79)AF ) and F(I i; w
+
+(cid:79)SF ), where w
+
+(cid:79)AF and w
+
+(cid:79)SG ), where w
+
+(cid:79)DG , w
+
+(cid:79)AG , and w
+
+(cid:79)SG
+
+1 (cid:79) is a diﬀerential operator deﬁned in the x- and y-direction such that (cid:79) = [(cid:79)x, (cid:79)y].
+
+Uniﬁed Depth Prediction and Intrinsic Image Decomposition via JCNF
+
+5
+
+3.2 Joint Conditional Random Field
+
+The networks in our model are jointly learned by minimizing the energy function
+of a joint CRF. The joint CRF is formulated so that each task can leverage
+information from the other complementary task, leading to improved prediction
+in comparison to separate estimation models. Our energy function E(D, A, S|I)
+is deﬁned as unary potentials Eu and pairwise potentials Es for each task:
+
+E(D, A, S|I) = Eu(D|I) + Eu(A, S|I)
+
++ λDEs(D|I, A, S) + λAEs(A|I, D, S) + λSEs(S|I, D, A),
+
+(1)
+
+by minimizing (cid:80)
+
+where λD, λA, and λS are weights for each pairwise potential. In the training
+procedure, this energy function is minimized over all the training images, i.e.,
+i E(Di, Ai, Si|I i). For testing, given a query image I and the
+learned network parameters, the ﬁnal solutions of D, A, and S are estimated by
+minimizing the energy function E(D, A, S|I).
+Unary Potentials The unary potentials consist of two energy functions, Eu(D|I)
+and Eu(A, S|I). The depth unary function Eu(D|I) is formulated as
+
+(cid:88)
+
+p
+
+(cid:0)Dp − F(IP ; wDF )(cid:1)2
+
+Eu(D|I) =
+
+,
+
+(2)
+
+which represents the squared diﬀerences between depths Dp and a predicted
+depths from F(IP ; wDF ), where P is the local neighborhood2 for pixel p. It can
+be considered as a Dirichlet boundary condition for depth pairwise potentials,
+which will be described shortly.
+The unary function Eu(A, S|I) for intrinsic images is used in minimizing the
+
+reconstruction errors of color image I from albedo A and shading S:
+
+Eu(A, S|I) =
+
+(Lp(Ip − Ap − Sp))2,
+
+(3)
+
+(cid:88)
+
+p
+
+where Lp = lum(Ip) + ε, and lum(I) denotes the luminance of I with ε = 0.001.
+It has been noted that processing of luminance balances out the inﬂuence of the
+unary potential across the image [1,28], and that treating the image formation
+equation (i.e., Ip = Ap + Sp) as a soft constraint can bring greater stability in
+optimization [25], especially for dark pixels whose chromaticity can be greatly
+distorted by sensor noise.
+Pairwise Potentials The pairwise potentials, which include Es(D|I, A, S),
+Es(A|I, D, S), and Es(S|I, D, A), represent diﬀerences between gradients and
+estimated gradients in the depth, albedo, and shading images. The pairwise
+potential Es(D|I, A, S) for depth gradients is deﬁned as
+
+Es(D|I, A, S) =
+
+(cid:107)(cid:79)Dp − G((cid:79)IP , (cid:79)AP , (cid:79)SP ; w
+
+(cid:79)DG ) ◦ F(IP ; w
+
+(cid:79)DF )(cid:107)2,
+
+(4)
+
+p
+
+(cid:88)
+
+2 It is deﬁned as the receptive ﬁeld through the CNNs for pixel p [33].
+
+6
+
+S. Kim et al.
+
+Fig. 2. Network architecture of the JCNF model. It consists of a depth prediction
+network, an intrinsic prediction network, and a gradient scale network. These networks
+are learned by minimizing a joint CRF loss function.
+where ◦ denotes the Hadamard product, and the estimated depth gradients of
+F(Ip; w
+(cid:79)DF ) provide a guidance gradient ﬁeld for depth, similar to a Poisson equa-
+tion [34,35]. They are weighted by a conﬁdence factor G((cid:79)IP , (cid:79)AP , (cid:79)SP ; w
+(cid:79)DG )
+learned in the gradient scale network to reduce the impact of erroneous gradi-
+ents. This gradient scale is similar to the derivative-level conﬁdence employed in
+[36] for image restoration, except that our gradient scale is learned non-locally
+with CNNs and diﬀerent types of guidance images, as later described in Sec. 3.4.
+The pairwise potentials for albedo gradients Es(A|I, D, S) and shading gradi-
+ents Es(S|I, D, A) are deﬁned in the same manner. Since the gradient scales are
+jointly estimated with each other task, these pairwise potentials are computed
+within an iterative solver, which will be described in Sec. 4.1.
+
+3.3 Joint Depth and Intrinsic Prediction Network
+
+Our joint depth and intrinsic prediction network utilizes the aforementioned en-
+ergy function to predict D, (cid:79)D, (cid:79)A, and (cid:79)S from a single image I. The joint
+network consists of a depth prediction network for D and (cid:79)D, and an intrinsic
+prediction network for (cid:79)A and (cid:79)S. In contrast to previous methods for single-
+image depth prediction [6,37,11], our system jointly estimates the gradient ﬁelds
+(cid:79)D, (cid:79)A, and (cid:79)S, which are used to reduce ambiguity in the solution and obtain
+more edge-preserved results. To allow the diﬀerent estimation tasks to leverage
+information from one another, we design the depth and intrinsic networks to
+share concatenated convolutional activations, and share convolutional layers be-
+tween albedo and shading networks, as illustrated in Fig. 2.
+
+Depth Prediction Network The depth prediction network consists of a global
+depth network and a depth gradient network. For the global depth network, we
+learn its parameters wDF for predicting an overall depth map from the entire
+image structure. Similar to [6,37,11], it provides coarse, spatially-varying depth
+
+Depth Prediction NetworkIntrinsic Prediction Network…Gradient Scale NetworkJoint CRF Loss Layer()global depth prediction networkconv/ReLUsconv/ReLUsconv/ReLUsFCconv/ReLUsconcat.conv/ReLUsconv/ReLUsconv/ReLUsconv/ReLUsconv/ReLUsconv/ReLUsconcat.concat.global depthdepth gradientalbedo gradientconv/ReLUsconv/ReLUsshading gradientimagedepth albedoshadingdepthconfidencealbedoconfidenceshadingconfidenceconv/ReLUs()Econv/ReLUsconv/ReLUsconv/ReLUsconv/ReLUsconv/ReLUsFCnon‐lineariterationUniﬁed Depth Prediction and Intrinsic Image Decomposition via JCNF
+
+7
+
+conv1 conv2 conv3 conv4 conv5 FC1
+1 × 1
+4096
+
+global depth net.
+3 × 3
+3 × 3
+256
+384
+
+kernel 11× 11 5 × 5
+256
+channel
+
+3 × 3
+384
+
+96
+
+gradient scale net.
+conv1 conv2 conv3
+1 × 1
+3 × 3
+2 or 6
+64
+
+3 × 3
+64
+
+FC2
+1 × 1
+-/16
+
+kernel 11× 11 3 × 3
+channel 96 + 1 64 + 64
+
+depth gradient net.
+3 × 3
+64
+
+3 × 3
+64
+
+intrinsic gradient net.
+3 × 3
+64
+
+3 × 3
+64
+
+6
+
+conv1 conv2 conv3 conv4 conv5 conv1 conv2 conv3 conv4 conv5
+3 × 3
+
+3 × 3 11× 11 3 × 3
+64 + 64
+
+96
+
+2
+
+Table 1. Network architecture of the JCNF model.
+
+that may be lacking in ﬁne detail. This coarse depth will later be reﬁned using
+the output of the depth gradient network.
+
+The global depth network consists of ﬁve convolutional layers, three pooling
+layers, six non-linear activation layers, and two fully-connected (FC) layers. For
+the ﬁrst ﬁve layers, the pre-trained parameters from the AlexNet architecture
+[38] are employed, and ﬁne-tuning for the dataset is done. Rectiﬁed linear units
+(ReLUs) are used for the non-linear layers, and the pooling layers employ max
+pooling. The ﬁrst FC layer encodes the network responses into ﬁxed-dimensional
+features, and the second FC layer infers a coarse global depth map at 1/16-scale
+of the original depth map.
+
+The depth gradient network predicts ﬁne-detail depth gradients for each
+(cid:79)DF are learned using an end-to-end patch-level scheme
+pixel. Its parameters w
+inspired by [39,35], where the network input is an image patch and the output
+is a depth gradient patch. For inference of depth gradients at the pixel level, the
+depth gradient network consists of ﬁve convolutional networks followed by Re-
+LUs, without stride convolutions or pooling layers. The ﬁrst convolutional layer
+is identical to the ﬁrst convolutional layer in the AlexNet architecture [38]. Four
+additional convolutional layers are also used as shown in Fig. 2. The depth gradi-
+ent patches that are output by this network will be used for depth reconstruction
+in Sec. 4.2. Note that in the testing procedure, the depth gradient network is
+applied to overlapping patches over the entire image, which are aggregated in
+the last convolutional layer to yield the full gradient ﬁeld.
+
+Intrinsic Prediction Network The intrinsic prediction network has a struc-
+ture similar to the depth gradient prediction network. The network parameters
+(cid:79)SF are learned for predicting the albedo and shading gradients at
+(cid:79)AF and w
+w
+each pixel. To jointly infer the depth and intrinsic image gradients, the second
+convolutional activations for each task are concatenated and passed to their third
+convolutional layers as shown in Fig. 2. In the training procedure, the depth and
+intrinsic networks are iteratively learned, which enables each task to beneﬁt from
+each other’s activations to provide more reliable estimates. Furthermore, similar
+to [11], the albedo and shading gradient networks share their ﬁrst three convo-
+lutional layers, while the last two are separate. Since the albedo and shading
+images have related properties, these shared convolutional layers beneﬁt their
+estimation. Details on kernel sizes and the number of channels for each layer are
+provided in Table 1 for all the networks.
+
+8
+
+S. Kim et al.
+
+3.4 Gradient Scale Network
+
+The estimated gradients from the depth and intrinsic prediction networks might
+contain errors due to the ill-posed nature of their problems. To help in identifying
+such errors, our system additionally learns the conﬁdence of estimated gradients,
+speciﬁcally, whether a gradient exists at a particular location or not. The basic
+idea is to learn from the training data about the consistencies that exist among
+the diﬀerent types of gradients given their local neighborhood P. From this, we
+can determine the conﬁdence of a gradient (e.g., a depth gradient), based on
+the other estimated gradients (e.g., the albedo, shading, and image gradients).
+This conﬁdence is modeled as a gradient scale that is similar to the scale map
+used in [36] to model derivative-level conﬁdence for image restoration. It can be
+noted that in some depth and intrinsic image decomposition methods [1,4,7], the
+solutions are ﬁltered with ﬁxed parameters using the color image as guidance.
+Our system instead learns a network for deﬁning the parameters, using not only
+a color image but also depth and intrinsic images as guidance.
+
+(cid:79)DG
+
+The gradient scale network consists of three convolutional layers and one
+non-linear activation layer. For the case of depth gradients, the output of the
+gradient scale network G((cid:79)IP , (cid:79)AP , (cid:79)SP ; w
+(cid:79)DG ) is estimated as the convolution
+and (|(cid:79)IP|2,|(cid:79)AP|2,|(cid:79)SP|2), followed by a non-linear activation
+between w
+i.e., f (·) = (1−exp(1−·))/(1+exp(1−·)), which is deﬁned within [−1, 1]. Here,
+|·|2 for a vector of gradients denotes a vector of the gradient magnitudes. Thus, in
+the gradient scale network, the network parameters are convolved with the gra-
+(cid:79)DG , the conﬁdence of (cid:79)Dp is
+dient magnitudes. With the learned parameters w
+estimated from (cid:79)IP , (cid:79)AP , (cid:79)SP . This can alternatively be viewed as a guidance
+ﬁltering weight for D with guidance images I, A, and S. G((cid:79)IP , (cid:79)DP , (cid:79)SP ; w
+(cid:79)AG )
+and G((cid:79)IP , (cid:79)DP , (cid:79)AP ; w
+
+(cid:79)SG ) are also similarly deﬁned.
+
+Some properties of gradient scales are as follows. A gradient scale can be
+either positive or negative. A large positive value indicates high conﬁdence in
+the presence of a gradient. A large negative value also indicates high conﬁdence,
+but for the reversed gradient direction. In addition, when a gradient ﬁeld contains
+extra erroneous regions, gradient scales of value 0 can help to disregard them.
+
+4 Uniﬁed Depth and Intrinsic Image Prediction
+
+4.1 Training
+The energy function E(D, A, S|I) from (1) is used to simultaneously learn the
+(cid:79)SF ) and the gradient
+depth and intrinsic network parameters (wDF , w
+(cid:79)SG ). Although the overall form of the
+scale network parameters (w
+energy is non-quadratic, it has a quadratic form with respect to each of its terms.
+The energy function can thus be minimized by alternating among its terms.
+
+(cid:79)DG , w
+
+(cid:79)AG , w
+
+(cid:79)DF , w
+
+(cid:79)AF , w
+
+Loss Functions For the global depth unary potential of (2), the global depth
+network parameters wDF can be solved by minimizing the following loss function
+
+(cid:88)
+
+(cid:0)Di
+p − F(I iP ; wDF )(cid:1)2
+
+L(wDF ) =
+
+{i,p}
+
+.
+
+(5)
+
+Uniﬁed Depth Prediction and Intrinsic Image Decomposition via JCNF
+
+Input: training image set C = {(cid:0)I i, Di, Ai, Si(cid:1)}, query color image I∗
+
+Algorithm 1: Uniﬁed Depth and Intrinsic Image Prediction
+
+9
+
+Output: depth D, albedo A, shading S.
+/∗ Training Procedure ∗/
+
+1 : For training set C, learn parameters wDF using backward-propagation.
+2 :
+
+Initialize parameters of w
+while not converged do
+
+(cid:79)DG , w
+For C, update parameters w
+For C, update parameters w
+
+(cid:79)AG , and w
+(cid:79)AF , w
+(cid:79)DF , w
+(cid:79)AG , w
+(cid:79)DG , w
+
+(cid:79)SG to provide constant values.
+(cid:79)SG .
+(cid:79)AG , w
+(cid:79)SF with ﬁxed w
+(cid:79)SF .
+(cid:79)AF , w
+(cid:79)SG with ﬁxed w
+
+(cid:79)DG , w
+(cid:79)DF , w
+
+end while
+/∗ Testing Procedure ∗/
+for l = 1 : NL do
+
+Estimate Dl,∗, (cid:79)Dl,∗ using forward-propagation F(I l; wDF ), F(I l; w
+(cid:79)AF ), F(I l; w
+Estimate (cid:79)Al,∗, (cid:79)Sl,∗ using forward-propagation F(I l; w
+while not converged do
+
+(cid:79)DF ).
+(cid:79)SF ).
+Estimate C((cid:79)Dl,∗), C((cid:79)Al,∗), and C((cid:79)Sl,∗) using forward-propagation.
+Estimate Dl, Al, Sl by optimizing E(Dl|I l, I l−1) and E(Al, Sl|I l, I l−1).
+Compute Dl,∗, (cid:79)Dl,∗, (cid:79)Al,∗, (cid:79)Sl,∗ from Dl, Al, Sl.
+
+3 :
+4 :
+
+5 :
+6 :
+
+7 :
+8 :
+9 :
+
+end while
+Interpolate Dl, Al, Sl into the size of I l+1 using a bilinear interpolation.
+
+10 :
+
+end for
+
+11 : Estimate depth D, albedo A, shading S as DNL , ANL , SNL .
+
+We note that the intrinsic image unary term does not contain network pa-
+
+rameters to be learned, so it is used only in the testing procedure.
+
+L(w
+
+(cid:79)DG , w
+
+(cid:79)DF ) =
+
+(cid:88)
+
+{i,p} (cid:107)(cid:79)Di
+
+p − G((cid:79)I iP , (cid:79)AiP , (cid:79)SiP ; w
+
+The pairwise potentials each incorporate two networks, namely the gradient
+prediction network and gradient scale network, so they are iteratively trained.
+The loss function for the depth gradient pairwise potential of (4) is deﬁned as
+(cid:79)DF )(cid:107)2.
+(6)
+(cid:79)AG , w
+(cid:79)AF )
+
+(cid:79)DG ) ◦ F(I iP ; w
+The loss functions for the pairwise potentials of the albedo gradients L(w
+and shading gradients L(w
+These loss functions are minimized using stochastic gradient descent with the
+standard back-propagation [40]. First, wDF is estimated through ∂L(wDF )/∂wDF .
+(cid:79)DG
+(cid:79)DG
+Then w
+and ∂L(w
+(cid:79)DF . In each iteration, the loss functions are diﬀerently
+deﬁned according to the other network outputs, where the network parameters
+are initialized with the values obtained from the previous iteration. In this way,
+the networks are trained jointly and account for the improving outputs of the
+other networks.
+
+(cid:79)DF are iteratively estimated through ∂L(w
+
+(cid:79)SF ) are similarly deﬁned.
+
+and w
+(cid:79)DG , w
+
+(cid:79)DF )/∂w
+
+(cid:79)DF )/∂w
+
+(cid:79)DG , w
+
+(cid:79)SG , w
+
+4.2 Testing
+Iterative Joint Prediction In the testing procedure, the outputs D, (cid:79)D,
+(cid:79)A and (cid:79)S for a given input image I are predicted by minimizing the energy
+function E(D, A, S|I) from (1) with constraints from the estimates computed
+
+10
+
+S. Kim et al.
+
+using the learned network parameters and forward-propagation. Similar to the
+training procedure, we minimize E(D, A, S|I) with an iterative scheme due to its
+non-quadratic form, where E(D|I) and E(A, S|I) are minimized in alternation.
+For the depth prediction, E(D|I) is deﬁned as a data term for global depth
+
+and a pairwise term for depth gradients:
+
+(cid:88)
+
+(cid:0)Dp − D∗
+
+(cid:1)2
+
+(cid:88)
+
+p
+
+p
+
++ λD
+
+E(D|I) =
+
+(cid:107)(cid:79)Dp − C((cid:79)D∗
+(7)
+p) is the gradient scale of (cid:79)D∗
+p
+P , (cid:79)S∗
+p) is computed
+P , all of the predictions need to be iteratively estimated.
+For the intrinsic prediction, E(A, S|I) is also deﬁned as data and pairwise
+terms, with the image formation equation and the albedo and shading gradients:
+
+where ∗ denotes network outputs, and C((cid:79)D∗
+derived from G((cid:79)I∗
+with (cid:79)I∗
+
+(cid:79)DG ). We note that since C((cid:79)D∗
+
+p) ◦ (cid:79)D∗
+
+P , (cid:79)A∗
+
+p(cid:107)2,
+
+P ; w
+
+p
+
+P , (cid:79)A∗
+P , and (cid:79)S∗
+(cid:88)
+
+E(A, S|I) =
+
+(cid:88)
+
++
+
+p
+
+(Lp(Ip − Ap − Sp))2
+p) ◦ (cid:79)A∗
+
+p
+
+λA(cid:107)(cid:79)Ap − C((cid:79)A∗
+p) and C((cid:79)S∗
+
+p(cid:107)2 + λS(cid:107)(cid:79)Sp − C((cid:79)S∗
+
+p ) ◦ (cid:79)S∗
+
+p(cid:107)2,
+
+(8)
+
+where C((cid:79)A∗
+p). This energy func-
+tion can be optimized with an existing linear solver [1]. These two energy func-
+tions E(D|I) and E(A, S|I) are iteratively minimized while providing informa-
+tion in the form of depth, albedo, and shading gradients to each other.
+
+p ) are deﬁned similarly to C((cid:79)D∗
+
+Coarse-to-Fine Joint Prediction In estimating depth and intrinsic images,
+enforcing a degree of global consistency can lead to performance gains [1,5].
+Although our JCNF model is solved by global energy minimization, its global
+consistency is limited because gradients are deﬁned just between pixel neighbors.
+For greater global consistency, we apply our joint prediction model in a coarse-to-
+ﬁne manner, where color images I l are constructed at NL image pyramid levels
+l = {1, ...,NL}, and the depth Dl and intrinsic images Al and Sl are predicted
+from I l. Coarser scale results are then used as guidance for ﬁner levels.
+
+Speciﬁcally, we reformulate E(D|I) as E(Dl|I l, I l−1):
+
+E(Dl|I l, I l−1) =
+
+(cid:88)
+
+p
+
++ λD
+
+(cid:0)Dl
+(cid:88)
+p − Dl,∗
+(cid:107)(cid:79)Dl
+
+p
+
+(cid:0)Dl
+
+(cid:88)
+(cid:1)2
+p − C((cid:79)Dl,∗
+
++
+
+p
+
+p − Dl−1
+p ) ◦ (cid:79)Dl,∗
+
+p
+
+(cid:1)2
+p (cid:107)2.
+
+p
+
+Similarly, E(A, S|I) is reformulated as E(Al, Sl|I l, I l−1):
+E(Al, Sl|I l, I l−1) =
+p − Al−1
+p − C((cid:79)Sl,∗
+λA(cid:107)(cid:79)Al
+
+(cid:88)
+p − Al
+p(I l
+(Ll
+p ) ◦ (cid:79)Al,∗
+p − C((cid:79)Al,∗
+
+p − Sl
+p))2 + (Al
+p (cid:107)2 + λS(cid:107)(cid:79)Sl
+
+(cid:88)
+
++
+
+p
+
+p
+
+)2 + (Sl
+p ) ◦ (cid:79)Sl,∗
+
+p − Sl−1
+p (cid:107)2,
+
+p
+
+p
+
+where the multi-scale unary functions lead to more reliable solutions and faster
+convergence. The high-level algorithm for the training and testing procedures is
+provided in the Algorithm 1.
+
+(10)
+
+(9)
+
+)2
+
+Uniﬁed Depth Prediction and Intrinsic Image Decomposition via JCNF
+
+11
+
+(a)
+
+(b)
+
+(c)
+
+(d)
+
+(e)
+
+Fig. 3. Qualitative results on MPI SINTEL [41] for depth prediction. (a) color image,
+(b) DA [17], (c) DCNF-FCSP(NYU) [7], (d) JCNF, and (e) ground truth.
+
+(a)
+
+(b)
+
+(c)
+
+(d)
+
+(e)
+
+Fig. 4. Qualitative results on MPI SINTEL [41] for intrinsic decomposition of Fig. 3.
+(a) Shen et al. [30], (b) SIRFS [31], (c) MSCR [11], (d) JCNF, and (e) ground truth.
+
+5 Experimental Results
+
+For our experiments, we implemented the JCNF model using the VLFeat Mat-
+ConvNet toolbox [40]. Our code with pre-trained parameters will be made pub-
+licly available upon publication.
+
+The inputs of the global depth network were color images and the corre-
+sponding depth images at 1/16 of the original scale. The inputs of each gradient
+network were randomly cropped patches from training images and the corre-
+sponding gradient maps. The patch sizes were 35 × 35 × 3 for color images,
+19 × 19 × 2 for depth gradient maps, and 19 × 19 × 6 for albedo and shading
+gradient maps. The reduced resolution for gradient map patches was due to
+boundary regions not processed by convolution [39]. For the gradient scale net-
+works, the input patches are of size 35×35×9. The energy function weights were
+set to {λD, λA, λS} = {1, 0.1, 0.1} by cross-validation. The ﬁlter weights of each
+network layer were initialized by drawing randomly from a Gaussian distribution
+with zero mean and a standard deviation of 0.001. The network learning rates
+were set to 10−4, except for the ﬁnal layer of the gradient networks where it is
+set to 10−5.
+
+We additionally augmented the training data by applying random transforms
+to it, including scalings in the range [0.8, 1.2], in-plane rotations in the range
+[−15, 15], translations, RGB scalings, image ﬂips, and diﬀerent gammas.
+
+In the following, we evaluated our system through comparisons to state-
+of-the-art depth prediction and intrinsic image decomposition methods on the
+
+12
+
+S. Kim et al.
+
+Methods
+
+Error
+
+rel
+
+rms
+
+0.448
+Depth Transfer [16]
+Depth Analogy [17]
+0.432
+DCNF-FCSP(NYU) [7] 0.424
+JCNF(NYU)
+JCNF wo/jnl
+JCNF wo/gsn
+JCNF wo/ctf
+JCNF
+
+9.242
+8.421
+8.112
+
+log10
+0.193
+0.167
+0.164
+
+rmslog
+3.121
+2.741
+2.421
+0.293 0.131 7.421 1.812
+0.292 0.138 7.471 1.973
+0.271 0.119 7.451 1.921
+0.252 0.101 7.233 1.622
+0.183 0.097 6.118 1.037
+
+Accuracy
+δ < 1.252
+
+δ < 1.253
+
+δ < 1.25
+
+0.524
+0.621
+0.652
+0.715
+0.714
+0.724
+0.729
+0.823
+
+0.712
+0.799
+0.782
+0.812
+0.783
+0.793
+0.812
+0.834
+
+0.735
+0.812
+0.824
+0.831
+0.839
+0.893
+0.878
+0.902
+
+Table 2. Quantitative results on MPI SINTEL [41] for depth prediction. DCNF-FCSP
+(NYU) [7] and JCNF(NYU) predict the depth by pre-training on NYU v2 [42].
+
+Methods
+
+MSE
+
+LMSE
+
+DSSIM
+
+albedo shading avg. albedo shading avg. albedo shading avg.
+
+0.049
+0.041
+0.039
+0.041
+0.032
+0.047
+0.033
+0.028
+0.017
+
+0.053
+0.042
+0.043
+0.047
+0.041
+0.042
+0.042
+0.031
+0.020
+
+0.210
+Retinex [44]
+0.194
+Li et al. [23]
+0.232
+Shen et al. [30]
+0.214
+Zhao et al. [22]
+0.284
+IIW [24]
+0.208
+SIRFS [31]
+0.193
+Jeon et al. [4]
+0.181
+Chen et al. [1]
+0.176
+MSCR [11]
+JCNF wo/jnl 0.012 0.015 0.016 0.014 0.010 0.010 0.149 0.123 0.141
+JCNF wo/gsn 0.008 0.011 0.011 0.010 0.009 0.008 0.146 0.112 0.132
+JCNF wo/ctf 0.008 0.012 0.010 0.009 0.008 0.008 0.127 0.110 0.119
+JCNF
+0.007 0.009 0.007 0.006 0.007 0.007 0.092 0.101 0.097
+
+0.033
+0.024
+0.028
+0.028
+0.032
+0.029
+0.021
+0.019
+0.016
+
+0.028
+0.031
+0.027
+0.029
+0.031
+0.026
+0.021
+0.019
+0.011
+
+0.031
+0.034
+0.032
+0.031
+0.027
+0.028
+0.023
+0.019
+0.011
+
+0.051
+0.037
+0.048
+0.031
+0.041
+0.043
+0.032
+0.029
+0.021
+
+0.206
+0.224
+0.210
+0.257
+0.241
+0.206
+0.181
+0.165
+0.150
+
+0.214
+0.242
+0.221
+0.210
+0.281
+0.210
+0.204
+0.196
+0.201
+
+Table 3. Quantitative results on MPI SINTEL [41] for intrinsic decomposition using
+methods based on single images, RGB-D, CNNs, and our JCNF model.
+
+MPI SINTEL [41], NYU v2 [42], and Make3D [43] benchmarks. We additionally
+examined the performance contributions of the joint network learning (wo/jnl),
+the gradient scale network (wo/gsn), and the coarse-to-ﬁne scheme (wo/ctf).
+
+5.1 MPI SINTEL Benchmark
+
+We evaluated our JCNF model on both depth prediction and intrinsic image de-
+composition on the MPI SINTEL benchmark [41], which consists of 890 images
+from 18 scenes with 50 frames each. For a fair evaluation, we followed the same
+experimental protocol as in [1,11], with their two-fold cross-validation and train-
+ing/testing image splits. Fig. 3 and Fig. 4 exhibit predicted depth and intrinsic
+images from a single image, respectively. Table 2 and Table 3 are quantitative
+evaluations for both tasks using a variety of metrics, including average relative
+diﬀerence (rel), average log10 error (log10), root-mean-squared error (rms), its log
+version (rmslog), and accuracy with thresholds δ = {1.25, 1.252, 1.253} [7]. For
+quantitatively evaluating intrinsic image decomposition performance, we used
+
+Uniﬁed Depth Prediction and Intrinsic Image Decomposition via JCNF
+
+13
+
+Methods
+
+Error
+
+rel
+
+log10
+
+rms
+
+-
+
+-
+
+1.214
+
+0.134
+0.132
+
+rmslog
+Make3D [12]
+0.349
+0.409
+Depth Transfer [16] 0.350
+0.378
+Depth Analogy [17] 0.328
+0.392
+0.228
+MS-CNNs [6]
+0.293
+DCNF-FCSP [7]
+0.221
+0.281
+0.214 0.093 0.716 0.241
+JCNF(MPI)
+0.216 0.101 0.753 0.241
+JCNF wo/jnl
+0.210 0.091 0.728 0.254
+JCNF wo/gsn
+JCNF wo/ctf
+0.208 0.106 0.708 0.237
+0.201 0.077 0.711 0.212
+JCNF
+
+1.1
+1.31
+0.901
+0.760
+
+0.095
+
+Accuracy
+δ < 1.252
+
+δ < 1.253
+
+δ < 1.25
+
+0.447
+0.460
+0.471
+0.611
+0.604
+0.677
+0.625
+0.621
+0.681
+0.690
+
+0.745
+0.742
+0.799
+0.873
+0.885
+0.879
+0.896
+0.890
+0.901
+0.910
+
+0.897
+0.893
+0.891
+0.961
+0.974
+0.927
+0.925
+0.975
+0.972
+0.979
+
+Table 4. Quantitative results on the NYU v2 dataset [42] for depth prediction.
+
+(a)
+
+(b)
+
+(c)
+
+(d)
+
+(e)
+
+(f)
+
+Fig. 5. Qualitative results on NYU v2 [42] for depth prediction. (a) color image, (b)
+MS-CNNs [6], (c) DCNF-FCSP [7], (d) JCNF(MPI), (e) JCNF, and (f) ground truth.
+
+(a)
+
+(b)
+
+(c)
+
+(d)
+
+(e)
+
+(f)
+
+Fig. 6. Qualitative results on NYU v2 [42] for intrinsic decomposition of Fig. 5. (a) Li
+et al. [23], (b) IIW [24], (c) Jeon et al. [4], (d) JCNF learned using [4], (e) Chen et al.
+[1], and (f) JCNF learned using [1].
+
+mean-squared error (MSE), local mean-squared error (LMSE), and the dissimi-
+larity version of the structural similarity index (DSSIM) [11].
+
+For the depth prediction task, data-driven approaches (DT [16] and DA [17])
+provided limited performance due to their low learning capacity. CNN-based
+depth prediction (DCNF-FCSP [7]) using a pre-trained model from NYU v2
+[42] showed better performance, but is restricted by depth ambiguity problems.
+Our JCNF model achieved the best results both quantitatively and qualitatively,
+whether pre-trained using MPI SINTEL or NYU v2 datasets. Furthermore, it
+is shown that omitting the gradient scale network, coarse-to-ﬁne processing, or
+joint learning signiﬁcantly reduced depth prediction performances.
+
+In intrinsic image decomposition, existing single-image based methods [44,23,30,22,24]
+
+produced the lowest quality results as they do not beneﬁt from any additional in-
+formation. RGB-D based methods [1,5,4] performed better with measured depth
+
+14
+
+S. Kim et al.
+
+Methods
+
+Error (C1)
+log10
+rms
+0.165
+0.127
+0.121
+0.119
+
+11.1
+9.20
+8.11
+8.60
+
+rel
+
+rmslog
+0.486
+Make3D [12]
+0.412
+0.461
+Depth Transfer [16] 0.355
+0.479
+Depth Analogy [17] 0.371
+0.331
+DCNF-FCSP [7]
+0.412
+0.273 0.110 7.70 0.351 0.263 0.117 8.62 0.347
+JCNF(MPI)
+0.274 0.097 7.22 0.352 0.287 0.127 8.22 0.341
+JCNF(NYU)
+JCNF
+0.262 0.092 6.61 0.321 0.243 0.091 6.34 0.302
+
+rmslog
+0.451
+0.421
+0.381
+0.392
+
+0.407
+0.438
+0.410
+0.307
+
+rel
+
+Error (C2)
+log10
+rms
+0.155
+0.161
+0.144
+0.125
+
+16.1
+14.81
+14.52
+12.89
+
+Table 5. Quantitative results on the Make3D dataset [43] for depth prediction.
+
+as input. CNN-based intrinsic decomposition [11] surpassed RGB-D based tech-
+niques even without having depth as an input, but its results exhibit some blur,
+likely due to ambiguity from limited training datasets. Thanks to its gradient
+domain learning and leverage of estimated depth information, our JCNF model
+provides more accurate and edge-preserved results, with the best qualitative and
+quantitative performance.
+
+5.2 NYU v2 RGB-D Benchmark
+
+For further evaluation, we obtained a set of RGB, depth, and intrinsic images
+by applying RGB-D based intrinsic image decomposition methods [1,4] on the
+NYU v2 RGB-D database [42]. Of its 1449 RGB-D images of indoor scenes, we
+used 795 for training and 654 for testing, which is the standard training/testing
+split for the dataset.
+
+For depth prediction, comparisons are made to the ground truth depth in Fig.
+5 and Table 3 using the same experimental settings as in [7]. The state-of-the-
+art CNN-based methods [6,7] clearly outperformed other previous methods. The
+performance of our JCNF model was even higher, with pre-training on either
+MPI SINTEL or NYU v2. Our depth prediction network is similar to [6], but it
+additionally predicts depth gradients and leverages intrinsic image estimates to
+elevate performance.
+
+In the intrinsic image decomposition results of Fig. 6, the RGB-D based meth-
+ods of [1,4] are used as ground truth for training. It is seen that our JCNF more
+closely resembles that assumed ground truth than single-image based techniques
+[23,24].
+
+5.3 Make3D RGB-D Benchmark
+
+We also evaluated our JCNF model on the Make3D dataset [43], which contains
+534 images depicting outdoor scenes (with 400 used for training and 134 for
+testing). To account for a limitation of this dataset [12,45,7], we calculate depth
+errors in two ways [45,7]: on only regions with ground truth depth less than
+70 meters (denoted by C1), and over the entire image (C2). From the depth
+prediction results in Fig. 7 and Table 5, our JCNF model is found to yield the
+highest accuracy, even when pretrained on MPI SINTEL [41] or NYU v2 [42]
+
+Uniﬁed Depth Prediction and Intrinsic Image Decomposition via JCNF
+
+15
+
+(a)
+
+(b)
+
+(c)
+
+(d)
+
+(e)
+
+(f)
+
+(g)
+
+Fig. 7. Qualitative results on Make3D [42] for depth prediction. (a) color image, (b)
+DA [17], (c) DCNF-FCSP [7], (d) JCNF(MPI), (e) JCNF(NYU), (f) JCNF, and (g)
+ground truth.
+
+(a)
+
+(b)
+
+(c)
+
+(d)
+
+(e)
+
+(f)
+
+(g)
+
+Fig. 8. Qualitative results on Make3D [43] for intrinsic decomposition of Fig. 7. (a) Li
+et al. [23], (b) Zhao et al. [22], (c) IIW [24], (d) Jeon et al. [4], (e) JCNF learned using
+[4], (f) Chen et al. [1], and (g) JCNF learned using [1].
+
+(i.e., JCNF(MPI) and JCNF(NYU)). For the intrinsic image decomposition results
+given in Fig. 8, JCNF also outperforms the comparison techniques.
+
+6 Conclusion
+
+We presented Joint Convolutional Neural Fields (JCNF) for jointly predicting
+depth, albedo and shading maps from a single input image. Its high performance
+can be attributed to its sharing network architecture, its gradient domain infer-
+ence, and the incorporation of gradient scale network. It is shown through exten-
+sive experimentation that synergistically solving for these physical scene prop-
+erties through the JCNF leads to state-of-the-art results in both single-image
+depth prediction and intrinsic image decomposition. In furture work, JCNF can
+potentially beneﬁt shape reﬁnement and image relighting from a single image.
+
+References
+
+1. Chen, Q., Koltun, V.: A simle model for intrinsic image decomposition with depth
+
+cues. ICCV (2013)
+
+2. Laﬀont, P.Y., Bousseau, A., Paris, S., Durand, F., Drettakis, G.: Coherent intrinsic
+
+images from photo collections. ACM TOG 31(6) (2012) 1–11
+
+16
+
+S. Kim et al.
+
+3. Lee, K.J., Zhao, Q., Tong, X., Gong, M., Izadi, S., L.S.U., Tan, P., Lin, S.: Esti-
+
+mation of intrinsic image sequences from image + depth video. ECCV (2012)
+
+4. Jeon, J., Cho, S., Tong, X., Lee, S.: Intrinsic image decomposition using structure-
+
+texture separation and surface normals. ECCV (2014)
+
+5. Barron, J.T., Malik, J.: intrinsic scene properties from a single rgb-d image. CVPR
+
+(2013)
+
+6. Eigen, D., Puhrsch, C., Ferus, R.: Depth map prediction from a single image using
+
+a multi-scale deep network. NIPS (2014)
+
+7. Fayao, L., Chunhua, S., Guosheng, L.: Deep convolutional neural ﬁelds for depth
+
+estimation from a single images. CVPR (2015)
+
+8. Kong, N., Black, M.J.:
+
+Intrinsic depth: Improving depth transfer with intrinsic
+
+images. ICCV (2015)
+
+9. Shelhamer, E., Barron, J., Darrell, T.: Scene intrinsics and depth from a single
+
+image. ICCV workshop (2015)
+
+10. Zhou, T., Krahenbuhl, P., Efors, A.A.: Learning data-driven reﬂectnace priors for
+
+intrinsic image decomposition. ICCV (2015)
+
+11. Narihira, T., Maire, M., Yu, S.X.: Direct intrinsics: Learning albedo-shading de-
+
+composition by convolutional regression. ICCV (2015)
+
+12. Saxena, A., Sun, M., Andrew, Y.: Make3d: Learning 3d scene structure from a
+
+single still image. IEEE Trans. PAMI 31(5) (2009) 824–840
+
+13. Wang, Y., Wang, R., Dai, Q.: A parametric model for describing the correlation
+
+between single color images and depth maps. IEEE SPL 21(7) (2014) 800–803
+
+14. Xiu, L., Hongwei, Q., Yangang, W., Yongbing, Z., Qionghai, D.: Dept: Depth
+
+estimation by parameter transfer for single still images. CVPR (2014)
+
+15. Konrad, J., Wang, M., Ishwar, P., Wu, C., Mukherjee, D.: Learning-based, auto-
+matic 2d-to-3d image and video conversion. IEEE Trans. IP 22(9) (2013) 3485–
+3496
+
+16. Karsch, K., Liu, C., Kang, S.B.: Depth transfer: Depth extraction from video using
+
+non-parametric sampling. IEEE Trans. PAMI 32(11) (2014) 2144–2158
+
+17. Choi, S., Min, D., Ham, B., Kim, Y., Oh, C., Sohn, K.: Depth analogy: Data-driven
+approach for single image depth estimation using gradient samples. IEEE Trans.
+IP 24(12) (2015) 5953–5966
+
+18. Wang, P., Shen, X., Lin, Z., Cohen, S., Price, B., Yuille, A.: Towards uniﬁed depth
+
+and semantic prediction from a single image. CVPR (2015)
+
+19. Barrow, H.G., Tenenbaum, J.M.: Recovering intrinsic scene characteristics from
+
+images. CVS (1978)
+
+20. Land, E.H., Mccann, J.J.: Lightness and retinex theory. JOSA 61(1) (1971) 1–11
+21. Shen, J., Tan, P., Lin, S.: Intrinsic image decomposition with non-local texture
+
+cues. CVPR (2008)
+
+22. Zhao, Q., Tan, P., Dai, Q., SHen, L., Wu, E., Lin, S.: A closed-form solution
+IEEE Trans. PAMI 34(7) (2012)
+
+to retinex with non-local texture constraints.
+1437–1444
+
+23. Li, Y., Brown, M.S.: Single image layer separation using relative smoothness.
+
+CVPR (2004)
+
+24. Bell, S., Bala, K., Snavely, N.:
+
+Intrinsic images in the wild. ACM TOG 33(4)
+
+(2014)
+
+25. Bonneel, N., Sunkavalli, K., Tompkin, J., Sun, D., Paris, S., Pﬁster, H.: Interactive
+
+intrinsic video editing. ACM Trans. Graphics (SIGGRAPH ASIA) (2014)
+26. Wiess, Y.: Deriving intrinsic images from image sequences. ICCV (2001)
+27. Laﬀont, P.Y., Bousseau, A., Drettakis, G.: Rich intrinsic image decomposition of
+
+outdoor scenes from multiple views. IEEE TVCG 19(2) (2013) 1–11
+
+Uniﬁed Depth Prediction and Intrinsic Image Decomposition via JCNF
+
+17
+
+28. Kong, N., Gehler, P.V., Black, M.J.: Intrinsic video. ECCV (2014)
+29. Bousseau, A., Paris, S., Durand, F.: User-assisted intrinsic images. ACM TOG
+
+28(5) (2009) 1–11
+
+30. Shen, J., Yang, X., Jia, Y.: Intrinsic image using optimization. CVPR (2011)
+31. Barron, J., Malik, J.: Shape, albedo, and illumination from a single image of an
+
+unknown object. CVPR (2012)
+
+32. Butler, D., Wulﬀ, J., Stanley, G., Black, M.: A naturalistic open source movie for
+
+optical ﬂow evaluation. ECCV (2012)
+
+33. He, K., Zhang, X., Ren, S., Sun, J.: Spatial pyramid pooling in deep convolutional
+
+networks for visual recognition. IEEE Trans. PAMI 37(9) (2015) 1904–1916
+
+34. Perez, P., Gangnet, M., Blake, A.: Poisson image editing. ACM TOG 22(3) (2003)
+35. Xu, L., Ren, J., Yan, Q., Liao, R., Jia, J.: Deep edge-aware ﬁlters. ICML (2015)
+36. Shen, X., Yan, Q., Xu, L., Ma, L., Jia, J.: Multispectral joint image restoration
+
+via optimizing a scale map. IEEE Trans. PAMI 31(9) (2015) 1582–1599
+
+37. Eigen, D., R, F.: Predicting depth, surface normals and semantic labels with a
+
+common multi-scale convolutional architecture. ICCV (2015)
+
+38. Alex, K., Ilya, S., E, H.: Imagenet classiﬁcation with deep convolutional neural
+
+networks. NIPS (2012)
+
+39. Dong, C., Loy, C.C., He, K., Tang, X.: Image super-resolution using deep convo-
+
+lutional networks. IEEE Trans. PAMI 37(3) (2015) 597–610
+
+40. Online.: http://www.vlfeat.org/matconvnet/.
+41. Online.: http://sintel.is.tue.mpg.de/.
+42. Online.: http://cs.nyu.edu/~silberman/datasets/.
+43. Online.: http://make3d.cs.cornell.edu/.
+44. Grosse, R., Johnson, M.K., Adelson, E.H., Freeman, W.T.: Ground truth and
+
+baseline evaluations for intrinsic image algorithms. ICCV (2009)
+
+45. Liu, M., Salzmann, M., He, X.: Discrete-continuous depth estimation from a single
+
+image. CVPR (2014)
+
+

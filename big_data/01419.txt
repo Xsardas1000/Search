@@ -1,0 +1,2466 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+4
+
+ 
+
+ 
+ 
+]
+
+O
+R
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+9
+1
+4
+1
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Methods for Stochastic Collection and Replenishment
+
+(SCAR) optimisation for persistent autonomy
+
+Andrew W. Palmer, Andrew J. Hill, Steven J. Scheding∗
+
+Australian Centre for Field Robotics, The University of Sydney, NSW, Australia
+
+Abstract
+
+Consideration of resources such as fuel, battery charge, and storage space,
+is a crucial requirement for the successful persistent operation of autonomous
+systems. The Stochastic Collection and Replenishment (SCAR) scenario is
+motivated by mining and agricultural scenarios where a dedicated replenish-
+ment agent transports a resource between a centralised replenishment point
+to agents using the resource in the ﬁeld. The agents in the ﬁeld typically oper-
+ate within ﬁxed areas (for example, benches in mining applications, and ﬁelds
+or orchards in agricultural scenarios), and the motion of the replenishment
+agent may be restricted by a road network. Existing research has typically
+approached the problem of scheduling the actions of the dedicated replenish-
+ment agent from a short-term and deterministic angle. This paper introduces
+a method of incorporating uncertainty in the schedule optimisation through
+a novel prediction framework, and a branch and bound optimisation method
+which uses the prediction framework to minimise the downtime of the agents.
+The prediction framework makes use of several Gaussian approximations to
+quickly calculate the risk-weighted cost of a schedule. The anytime nature
+of the branch and bound method is exploited within an MPC-like framework
+to outperform existing optimisation methods while providing reasonable cal-
+culation times in large scenarios.
+
+Keywords: Persistent autonomy, scheduling, uncertainty, refuelling,
+recharging
+
+∗Email address: {a.palmer;a.hill;s.scheding}@acfr.usyd.edu.au
+
+Preprint submitted to Robotics and Autonomous Systems
+
+March 7, 2016
+
+1. Introduction
+
+Achieving persistent autonomy requires careful management of ﬁnite re-
+sources such as fuel, battery charge, and storage space. While there are some
+scenarios where agents are able to continue operating by collecting energy
+from the environment, such as gliding Unmanned Aerial Vehicles (UAVs)
+exploiting thermals to remain airborne [1], in the majority of cases the agent
+uses a resource which must be replenished to enable persistence. Early work
+on replenishment involved the robot returning to a charging dock to facili-
+tate autonomous recharging [2, 3], which now forms the basis of recharging in
+some commercial systems such as the iRobot Roomba [4] and InTouch Health
+RP-7i [5]. However, there are many cases in which the use of a dedicated
+replenishment agent can provide direct beneﬁt. Examples include refuelling
+or recharging of UAVs in ﬂight, refuelling of satellites in orbit, and data col-
+lection from underwater wireless sensor networks. Using a dedicated agent
+to replenish the resource of each agent in the ﬁeld enables the agents to be
+smaller, simpler, and cheaper [6].
+
+The Stochastic Collection and Replenishment (SCAR) problem was ﬁrst
+introduced in [7] as a generic resource management scenario that is motivated
+by scenarios commonly found in mining and agricultural environments. Pos-
+sible resources include fuel, battery charge, food, and water for the replenish-
+ment case, and electronic data, mined ore, and harvested fruit for the collec-
+tion case. In these scenarios, a dedicated replenishment agent transports the
+resource between a centralised replenishment point and the agents operating
+in the ﬁeld. The motion of the replenishment agent is typically restricted
+by roads or other obstacles, and the agents in the ﬁeld operate within ﬁxed
+areas such as benches in mining scenarios, and ﬁelds and orchards in agricul-
+tural scenarios. The SCAR scenario diﬀers from similar research in several
+key ways. Firstly, the examined literature assumes that each agent is visited
+only once. When considering persistent scenarios, neglecting future visits
+may lead to sub-optimal decision making. Secondly, the replenishment agent
+is generally assumed to have suﬃcient capacity such that it will not run out
+of the resource. Again, this is not the case for persistent autonomy. Finally
+and most importantly, the examined literature assumes that the problem is
+deterministic. In practice, this is not the case as agent parameters such as
+speed and resource usage rate will have elements of uncertainty.
+
+A prediction framework for SCAR scenarios was developed by the authors
+in [7] which was able to quickly calculate the risk-weighted cost of a schedule
+
+2
+
+for the replenishment agent. This was then used within an A* optimisation
+method in [8] to schedule the actions of the replenishment agent in small
+SCAR scenarios. This paper introduces an improved version of the predic-
+tion framework, including new approximations to the inverse of a Gaussian
+distributed random variable and the generalised rectiﬁed Gaussian distribu-
+tion, and develops a branch and bound optimisation method for use in large
+SCAR scenarios where optimisation time is limited. These are compared in
+a computational study, with the developed methods outperforming existing
+approaches.
+
+The rest of this paper is structured as follows: Section 2 discusses the
+related literature, and a description of the SCAR scenario is introduced in
+Section 3. The improved prediction framework is outlined in Section 4, and
+approximations for using Gaussian distributed random variables within the
+prediction framework are developed in Section 5. The optimisation methods
+are introduced in Section 6. The prediction and optimisation methods are
+then compared in a computational study in Section 7, and conclusions and
+future work are presented in Section 8.
+
+2. Related literature
+
+The main replenishment and collection scenarios in the literature are re-
+fuelling or aircraft and satellites, recharging of ground and aerial robots, and
+collecting data from wireless sensor networks. In general, these are framed as
+NP-hard combinatorial optimisation problems that resemble classical prob-
+lems such as the restricted Travelling Salesman Problem (TSP) with time
+windows, or the parallel machine manufacturing job shop problem.
+
+The aerial refuelling problem was examined in [9–12]. Jin et al. [9] used
+a recursive dynamic programming approach to determine the optimal order
+for refuelling the aircraft to minimise the priority weighted time of refuelling
+for each aircraft. Such an approach is not applicable to SCAR scenarios as
+the optimal future decision in a SCAR scenario is dependent on the sequence
+of decisions leading to it. Kaplan and Rabadi [10, 11] developed heuristic
+and meta-heuristic approaches. In [10] they found that the meta-heuristic
+was outperformed by the heuristic in large scenarios, and in [11] they used
+the heuristic to generate an initial schedule for the meta-heuristic to improve
+performance.
+
+An assumption of the work of Jin et al. and Kaplan and Rabadi was
+that the aircraft being refuelled were in formation behind the tanker air-
+
+3
+
+craft, meaning that the time between refuelling each aircraft was determined
+purely by the set-up time required by that particular aircraft. Barnes et
+al. [12] considered the inter-theatre aerial refuelling, where the ﬂight time of
+the tanker aircraft between aircraft to be refuelled was treated as sequence-
+dependent set-up times. This is similar to how the travel between satellites
+was treated for refuelling a constellation of satellites [13]. The solution meth-
+ods used in these cases were heavily tailored towards the speciﬁc scenario
+under consideration and are not generalisable to SCAR scenarios.
+
+Recharging of ground and aerial robots was examined in [14–16]. Kan-
+nan et al.
+[14] developed a market-based solution for determining a good
+recharging strategy, but only examined scenarios with a single user agent,
+while Litus et al. [15] focussed on determining rendezvous locations given an
+optimal recharging order. Mathew et al.
+[16] developed a receding horizon
+approach for simultaneously calculating a recharging order and rendezvous
+locations. These papers assumed that the recharging agent had suﬃcient ca-
+pacity to fully recharge all of the user agents without itself having to return
+to a charging point, ignoring a critical aspect for persistent operation.
+
+The literature on collection scenarios has focused on the use of data mules
+to collect data from wireless sensor networks. This strategy can be particu-
+larly useful for underwater wireless sensor networks, used for long-term mon-
+itoring of coral reefs, where wireless communications over long distances can
+be diﬃcult. Vasilescu et al.
+[17] used an Autonomous Underwater Vehicle
+(AUV) to travel to each sensor node and retrieve the collected data. Similar
+scenarios are presented in [18–24]. The problem is generally treated as a
+variant of the TSP with the aim of minimising the total distance travelled,
+the data latency, or the total schedule time.
+
+Most of the above literature does not approach this problem from a per-
+sistent autonomy perspective—the optimisation methods generally consider
+visiting each agent or node only once, assume that the replenishment agent
+has suﬃcient or unlimited capacity, and ignore time-varying eﬀects such as
+variable replenishment times and deadlines.
+In addition, all of the above
+literature bar [16] ignore uncertainty. In [16], arbitrary safety margins were
+used to reduce plan failure, with no consideration of the actual risk associated
+with each task.
+
+Uncertainty in scheduling has received limited study, even in the classical
+manufacturing scheduling literature, due to its diﬃculty in comparison to de-
+terministic problems [25]. Typical approaches to incorporating uncertainty
+include chance constraints [26], Monte Carlo simulation [27], using conser-
+
+4
+
+vative estimates of the uncertain parameters [28], replanning frequently [29],
+or simply ignoring the uncertainty [30]. Of these approaches, only chance
+constraints and Monte Carlo simulation allow risk to be incorporated into
+the optimisation.
+
+The prediction framework presented in the authors’ previous work [7]
+produced a similar result to Monte Carlo simulation. Instead of sampling
+the probability distributions, however, it used analytical and approximation
+methods to propagate the entire probability distribution, resulting in a cal-
+culation time that was orders of magnitude faster than the Monte Carlo ap-
+proach. This was used in [8] within an A* optimisation approach to evaluate
+each schedule under consideration. Using the prediction framework to incor-
+porate risk was shown to outperform an A* approach that ignored the risk.
+While it was suﬃcient for small SCAR scenarios, this approach is infeasible
+for larger scenarios due to the size of the search space.
+
+Optimisation methods which are generally used in larger scenarios include
+heuristics, meta-heuristics, and anytime combinatorial optimisation meth-
+ods. The Apparent Tardiness Cost (ATC) heuristic and simulated annealing
+meta-heuristic were used by Kaplan and Rabadi [10] for the aerial refuelling
+problem. They found that the ATC heuristic outperformed simulated anneal-
+ing in larger scenarios, and in later work combined the two methods to ﬁnd
+better solutions [11]. Anytime combinatorial optimisation methods include
+branch and bound, and anytime A* methods such as ARA*. ARA* uses
+inadmissible heuristics to quickly ﬁnd sub-optimal solutions, before reﬁning
+the solution by moving towards an admissible heuristic [31], while branch
+and bound prunes parts of the solution tree which have an estimated lower
+cost bound that is higher than the cost of the current solution [32]. Due to
+the diﬃculty in deriving heuristics that can be used in ARA*, branch and
+bound has been chosen as the solution method in this paper.
+
+3. The SCAR scenario
+
+SCAR scenarios are motivated by mining and agricultural scenarios such
+as replenishing excavators and drills using fuel and water trucks, and col-
+lecting harvested crops and picked fruit. These scenarios consist of multiple
+user agents, such as excavators and harvesters, that either consume or col-
+lect a resource over time. As they have a limited capacity of the resource,
+a dedicated replenishment agent, such as a fuel truck, rendezvous with the
+user agents and replenishes their supply of the resource. This enables the
+
+5
+
+Figure 1: An example SCAR scenario. A replenishment agent (dark grey)
+travels to, and replenishes, the user agents (light grey) operating in the ﬁeld.
+The replenishment agent must return to the replenishment point (bottom
+left) to replenish its supply of the resource. The replenishment point has
+inﬁnite capacity of the resource. In this example, the travel of the replen-
+ishment agent is restricted by roads between the operational areas of the
+user agents.
+Inset: The replenishment agent transfers the resource to the
+user agent, diminishing its supply of the resource and increasing the resource
+reserves of the user agent.
+
+user agents to continue operating in the ﬁeld without having to return to
+ﬁxed replenishment infrastructure. Collection scenarios are identical to re-
+plenishment scenarios if the resource under consideration is storage space.
+An example SCAR scenario is shown in Figure 1.
+
+The ﬂeet of user agents is heterogeneous, and, for the scenarios under
+consideration, there is a centralised replenishment point such as a refuelling
+station or silo. The parameters of the user agents, replenishment agent,
+and replenishment point, such as their speed, set-up and pack-up times,
+and resource usage rates, are stochastic. The user agents operate in deﬁned
+areas such as benches on a mine site for drills and excavators, and ﬁelds
+for tractors and harvesters in agricultural scenarios. Note that they are not
+required to remain in these areas indeﬁnitely—agents moving to new benches
+
+6
+
+Replenishment Point (RP) Replenishment  Agent User Agent Replenishment Action  ∞ or ﬁelds within the scope of a schedule can be incorporated by treating the
+time that they arrive at their new location as the ready time of that agent.
+The distances between the operational areas of the user agents are generally
+much larger than the size of those areas, and any variations in the travel
+times of the replenishment agents due to the movements of the user agents
+are assumed to be accounted by the uncertain travel speed, and set-up and
+pack-up times of the replenishment agent.
+
+It is assumed that the user agents can recover from exhausting their
+supply of the resource, i.e.
+they enter a safe zero-resource state. This is
+modelled in this paper as a soft deadline which has a cost that increases
+linearly with the time that the user agents are not operational. A hard
+deadline would correspond to, for example, a UAV exhausting its supply of
+fuel mid-ﬂight, causing the loss of the agent.
+
+The following subsections introduce the system parameters, variables, and
+constraints, and the optimisation objectives. Parameters and variables are
+treated as either known to a high degree of certainty (denoted by a lower
+case letter), or as random variables (denoted by an upper case letter). The
+uncertain parameters and variables in this paper are assumed to be Gaus-
+sian distributed random variables, and several approximations are introduced
+in Section 5 to facilitate the mathematical operations performed on them.
+Other probability distributions can be used provided the appropriate approx-
+imations exist. Units do not matter so long as they are consistent.
+
+3.1. Parameters, variables, and constraints
+
+For each user agent, i, in an n-user agent system:
+• cu,i is the resource capacity
+• lu,i is the current resource level, where lu,i ∈ [0, cu,i]
+• Lu,i is the estimated future resource level, where Lu,i ∈ [0, cu,i]
+• Ru,i is the resource usage rate
+• wi is a user-deﬁned weight or priority for the user agent
+
+It is assumed that the user agents continue consuming the resource while
+being replenished. If the current resource level of the user agent reaches 0,
+then the user agent ceases operation and incurs downtime.
+
+For the replenishment agent:
+
+7
+
+• ca is the resource capacity
+• la is the current resource level, where la ∈ [0, ca]
+• La is the estimated future resource level, where La ∈ [0, ca]
+• Ra is the resource replenishment rate into the user agent
+• Dsa is the duration of time required for the replenishment agent to
+
+set-up at a user agent
+
+• Dpa is the duration of time required for the replenishment agent to
+
+pack-up at a user agent
+
+• Va is the velocity
+
+The replenishment agent is assumed to have a separate supply of fuel or
+battery charge for its own operation that is replenished in parallel at the
+replenishment point. It is also assumed to be able to service only one user
+agent at a time. To replenish a user agent, the replenishment agent must ﬁrst
+travel to the user agent and set up before commencing the replenishment.
+After it has either fully replenished the user agent or exhausted its own supply
+of the resource, the replenishment agent must pack up before travelling to
+the next task.
+
+Finally, for the replenishment point:
+
+• Rr is the resource replenishment rate into the replenishment agent
+• Dsr is the duration of time required for the replenishment agent to
+
+set-up at the replenishment point
+
+• Dpr is the duration of time required for the replenishment agent to
+
+pack-up at the replenishment point
+
+For the replenishment agent to be replenished, it must ﬁrst travel to the
+replenishment point, then set up, be fully replenished by the replenishment
+point, and then pack up before moving onto the next task. It cannot service
+a user agent while being replenished by the replenishment point. Note that
+the set-up and pack-up times at the replenishment point are diﬀerent to those
+at the user agents.
+
+8
+
+n(cid:88)
+
+The distance between the replenishment agent and user agent i is denoted
+sau,i, and the distance between the replenishment agent and the replenish-
+ment point is denoted sar. In the case where there are multiple routes between
+tasks, the replenishment agent is assumed to take the shortest (fastest) route.
+
+3.2. Optimisation
+
+The aim of the optimiser is to minimise the total downtime of they user
+agents by optimising the actions of the replenishment agent, where downtime
+is incurred when a user agent has exhausted its supply of the resource. More
+generally, the objective function is the total weighted downtime of the user
+agents, ζ:
+
+min ζ =
+
+widc,i
+
+(1)
+
+i=1
+
+where dc,i is the total downtime incurred by user agent i. Given the uncer-
+tainty present in the agent parameters, the total downtime that is expected
+to be incurred for a given schedule can only be estimated. Two methods for
+estimating the downtime of the user agents for a given schedule of actions are
+given in the authors’ previous work [7], and an improved method is developed
+in Section 4.
+
+The total weighted downtime objective is only appropriate for planning
+over an inﬁnite horizon. As has been demonstrated in the authors’ previous
+work [8], the use of a ratio based objective function can produce better results
+when using combinatorial optimisation methods to optimise the actions of
+the replenishment agent. The ratio objective function, λ, is deﬁned as:
+
+min λ =
+
+ζ
+
+ndm
+
+(2)
+
+where dm is the total time for the schedule to be executed. Provided the
+weights sum to n, then the objective function is bound between 0 and 1:
+
+n−1(cid:88)
+
+if
+
+wi = n then 0 ≤ λ ≤ 1
+
+(3)
+
+i=0
+
+The ratio objective function enables comparison between schedules that
+have the same number of tasks but take diﬀerent lengths of time to execute.
+A schedule consists of an ordered list of tasks for the replenishment agent to
+perform. The task of visiting the replenishment point is denoted by 0, while
+
+9
+
+the task of replenishing a user agent is denoted by its index number. An
+example schedule, θ, of a 4-user agent SCAR scenario is:
+
+θ = (1, 0, 4, 2, 1, 4)
+
+In this schedule, the ﬁrst task, θ1, involves the replenishment agent re-
+plenishing the ﬁrst user agent before visiting the replenishment point for task
+θ2. For tasks θ3, θ4, θ5 and θ6, it would replenish agents 4, 2, 1 and 4 again
+in that order. Note that user agents 1 and 4 appear multiple times, and user
+agent 3 does not appear at all. Unlike existing replenishment scenarios, the
+assumptions of the SCAR scenario allow for user agents to be visited multiple
+times, or not at all within a given schedule.
+
+The optimisation is performed within a framework similar to Model Pre-
+dictive Control (MPC)—the optimiser returns a new task or schedule after
+each task is completed. Thus, unexpected changes to the system state are
+incorporated into the optimisation each time a task is performed.
+
+4. Prediction framework
+
+This section develops an improved version of the analytical prediction
+framework presented in [7]. The framework takes a schedule for the replen-
+ishment agent as input, and its aim is to predict the future resource levels of
+the user and replenishment agents, and to estimate the total weighted down-
+time of the user agents and the total time taken to execute the schedule.
+This framework will be used within the combinatorial optimisation methods
+developed in Section 6 to evaluate the objective function.
+
+In [7], two continuous-time frameworks were developed—the ﬁrst used
+a Monte Carlo approach to estimate the downtime of the user agents given
+the uncertainty in the system parameters, and the second used analytical and
+approximation methods to propagate the uncertainty instead of the sampling
+used in the Monte Carlo approach. The framework presented in Algorithm
+1 builds on the second approach from [7].
+It is agnostic to the type of
+probability distribution used, and Section 5 presents approximations that
+enable the use of Gaussian distributed random variables.
+
+On line 1, the total weighted downtime is initialised to 0 and the start time
+of the schedule is initialised to the current time. Note that the start time, Tl,
+is initialised as a random variable with no uncertainty. Then, while there are
+tasks remaining in the schedule, the ﬁrst task in the schedule is evaluated. If
+
+10
+
+Algorithm 1: Prediction framework
+
+Analytical(ψinitial, θ)
+input : Current system state, ψinitial; schedule, θ; current time, tcur
+output: Ratio objective function, λ; state, ψ
+1 ζ ← 0, Tl ← tcur // initialise weighted downtime and start
+
+time
+
+2 while there are tasks remaining in the schedule, θ do
+3
+
++ Dpr // replenishment finish time
+
+Va
+
+Rr
+
+// calculate arrival time
+
+else
+
+if θ1 = 0 then
+Ta ← Tl + sar
+Tf ← Ta + Dsr + ca−La
+La ← ca // reset resource level
+i ← θ1 // index of target user agent
+Ta ← Tl + sau,i
+Tb,i ← Ta + Dsa // time after set-up
+Td,i ← Tf,i + Lu,i
+// deadline
+Dc,i ← Tb,i − Td,i // downtime
+
+Ru,i
+
+// calculate arrival time
+
+Va
+
+E(downtime) ← ∞(cid:82)
+
+d p(Dc,i) dd // expected downtime
+
+0
+
+Ra
+
+Ra−Ru,i
+
+ζ ← ζ + wiE(downtime) // weighted downtime
+Lu,i ← (Lu,i − (Tb,i − Tf,i) Ru,i)# // level before
+replenishment
+Qu,i ← (cu,i − Lu,i)
+u,i ← (Qu,i)
+Q∗
+Dr,i ← Q∗
+Lu,i ← (Lu,i − (Tb,i − Tf,i) Ru,i)# // user agent level
+La ← (La − Qu,i)# // replenishment agent level
+Tf,i ← Tb,i + Dr,i // update last replenishment time
+Tl ← Tf,i + Dpa // time after pack-up
+
+∗≤La // adjusted quantity
+// replenishment duration
+
+// replenishment quantity
+
+u,i
+Ra
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+
+11
+
+12
+
+13
+
+14
+
+15
+
+16
+
+17
+
+18
+
+19
+
+20
+
+21
+
+22
+
+25
+
+26
+
+27
+
+23
+24 forall the user agents, i do
+
+remove the task θ1 from the schedule, θ
+Td,i ← Tf,i + Lu,i
+// deadline
+Dc,i ← Tl − Td,i // downtime
+
+Ru,i
+
+E(downtime) ← ∞(cid:82)
+
+d p(Dc,i) dd // expected downtime
+
+0
+
+28
+
+ζ ← ζ + wiE(downtime) // weighted downtime
+
+29 ψ ← (La, Lu,i ∀i) // predicted final state
+30 λ ←
+nE(Tl−tcur) // ratio objective function
+
+11
+
+ζ
+
+the task is for the replenishment agent to visit the replenishment point (line
+3), then the random variable describing the arrival time of the replenishment
+agent at the replenishment point, Ta, is calculated as per line 4. The time
+that the replenishment is completed at, Tf , is given on line 5, and the resource
+level of the replenishment agent is reset to its capacity on line 6.
+
+If the task is instead to travel to and replenish a user agent, then the
+arrival time is calculated on line 9, and the time after the replenishment
+agent has set up, Tb,i, is calculated on line 10. The time at which the user
+agent would exhaust its supply of the resource if it were not replenished,
+Td,i, is calculated on line 11, where Tf,i is the time that the user agent was
+last replenished (see line 21).
+If the user agent has not been visited by a
+replenishment agent, then Tf,i = tcur. The random variable describing the
+duration of downtime incurred by the user agent between when it was last
+replenished and the start time of the current replenishment action, Dc,i, is
+calculated on line 12.
+
+The random variable Dc,i is described by a probability distribution over
+downtime duration, d, which gives the probability of any duration of down-
+time being incurred. When considering downtime, negative downtime is
+equivalent to uptime and does not incur a cost in this problem formulation,
+and, therefore, Dc,i is only of interest in the positive domain. The expected
+downtime of user agent i, E(downtime), given the probability distribution of
+downtime, p(Dc,i), is calculated by the integral on line 13. The solution to
+this integral when using Gaussian distributed random variables is presented
+in Section 5.4. The expected downtime is then added to the running total of
+weighed downtime on line 14.
+
+The resource level of the user agent before the replenishment begins, Lu,i,
+is calculated on line 15, where the # operator denotes that the distribution
+has been adjusted to account for hard constraints on the state of the system.
+Note that this adjustment is only required when using probability distribu-
+tions that do not already ﬁt within the hard constraints (i.e. probability
+distributions that have inﬁnite domain). A method for adjusting Gaussian
+distributions against hard constraints is discussed in Section 5.5. The quan-
+tity of the resource required to fully replenish the user agent, Qu,i, is given
+on lines 16 and 17. Here, ∗ ≤ La means that Qu,i is adjusted so that it does
+not exceed the resource level of the replenishment agent, La, as the replen-
+ishment agent may have insuﬃcient supply of the resource to fully replenish
+the user agent. A method for performing this soft adjustment for Gaussian
+distributions is outlined in Section 5.6.
+
+12
+
+The time taken to replenish the user agent is then given on line 18. The
+new levels of the user agent and replenishment agent after the replenishment
+are calculated on lines 19 and 20 respectively. Note that the unadjusted Qu,i
+is used on line 20 as using Q∗
+u,i can underestimate the amount of the resource
+transferred by the replenishment agent. The # adjustment ensures that
+La remains non-negative. The time that the user agent was last replenished,
+Tf,i, is updated on line 21, and the time that the replenishment agent ﬁnishes
+packing up, Tl, is given on line 22. The task is then removed from the schedule
+on line 23.
+
+The ﬁnal block of the algorithm (lines 24-28) calculates whether any of
+the user agents incur additional downtime between when they are last re-
+plenished and the completion time of the schedule. The algorithm concludes
+by returning the predicted resource levels of the agents (line 29) and the ratio
+objective function (line 30). The duration of the schedule, given by Tl − tcur,
+is a random variable, and the expected value used on line (30) is simply the
+mean value of the probability distribution describing Tl − tcur.
+
+5. Using Gaussian distributed random variables
+
+Analytical methods exist for calculating the sum of Gaussian distributed
+random variables, but do not exist for multiplication, division, and other
+operations used in the prediction framework presented in the previous sec-
+tion. To enable the use of Gaussian distributed random variables, this sec-
+tion introduces approximations to the inverse of a Gaussian distributed ran-
+dom variable, ratio of Gaussian distributed random variables, and product
+of Gaussian distributed random variables, as well as methods for evaluating
+the expected downtime, and adjusting Gaussian distributed random variables
+against hard and soft constraints.
+
+5.1. Inverse Gaussian distributed random variable
+
+A Gaussian approximation to the inverse of a Gaussian distributed ran-
+dom variable was presented in [7]. A new Gaussian approximation is intro-
+duced here which will be shown in Section 7 to outperform the one presented
+in [7]. Consider an inverse Gaussian distributed variable, I, that is formed
+by:
+
+I =
+
+c
+G
+
+13
+
+(4)
+
+where G is a Gaussian distributed variable with mean uG and standard devia-
+tion σG, and c is a constant. A Gaussian approximation of I can be attained
+by assuming that the points at µG + σG and µG − σG give the equivalent
+points at µI − σI and µI + σI respectively, where µI and σI are the mean
+and standard deviation of the Gaussian approximation of I. These give the
+following values for µI and σI:
+
+(cid:18)
+
+1
+2
+
+(cid:19)
+
+c
+
+c
+
+µG + σG
+
++
+
+−
+
+µI =
+
+=
+
+σI =
+
+=
+
+µG − σG
+cµG
+G − σ2
+µ2
+(cid:18)
+
+G
+
+c
+
+1
+2
+
+µG − σG
+cσG
+G − σ2
+µ2
+
+G
+
+(cid:19)
+
+c
+
+µG + σG
+
+(5)
+
+(6)
+
+When σG is small in comparison to µG, the inverse Gaussian distributed
+variable is highly Gaussian in shape. As σG is increased, the resultant inverse
+Gaussian distributed variable is skewed further to the right. The advantage
+of the approximation developed here over the one previously presented in [7]
+is demonstrated in Figure 2 for a case with high uncertainty. As can be seen,
+the new approximation better approximates the inverse Gaussian distribu-
+tion, particularly in the left tail where the old approximation signiﬁcantly
+overestimates the probability.
+
+5.2. Ratio of Gaussian distributed variables
+
+A method for approximating the ratio of two Gaussian distributed vari-
+
+ables is given in [33]. A ratio, R:
+
+(7)
+with E ∼ N (µE, σE) and F ∼ N (µF , σF ), and correlation between E and F
+of ρ = 0, can be approximated with a Gaussian distributed random variable
+where:
+
+R =
+
+E
+F
+
+r =
+
+σF
+σE
+
+, a =
+
+and b =
+
+µF
+σF
+
+µE
+σE
+
+14
+
+(8)
+
+Figure 2: A comparison of the approximations of the inverse Gaussian dis-
+tribution for µG/σG = 5.
+
+a
+
+r(1.01b − 0.2713)
+
+µR =
+
+(cid:114)
+
+σR =
+
+1
+r
+
+a2 + 1
+
+b2 + 0.108b − 3.795
+
+− r2µ2
+
+R
+
+(9)
+
+(10)
+
+The authors speciﬁed that the approximation is only valid for a < 2.5,
+b > 4 [33]. As a → ∞, the ratio of Gaussian distributed random variables
+is similar to an inverse Gaussian distributed random variable and can be
+approximated using the inverse Gaussian approximation presented above.
+For situations where a ≥ 2.5, the inverse Gaussian approximation method
+with E treated as a scalar, e = µE, has been used.
+
+5.3. Product of Gaussian distributed variables
+
+An approximation to the product of two Gaussian distributed variables
+
+is presented in [34]. For a product, M :
+
+Then:
+
+M = EF
+
+µM = µEµF
+
+15
+
+(11)
+
+(12)
+
+∞(cid:90)
+∞(cid:90)
+(cid:18)
+
+σ
+
+0
+
+0
+µ
+2
+
+E(Dc,i) =
+
+=
+
+=
+
+d p(Dc,i) dd
+
+√
+d
+2π
+
+exp
+
+1 + erf
+
+(cid:19)
+
+dd
+
+(cid:18)−(d − µ)2
+(cid:19)(cid:19)
+(cid:18) µ
+
+2σ2
+
+√
+
+σ
+
+2
+
++
+
+σ√
+2π
+
+exp
+
+σ2
+M = σ2
+
+Eσ2
+
+F (1 + δ2
+
+E + δ2
+F )
+
+where
+
+δx =
+
+µx
+σx
+
+(13)
+
+(14)
+
+The authors noted that the approximation improves as δE and δF become
+
+large [34].
+
+5.4. Expected value
+
+The integral required for calculating the risk-weighted downtime on line
+
+12 of Algorithm 1 when using Gaussian distributions equates to:
+
+(cid:19)
+
+(cid:18)
+
+− µ2
+2σ2
+
+(15)
+
+where µ and σ are the mean and standard deviation of the probability dis-
+tribution describing the random variable Dc,i.
+
+5.5. Adjusting against hard constraints
+
+The probability distributions describing several random variables were
+required to be adjusted to take into consideration hard limitations on the
+system state; for example, the resource level of a user agent is bounded by 0
+and cu,i. A novel Gaussian approximation to the generalised rectiﬁed Gaus-
+sian distribution is introduced here. The rectiﬁed Gaussian distribution, used
+by [35], groups the probability in the negative domain at 0. The generalised
+rectiﬁed Gaussian distribution is proposed as an extension to this, where the
+distribution is rectiﬁed between two arbitrary values, a and b. If the original
+CDF of the Gaussian distribution is F (x), the problem is to calculate a new
+
+16
+
+Gaussian PDF, N (µR, σ2
+rectiﬁed Gaussian distribution that satisﬁes the following CDF, FR(x):
+
+R), that approximates the PDF of the generalised
+
+0
+
+F (x)
+1
+
+FR(x) =
+
+if x < a
+if a ≤ x < b
+if x ≥ b
+
+(16)
+
+where a and b are the limits on the state. The following process is similar
+to the truncation approach for constrained Kalman ﬁltering [36]. The distri-
+bution being adjusted is ﬁrst transformed to a standard normal distribution,
+yielding transformed constraints of c and d respectively:
+
+a − µA
+σA
+
+c =
+
+d =
+
+b − µA
+σA
+
+(17)
+
+where µA and σA are the mean and standard deviation of the distribution
+being adjusted. The mean and variance of the Gaussian approximation of
+the rectiﬁed Gaussian distribution are then given by:
+
+d(cid:90)
+
+c
+
+(cid:18)
+
+−ζ 2
+2
+
+(cid:19)
+(cid:18) d√
+(cid:19)
+(cid:18)−c2
+(cid:18) c√
+
+2
+
+2
+
+(cid:19)(cid:19)
+(cid:19)(cid:19)
+
+2
+− exp
+
+µz =
+
+ζ√
+2π
+
+exp
+
+(cid:18)
+(cid:18)
+(cid:18)
+
+d
+2
+
+c
+2
+
++
+
+1 − erf
+
+=
+
+1√
+2π
+
+exp
+
++
+
+1 + erf
+
+(cid:18)
+
+c
+2
+
+(cid:19)(cid:19)
+
+(cid:18) c√
+
+2
+
+dζ +
+
+1 + erf
+
+(cid:19)(cid:19)
+
+(cid:18)−d2
+(cid:18)
+
+2
+
++
+
+d
+2
+
+1 − erf
+
+(18)
+
+(cid:19)(cid:19)
+
+(cid:18) d√
+
+2
+
+17
+
+(ζ − µ)2 exp
+
+−ζ 2
+2
+
+σ2
+z =
+
+d(cid:90)
+
+c
+
++
+
++
+
+(cid:18)
+
+µ2 + 1
+
+=
+
+2
+− 1√
+2π
+(c − µ)2
+
++
+
++
+
+2
+
+(d − µ)2
+
+2
+
+exp
+
+(cid:18)
+(cid:18)
+
+(cid:18)
+
+2
+
+dζ
+
+(cid:19)
+(cid:19)(cid:19)
+(cid:18) c√
+(cid:19)(cid:19)
+(cid:18) d√
+(cid:19)(cid:19)
+(cid:18) c√
+(cid:19)(cid:19)
+(cid:19)(cid:19)
+
+2
+
+2
+
+(d − 2µ) − exp
+
+(c − µ)2
+
+(d − µ)2
+
+2
+
+(cid:18)
+
+2
+
+erf
+
+(cid:18)
+(cid:18)
+(cid:18) d√
+(cid:18)
+
+2
+−d2
+2
+
+1 + erf
+
+1 − erf
+
+− erf
+
+1 + erf
+
+1 − erf
+
+(cid:19)
+(cid:19)
+(cid:18) c√
+(cid:18) d√
+
+2
+
+2
+
+(19)
+
+(cid:19)
+
+(cid:18)
+
+−c2
+2
+
+(cid:19)
+
+(c − 2µ)
+
+Taking the inverse of the transformation gives:
+
+µR = µzσA + µA
+
+σ2
+R = σ2
+
+z σ2
+A
+
+(20)
+
+5.6. Adjusting against soft constraints
+
+The other type of adjustment used adjusts one random variable so that it
+does not exceed another random variable. This soft adjustment is denoted by
+a * followed by the variable that it is adjusted against. This is used on line 17
+of Algorithm 1 to ensure that the quantity of the resource used to replenish a
+user agent does not exceed the current capacity of the replenishment agent.
+Consider a random variable, A, that is adjusted so that it does not exceed
+the random variable B. The proposed method is as follows:
+
+18
+
+if µA − 3σA < µB − 3σB
+and µA + 3σA < µB + 3σB
+if µA − 3σA > µB − 3σB
+and µA + 3σA > µB + 3σB
+if µA − 3σA > µB − 3σB
+and µA + 3σA < µB + 3σB
+if µA − 3σA < µB − 3σB
+and µA + 3σA > µB + 3σB
+if µA − 3σA < µB − 3σB
+and µA + 3σA < µB + 3σB
+if µA − 3σA > µB − 3σB
+and µA + 3σA > µB + 3σB
+if µA − 3σA > µB − 3σB
+and µA + 3σA < µB + 3σB
+if µA − 3σA < µB − 3σB
+and µA + 3σA > µB + 3σB
+
+(21)
+
+(22)
+
+
+
+
+σA
+
+σB
+
+∗≤B
+A =
+
+µ
+
+∗≤B
+A =
+σ
+
+µA
+
+µB
+
+µB−3σB+µA+3σA
+
+2
+
+µA−3σA+µB+3σB
+
+2
+
+µA+3σA−(µB−3σB)
+
+µB+3σB−(µA−3σA)
+
+6
+
+6
+
+This method ensures that P (A ≤ x) ≤ P (B ≤ x) for x within 3 standard
+
+deviations of the mean of both A and B.
+
+6. Optimisation methods
+
+This section presents the Apparent Tardiness Cost (ATC) heuristic in Sec-
+tion 6.1, a simulated annealing meta-heuristic in Section 6.2, and a branch
+and bound method in Section 6.3. All of these methods are used within an
+MPC-like framework—after each task is performed, the optimisation method
+is rerun to calculate a new task to be performed. This replanning enables
+unexpected changes to the state of the system to be considered by the op-
+timisation. Before the optimisation method is run, the resource level of the
+replenishment agent is ﬁrst checked to see whether it is above a threshold,
+la,thresh. If the resource level is below the threshold, then the replenishment
+agent is immediately sent back to the replenishment point to be replenished.
+A threshold of 5% of maximum capacity was found to give good results in
+the scenarios considered in this paper.
+
+19
+
+The ATC heuristic calculates what the next task of the replenishment
+agent should be, while the simulated annealing and branch and bound ap-
+proaches both consider a schedule of tasks. The ﬁnite horizon used in this
+paper is the number of tasks in the schedule. This is to enable fair comparison
+between the simulated annealing and branch and bound approaches.
+
+6.1. ATC heuristic
+
+The ATC heuristic used by Kaplan and Rabadi in [10] for the aerial
+refuelling problem is a combination of the Weighted Shortest Processing Time
+ﬁrst (WSPT) and Minimum Slack ﬁrst (MS) rules. It calculates priorities
+for each task based on the following formula:
+
+πi =
+
+wi
+dl,i
+
+φi
+
+(23)
+
+where πi is the priority of task i determined by the heuristic, dl,i is the total
+duration of the task, and φi is the marginal cost of delay. The task with the
+highest priority is selected as the next task to be performed. The marginal
+cost of delay used in [10] combined soft and hard deadlines with a ready
+time for each task. The SCAR scenarios under consideration only have a
+soft deadline, yielding a marginal cost of delay of:
+
+(cid:18)
+
+φi = exp
+
+−max(0, td,i − tb,i)
+
+ktb
+
+(cid:19)
+
+(24)
+
+where tb,i is the time at which the replenishment agent begins replenishing
+the user agent, tb is the average start time for all possible replenishment
+tasks for that replenishment agent, td,i is the deadline for the user agent, and
+k is a scaling factor. The scaling factor biases the behaviour of the ATC
+heuristic towards the WSPT rule if k is very large, and towards the MS rule
+if k is very small. Typical values of k used range between 1 and 7. It should
+be noted that the deadline used by [10] is the time by which the task must
+be completed, whereas the deadline in a SCAR scenario is the time before
+which the replenishment agent must begin replenishing the user agent. The
+deadline is calculated for each user agent i as:
+
+td,i =
+
+lu,i
+ru,i
+
+(25)
+
+where ru,i is the mean value of Ru,i. The start time for replenishing each user
+agent i is calculated as:
+
+20
+
+tb,i =
+
+sau,i
+va
+
++ dsa
+
+(26)
+
+where va is the mean value of Va, and dsa is the mean value of Dsa. The total
+duration for each user agent, dl,i, is given by:
+
+dl,i = tb,i +
+
+cu,i − max (0, lu,i − ru,itb,i)
+
+ra − ru,i
+
++ dpa
+
+(27)
+
+where ru,i is the mean value of Ru,i, ra is the mean value of Ra, and dpa is
+the mean value of Dpa.
+
+6.2. Simulated annealing
+
+The simulated annealing method used by Kaplan and Rabadi [10, 11] was
+implemented, using the ATC heuristic to generate an initial schedule. The
+algorithm moves to neighbour solutions by randomly replacing a task in the
+schedule with one of the other possible tasks. The following limitation was
+placed on the generated schedule, θ:
+
+θi−1 (cid:54)= θi (cid:54)= θi+1 ∀i ∈ {2, 3...a − 1}
+
+(28)
+
+where a is the number of tasks in the schedule. This ensures that succes-
+sive tasks are diﬀerent. The inputs to the simulated annealing algorithm are
+an initial temperature coeﬃcient, a temperature cooling coeﬃcient, a maxi-
+mum number of inner loop iterations, and a maximum number of iterations.
+Values for these parameters are suggested in [10]. For the two scenarios ex-
+amined in Section 7, a maximum number of inner loop iterations of 25, and
+a maximum number of iterations of 2000 worked well. For Scenario 1, an
+initial temperature coeﬃcient of 0.2, and a temperature cooling coeﬃcient of
+0.95 gave good results, while in Scenario 2 an initial temperature coeﬃcient
+of 0.1, and a temperature cooling coeﬃcient of 0.7 performed well. The cost
+of each schedule is evaluated using the prediction framework from Section 4.
+
+6.3. Branch and bound
+
+The set of all possible schedules for a given ﬁnite horizon forms a tree
+where each branch represents the possible choices for the next task. Branch
+and bound minimises the size of the state space that is explored by culling
+branches of the tree where the minimum possible cost is higher than the cost
+of the best solution found so far [32]. Similar to the simulated annealing
+
+21
+
+implementation, the branch and bound implementation restricts consecutive
+tasks to be diﬀerent. In addition, if the resource level of the replenishment
+agent is below the threshold la,thresh at any point in the tree, the only valid
+task to be performed next is for the replenishment agent to be replenished
+by the replenishment point.
+
+An important aspect of branch and bound is estimating the lower bound
+on the cost for each node. This lower bound represents the lowest possible
+cost of a complete schedule starting with the sequence of tasks described
+by that node. The more accurate the estimate of the lower bound, the
+more branches that can be pruned. A heuristic for estimating the minimum
+possible cost from any node in the tree for a SCAR scenario was developed in
+the authors’ previous work [8] and has been used in this paper. Essentially,
+it assumes that the user agents do not exhaust their supply of the resource,
+while also providing a conservative estimate of the total time of the schedule.
+This guarantees that the estimated minimum cost of a schedule is below the
+actual cost.
+
+To improve the search speed of the algorithm, the ATC heuristic was used
+to generate priorities for the tasks branching from each node. Two diﬀerent
+methods of exploring the tree, shown in Figure 3, were considered. The ﬁrst
+method, bottom-ﬁrst, involves searching through the leaves ﬁrst, and then
+gradually searching higher in the tree. This method has the advantage of not
+requiring any data to be stored in a tree structure, but has the disadvantage
+of focussing on one branch initially. The other method, top-ﬁrst, explores
+the tree using a top down approach—the nodes are explored in priority order
+with changes initially occurring at the top level. As can be seen, each suc-
+cessive solution examined is in the opposite high level branch to the previous
+solution, ensuring that the breadth of the tree is explored rapidly. However,
+the top-ﬁrst method requires the calculated costs and lower bounds of every
+node visited to be stored in a tree, which results in a memory complexity of
+O(na), where n is the number of user agents and a is the number of tasks in
+the schedule.
+
+The cost of the current best schedule versus the number of nodes explored
+for the two methods is compared in Figure 4 for a sample scenario. Both
+methods initially examine the same schedule generated by the ATC heuristic
+before searching other areas of the tree. Where the bottom-ﬁrst approach
+ﬁnds neighbour schedules which make minor incremental improvements to
+the cost, the top-ﬁrst approach quickly ﬁnds substantially better schedules
+in other branches of the tree. The bottom-ﬁrst approach has many desir-
+
+22
+
+Figure 3: Two diﬀerent methods for searching through a tree. The top line
+shows the exploration order using the bottom-ﬁrst method, while the bottom
+line shows the exploration order using the top-ﬁrst method.
+
+able characteristics for small optimisation problems—low memory usage and
+minimal computational overhead associated with having to search through
+the tree. In larger problems, however, it may be computationally intractable
+to search through the entire tree and the anytime characteristic of branch
+and bound must be exploited. In these cases, the top-ﬁrst approach is more
+desirable as it generally ﬁnds lower cost schedules for the same number of
+nodes explored as the bottom-ﬁrst approach. In addition, since it focusses
+on earlier tasks, it ﬁts quite well into the MPC-like framework used in this
+paper—optimisation eﬀorts are focussed on the next tasks to be performed
+rather than the tasks at the end of the schedule. The top-ﬁrst approach is
+used for the remainder of this paper.
+
+To take advantage of the anytime characteristic of branch and bound, an
+optimisation depth was speciﬁed. As shown in Figure 5, the optimisation
+depth determines how far through the tree the branch and bound searches
+before selecting the remaining tasks using the ATC heuristic. This enables
+the computation time of the algorithm to be restricted while still using a
+long ﬁnite horizon. If the optimisation depth is equal to the schedule length,
+branch and bound will return the optimal schedule for that schedule length.
+
+23
+
+1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 1 7 3 9 15 5 11 17 2 14 4 10 16 6 12 18 8 13 Highest  priority task Lowest priority task Highest  priority task Highest  priority task Lowest priority task Lowest priority task Bottom-first: Top-first: Figure 4: Cost versus number of calculations for the two branch and bound
+exploration methods. Lower costs are better. The bottom-ﬁrst method incre-
+mentally improves on the solution, while the top-ﬁrst method very quickly
+ﬁnds better solutions in other branches of the tree.
+In this example, the
+bottom-ﬁrst method found the optimal schedule in 9178 calculations and re-
+quired a total of 10269 calculations to fully explore the tree. The top-ﬁrst
+method found the optimal schedule in 3186 calculations and required only
+3629 calculations in total.
+
+24
+
+Figure 5: Branch and bound when the optimisation depth is smaller than
+the schedule length—the tasks within the optimisation depth (3 tasks in this
+example) are optimised using branch and bound, while the remaining tasks
+are selected using the ATC heuristic.
+
+7. Computational study
+
+This section evaluates the prediction and optimisation methods developed
+in this paper. All methods were implemented by the authors in Python on
+a 2.8GHz Intel i7-640M. Section 7.1 ﬁrst introduces the two scenarios used
+to evaluate the methods. Section 7.2 then evaluates the prediction method
+developed in Section 4. Finally, Section 7.3 compares the developed branch
+and bound approach with the existing ATC heuristic and simulated annealing
+approaches.
+
+7.1. Scenarios
+7.1.1. Scenario 1
+
+This scenario consists of several drills and excavators operating on speciﬁc
+benches within a minesite. The refuelling truck travels along the roads shown
+in Figure 6. The parameters of the user agents are shown in Table 1. The
+replenishment agent parameters are shown in Table 2, and the parameters
+of the replenishment point are shown in Table 3. The scenario was tested
+using the ﬁrst 4, 5, and 6 user agents representing an under-utilised, fully-
+utilised, and over-utilised scenario respectively. In the under-utilised scenario
+
+25
+
+1st task 2nd task 3rd task 4th task 5th task 6th task nth task … Branch and bound Heuristic Figure 6: Layout showing the location of the Replenishment Point (RP) and
+user agents for Scenario 1. The numbered nodes designate the operational
+areas of the user agents.
+
+Table 1: User Agent Parameters for Scenario 1
+
+Agent
+
+cu (L)
+
+Ru mean (L/s)
+
+Ru standard
+
+deviation (L/s)
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+1000
+0.5
+0.05
+
+1200
+0.5
+0.05
+
+700
+0.3
+0.05
+
+1200
+0.5
+0.02
+
+1000
+0.4
+0.08
+
+800
+0.4
+0.04
+
+the replenishment agent is operating below its capacity and should be able
+to prevent all of the user agents from exhausting their supply of the resource,
+while in the over-utilised scenario the replenishment agent is operating above
+its capacity. The fully-utilised case sits between the other two.
+
+7.1.2. Scenario 2
+
+The second scenario involves the delivery of fuel to 20 agents by truck.
+The quality of roads between agents is highly variable which results in travel
+speeds that are very uncertain. The agents use the fuel at a relatively pre-
+
+Table 2: Replenishment Agent Parameters for Scenario 1
+
+Parameter Mean Standard Deviation
+
+ca (L)
+
+Ra (L/s)
+Dsa (s)
+Dpa (s)
+Va (m/s)
+
+5000
+10
+60
+20
+15
+
+–
+0.5
+20
+5
+0.5
+
+26
+
+Table 3: Replenishment Point Parameters for Scenario 1
+
+Parameter Mean Standard Deviation
+
+Dsr (s)
+Dpr (s)
+Rr (L/s)
+
+30
+10
+20
+
+10
+1
+1
+
+Table 4: Replenishment Agent Parameters for Scenario 2
+
+Parameter
+
+Mean Standard Deviation
+
+ca Large (L)
+
+ca Medium (L)
+
+ca Small (L)
+Ra (L/hr)
+Dsa (min)
+Dpa (min)
+Va (km/hr)
+
+2760
+1800
+1200
+720
+12
+4
+16
+
+–
+–
+–
+72
+1
+0.3
+4
+
+dictable rate in comparison to the uncertainty of the speed of the truck.
+Figure 7 shows the agents and the network of roads between them.
+
+Three diﬀerent size replenishment agents were tested, and their parame-
+ters are shown in Table 4. The various sizes of the replenishment agent only
+vary in their capacity—the resource usage rates, set-up and pack-up times,
+and velocity, are the same for all sizes. The large, medium, and small replen-
+ishment agent sizes roughly correspond to under-, fully-, and over-utilised
+scenarios respectively. The parameters of the replenishment point are shown
+in Table 5. There are four diﬀerent sizes of user agents, each with 2 days
+supply of fuel. The parameters of each size of user agent are shown in Table
+6, and the size of each user agent is outlined in Table 7.
+
+7.2. Evaluation of the prediction framework
+
+The prediction method developed in Section 4 was compared with the
+analytical prediction method previously developed by the authors in [7], using
+a Monte Carlo generated cost as a benchmark. They were tested in Scenario
+1 with 6 user agents and a schedule length of 8 tasks, and in Scenario 2
+with the large replenishment agent and a schedule length of 20 tasks. 10,000
+
+27
+
+Figure 7: Layout of the 20 user agents in Scenario 2. Road distances are
+shown in km.
+
+Table 5: Replenishment Point Parameters for Scenario 2
+
+Parameter Mean Standard Deviation
+
+Dsr (min)
+Dpr (min)
+Rr (L/hr)
+
+12
+6
+
+12000
+
+2
+1
+
+1200
+
+28
+
+Table 6: User Agent Parameters for Scenario 2
+
+Type
+
+Parameter Mean Standard Deviation
+
+Small (S)
+
+Medium (M)
+
+Large (L)
+
+Extra Large (XL)
+
+cu (L)
+
+Ru (L/hr)
+
+cu (L)
+
+Ru (L/hr)
+
+cu (L)
+
+Ru (L/hr)
+
+cu (L)
+
+Ru (L/hr)
+
+480
+10
+
+600
+12.5
+
+720
+15
+
+960
+20
+
+–
+1
+
+–
+
+1.25
+
+–
+1.5
+
+–
+2
+
+Table 7: User Agent Types for Scenario 2
+
+Agent
+Size
+
+Agent
+Size
+
+1
+S
+
+2
+L
+
+4
+
+3
+10
+S M M S M L XL L
+
+9
+
+8
+
+5
+
+6
+
+7
+
+12
+
+11
+16
+L XL M L M S
+
+15
+
+13
+
+14
+
+18
+
+17
+20
+L M L M
+
+19
+
+29
+
+Table 8: Proposed cost method minus Monte Carlo cost method
+
+Scenario
+
+Method
+
+1
+1
+
+2
+2
+
+Mean
+Standard Comparison
+(×10−3) Deviation
+(×10−3)
+3.11
+1.52
+
+99.3%
+99.6%
+
+Accuracy
+
+Previous from [7]
+
+Proposed
+
+3.18
+0.08
+
+Previous from [7]
+
+Proposed
+
+-27.8
+-1.96
+
+4.94
+1.92
+
+98.4%
+99.4%
+
+random schedules were generated for each scenario with the initial resource
+levels of all agents randomly initialised to a value between 0% and 100%
+of capacity for each schedule. The Monte Carlo cost was generated using
+1,000 samples as this was found to be a good trade-oﬀ between error and
+calculation time in [7].
+
+Table 8 shows the error of the proposed and previous methods in com-
+parison to the Monte Carlo method. As can be seen, the proposed method
+has signiﬁcantly less error than the previous method, particularly in Scenario
+2. A signiﬁcant source of the error in Scenario 2 for the previous method
+was from the particular approximation of the inverse Gaussian distributed
+random variable that was used. As the standard deviation of the velocity of
+the replenishment agent is very high compared to the mean, the resultant
+inverse Gaussian distribution for the travel time is heavily skewed. As was
+shown in Figure 2, the old approximation of the inverse Gaussian distribu-
+tion overestimates the probability in the left tail of the distribution in these
+cases, resulting in the cost being underestimated. The new approximation
+does not overestimate this probability to the same extent, and consequently
+produces signiﬁcantly better results.
+
+The comparison accuracy shows how eﬀective each method is at discrim-
+inating between schedules. This is the most important aspect of the predic-
+tion method—it must be able to accurately discriminate between schedules
+for it to be eﬀective when used within a schedule optimisation. The proposed
+method is accurate in 0.3% more cases in Scenario 1, and 1% more cases in
+Scenario 2. In Scenario 2 in particular, this is a signiﬁcant improvement.
+
+The main advantage of the proposed prediction method over the Monte
+Carlo method is the computation time. The proposed method took just
+
+30
+
+7ms in Scenario 1 compared to 678ms for the Monte Carlo method, and in
+Scenario 2 took 9ms compared to 1.506s for the Monte Carlo method.
+
+7.3. Evaluation of the optimisation methods
+
+The optimisation methods tested are summarised below, and the acronyms
+
+in parentheses will be used to refer to the methods.
+
+• ATC heuristic (ATC)
+• Simulated annealing using the developed prediction framework (SA)
+• Branch and bound ignoring uncertainty (DBB)
+• Branch and bound incorporating uncertainty through the developed
+
+prediction framework (SBB)
+
+DBB uses the Monte Carlo method from [7] with 1 sample, treating all
+parameters as certain. The SA and SBB methods incorporate uncertainty
+through the developed prediction framework.
+
+7.3.1. Scenario 1
+
+Each simulation of Scenario 1 was initialised with random initial resource
+levels between 50% and 100% to simulate realistic in-progress starting con-
+ditions, and the simulation lasted for 5 hours of simulated time. The k value
+for ATC was ﬁrst tuned by running multiple simulations with values between
+1 and 7. As shown in Figure 8, the lowest costs were achieved using a k value
+of approximately 2.5 for the 4-user agent scenario, and approximately 5.5 for
+the 5- and 6-user agent scenarios. This means that the behaviour is biased
+more towards the MS rule than the WSPT rule for the 4-user agent scenario
+in comparison to the 5- and 6-agent scenarios.
+
+Each optimisation method was tested 40 times to account for the vari-
+ability due to the stochastic nature of the simulation. The SA, DBB, and
+SBB methods were tested using a schedule length of n + 3 tasks, where n
+is the number of user agents in the system. Using shorter schedule lengths
+than this can lead to undesirable behaviour; for further discussion, see [8].
+The percentage downtime results from this scenario are shown in Figure 9,
+and Figure 10 shows the percentage of simulations in which none of the user
+agents exhausted their supply of the resource. As can be seen, the proposed
+SBB method consistently produced the lowest downtime in the 4- and 5-user
+
+31
+
+Figure 8: Cost versus k value for the ATC heuristics for the 4-, 5-, and 6-user
+agent cases in scenario 1.
+
+agent scenarios. In the 6-user agent scenario, the SBB and DBB methods
+produced almost identical performance. In over-utilised scenarios like this,
+the distributions for the downtime of the user agents are predominantly in
+the positive domain. The expected cost of these distributions is therefore
+very close to the mean value, and hence very similar to the result returned
+by the deterministic framework used in DBB. The SA method struggled to
+ﬁnd good schedules, providing only a minimal improvement to the initial
+schedule generated by the ATC heuristic.
+
+The main advantage of the SBB method over DBB is highlighted by the
+percentage of simulations in which none of the user agents incurred down-
+time.
+In the 4- and 5-user agent scenarios, the schedules tested by DBB
+will frequently have a cost of zero. This means that, in many cases, DBB
+is unable to diﬀerentiate between these schedules and consequently relies on
+the priorities generated by the ATC heuristic to select a good schedule. The
+proposed prediction framework used by SBB will never result in a cost of zero
+as there is always some risk associated with each schedule. This is illustrated
+in Figure 11. SBB will ﬁnd that selecting a schedule that will replenish the
+user agent at point a is signiﬁcantly less risky than at point b, whereas DBB
+will return a cost of zero for both schedules and is unable to diﬀerentiate be-
+tween them. Therefore, point b may be chosen sometimes by DBB, leading
+
+32
+
+(a) 4 user agents
+
+(b) 5 user agents
+
+(c) 6 user agents
+
+Figure 9: Box and whisker plots for the percentage downtime in Scenario 1.
+Lower results are better.
+
+33
+
+Table 9: Calculation times in seconds for Scenario 1
+
+Number of agents, n
+
+4
+5
+6
+
+ATC
+1.37e-4
+1.48e-4
+1.84e-4
+
+SA
+
+6.55
+7.96
+9.68
+
+DBB
+2.80e-2
+4.60e-2
+
+7.46
+
+SBB
+
+0.884
+2.51
+37.8
+
+to an incurred cost when the actual resource level is as shown in Figure 11.
+The calculation times for the various optimisation methods are detailed in
+Table 9. The ATC heuristic is the fastest of the methods, taking a fraction of
+a second in all cases, while SA consistently takes several seconds. DBB com-
+putes a solution very quickly in the 4- and 5-user agent scenarios because it
+can ﬁnd a zero-cost schedule—it will usually ﬁnd a zero-cost schedule in the
+ﬁrst few schedules examined and will return this immediately. SBB takes
+longer in these cases as it searches through the entire tree.
+In the 6-user
+agent scenario, DBB is unable to ﬁnd a zero-cost schedule and spends signif-
+icantly longer searching through the tree. In this case, SBB is approximately
+5 times slower than DBB. This increase reﬂects the increased computational
+requirement of the proposed prediction framework over frameworks that ig-
+nore uncertainty.
+
+7.3.2. Scenario 2
+
+Each optimisation method was tested 40 times in this scenario, with ini-
+tial conditions between 50% and 100% randomly selected and each simulation
+lasting for 9 days of simulated time. ATC scaling values, k, of 3 for the large
+and medium sized replenishment agents, and 5 for the small replenishment
+agent, were found to give good behaviour. Given the large size of this sce-
+nario, calculating an optimal schedule is not feasible as there are over 1032
+combinations when a schedule of 25 tasks is considered. This is where the
+anytime behaviour of branch and bound is a signiﬁcant beneﬁt over the A*
+method used in [8]. This anytime nature was exploited in two ways—the
+optimisation depth of the algorithm was varied, and a hard limit of 10,000
+nodes was placed on the size of the solution tree.
+
+Selecting the schedule length is an important aspect of this problem.
+Using a short schedule length can lead to myopic behaviour, while using
+a long schedule length exponentially increases the size of the solution tree.
+When using an optimisation depth that is smaller than the schedule length,
+
+34
+
+(a) 4 user agents
+
+(b) 5 user agents
+
+Figure 10: Percentage of simulation runs with 100% uptime in Scenario 1.
+Higher results are better. The 6-user agent scenario results are omitted as
+no method was able to achieve 100% uptime in any of the simulations.
+
+35
+
+Figure 11: Level of a user agent showing the predicted resource level, an
+uncertainty of two standard deviations (2 sigma), and the actual resource
+level. Replenishing at point a is selected when considering uncertainty, while
+the two points cannot be diﬀerentiated if uncertainty is not considered.
+
+the remaining tasks in the schedule are selected by the ATC heuristic.
+If
+the schedule length is too long in comparison to the optimisation depth,
+the suboptimal choices of the heuristic can also reduce the beneﬁt of using
+a longer schedule length. Figure 12 shows the percentage of simulations
+with 100% uptime using the SBB algorithm with an optimisation depth of
+two tasks as a function of the schedule length. As can be seen, the best
+performance is achieved at a schedule length of 25 tasks.
+
+Figures 13 and 14 show the results for the optimisation methods in the
+second scenario. SA, DBB, and SBB were tested using a schedule length of 25
+tasks, with optimisation depths of 1, 2, and 3 used by DBB and SBB. These
+results broadly mirror those in Scenario 1, with the proposed SBB method
+producing the best results. The beneﬁt of the directed optimisation of the
+branch and bound methods on an initial schedule generated by the ATC
+heuristic is evident here. Even if only the ﬁrst task is optimised, DBB and
+SBB provide a huge beneﬁt over the ATC heuristic. In both the large and
+medium replenishment agent cases, SBB clearly outperformed DBB. This
+is highlighted by the results in Figure 14. In the small replenishment agent
+case, SBB and DBB produced similar results, corroborating the ﬁndings from
+Scenario 1. As these methods are used within an MPC-like framework, it is
+
+36
+
+Figure 12: Percentage of simulations with 100% uptime for various schedule
+lengths using SBB optimising the ﬁrst two tasks in scenario 2. Higher results
+are better.
+
+beneﬁcial to focus the optimisation on earlier tasks within a schedule. SA
+struggled to ﬁnd good schedules in this scenario as it spread the optimisation
+eﬀorts across the entire schedule. As a result, it was unable to suﬃciently
+explore the search space to yield much improvement over the ATC heuristic.
+The calculation times for each method are shown in Table 10. These re-
+sults follow similar trends to the results in Scenario 1, with the ATC heuris-
+tic computing very quickly, and the branch and bound methods taking the
+longest.
+In the large and medium replenishment agent cases, DBB has a
+short calculation time compared to SBB as it quickly ﬁnds zero-cost sched-
+ules. In the small replenishment agent case, the calculation times of DBB
+and SBB are much closer together. Many opportunities exist for improving
+the calculation times of these methods including using a language such as
+C, using a parallel implementation of branch and bound, and storing more
+data in the tree structure to reduce the computation required at each node.
+Using conservative estimates, speed increases of at least 100 times are feasi-
+ble, giving potential sub-second calculation times for the branch and bound
+methods.
+
+37
+
+(a) Large replenishment agent
+
+(b) Medium replenishment agent
+
+(c) Small replenishment agent
+
+Figure 13: Box and whisker plots for the percentage downtime in Scenario 2.
+Lower results are better. The number next to the DBB and SBB methods is
+the optimisation depth.
+
+38
+
+(a) Large replenishment agent
+
+(b) Medium replenishment agent
+
+Figure 14: Percentage of simulation runs with 100% uptime in Scenario 2.
+Higher results are better. The number next to the DBB and SBB meth-
+ods is optimisation depth. The small replenishment agent scenario results
+are omitted as no method was able to achieve 100% uptime in any of the
+simulations.
+
+39
+
+Table 10: Calculation times in seconds for Scenario 2
+
+Agent size
+
+ATC
+1.61e-3
+Large
+Medium 1.50e-3
+1.64e-3
+Small
+
+SA
+
+13.5
+13.9
+13.1
+
+DBB 1 DBB 2 DBB 3
+
+0.664
+0.671
+2.38
+
+0.674
+0.639
+24.2
+
+0.668
+0.638
+29.8
+
+Agent size
+
+SBB 1
+
+SBB 2
+
+SBB 3
+
+Large
+
+Medium
+
+Small
+
+1.38
+1.88
+1.68
+
+11.9
+21.7
+20.1
+
+12.2
+39.5
+48.6
+
+8. Conclusion
+
+Research on replenishment and collection scenarios has thus far not taken
+into account long term considerations, such as the limited capacity of the
+replenishment agent and replenishing user agents multiple times, that are
+critical for achieving persistent autonomy. More importantly, the examined
+literature has treated these scenarios as deterministic, ignoring the uncer-
+tainty that is inherent in realistic scenarios. These aspects play an important
+role in the optimisation process, and the SCAR scenario was developed to
+speciﬁcally address these shortcomings.
+
+This paper proposed a novel framework for incorporating uncertainty
+when predicting the outcome of the schedule for the replenishment agent in
+a SCAR scenario, and developed a branch and bound method that used the
+prediction framework to optimise the schedule of the replenishment agent.
+Improved Gaussian approximations enabled the proposed prediction frame-
+work to outperform an existing framework. The branch and bound approach
+using this framework was then shown to outperform the ATC heuristic, a
+simulated annealing meta-heuristic, and a branch and bound approach ig-
+noring uncertainty, in both a small and large scenario. In the large scenario,
+the anytime characteristic of branch and bound was exploited to ﬁnd good
+schedules within a reasonable length of time by varying the optimisation
+depth of the algorithm. Tasks beyond the optimisation depth were selected
+using the ATC heuristic, enabling the use of a long schedule length to reduce
+myopic decision making.
+
+An interesting avenue of future work is considering systems with multiple
+
+40
+
+replenishment agents or multiple resources, as the size of the search space will
+be substantially larger than for the single replenishment agent or single re-
+source scenarios, thus requiring more eﬃcient optimisation methods in order
+to select appropriate tasks. One possible method could be to cluster the user
+agents so that the problem reduces to multiple single-replenishment agent
+optimisations. Other areas of future work include considering uncertainty on
+the current state of the system, assessing the robustness of the methods to
+changes in the underlying probability distributions, and developing methods
+for dynamically adapting the k values for the ATC heuristic.
+
+Acknowledgements
+
+This work was supported by the Rio Tinto Centre for Mine Automation
+and the Australian Centre for Field Robotics, University of Sydney, Aus-
+tralia.
+
+References
+
+[1] J. Nguyen, N. Lawrance, R. Fitch, S. Sukkarieh, Energy-Constrained
+Motion Planning for Information Gathering with Autonomous Aerial
+Soaring, in: IEEE ICRA, 2013, pp. 3810–3816.
+
+[2] D. Austin, L. Fletcher, A. Zelinsky, Mobile robotics in the long term-
+exploring the fourth dimension, in: IEEE/RSJ IROS, Vol. 2, 2001, pp.
+613–618 vol.2. doi:10.1109/IROS.2001.976237.
+
+[3] R. Luo, C. Liao, K. Su, K. Lin, Automatic docking and recharging sys-
+tem for autonomous security robot, in: Intelligent Robots and Systems,
+2005. (IROS 2005). 2005 IEEE/RSJ International Conference on, 2005.
+
+[4] J. Forlizzi, C. DiSalvo, Service robots in the domestic environment: a
+study of the roomba vacuum in the home, in: Proceedings of the 1st
+ACM SIGCHI/SIGART conference on Human-robot interaction, HRI
+’06, ACM, New York, NY, USA, 2006, pp. 258–265. doi:10.1145/
+1121241.1121286.
+
+[5] InTouch Health, RP-7i Robot. http://www.intouchhealth.com/products-
+
+and-services/products/rp-7i-robot/ (2012).
+URL
+products/rp-7i-robot/
+
+http://www.intouchhealth.com/products-and-services/
+
+41
+
+[6] P. Zebrowski, R. T. Vaughan, Recharging robot teams: A tanker ap-
+proach, in: Proceedings of the 12th International Conference on Ad-
+vanced Robotics, ICAR ’05, 2005, pp. 803–810. doi:10.1109/ICAR.
+2005.1507500.
+
+[7] A. W. Palmer, A. J. Hill, S. J. Scheding, Stochastic collection and replen-
+ishment (SCAR): Objective functions, in: Proceedings of the 2013 IEEE
+International Conference on Intelligent Robots and Systems (IROS),
+2013, pp. 3324–3331. doi:10.1109/IROS.2013.6696829.
+
+[8] A. W. Palmer, A. J. Hill, S. J. Scheding, Stochastic Collection and Re-
+plenishment (SCAR) Optimisation for Persistent Autonomy, in: Pro-
+ceedings of the 2014 IEEE International Conference on Intelligent
+Robots and Systems (IROS), 2014, pp. 2943–2949. doi:10.1109/IROS.
+2014.6942968.
+
+[9] Z. Jin, T. Shima, C. J. Schumacher, Optimal scheduling for refueling
+multiple autonomous aerial vehicles, IEEE Transactions on Robotics
+22 (4) (2006) 682–693. doi:10.1109/TRO.2006.878793.
+
+[10] S. Kaplan, G. Rabadi, Exact and heuristic algorithms for the aerial
+refueling parallel machine scheduling problem with due date-to-deadline
+window and ready times, Computers & Industrial Engineering 62 (1)
+(2012) 276–285. doi:10.1016/j.cie.2011.09.015.
+
+[11] S. Kaplan, G. Rabadi, Simulated annealing and metaheuristic for ran-
+domized priority search algorithms for the aerial refuelling parallel
+machine scheduling problem with due date-to-deadline windows and
+release times, Engineering Optimization 45 (1) (2013) 67–87. doi:
+10.1080/0305215X.2012.658783.
+
+[12] J. W. Barnes, V. D. Wiley, J. T. Moore, D. M. Ryer, Solving the aerial
+ﬂeet refueling problem using group theoretic tabu search, Mathemat-
+ical and Computer Modelling 39 (6) (2004) 617–640. doi:10.1016/
+S0895-7177(04)90544-4.
+
+[13] H. Shen, P. Tsiotras, Optimal Scheduling for Servicing Multiple Satel-
+lites in a Circular Constellation, in: Proceedings of the 2002 AIAA/AAS
+Astrodynamics Specialists Conference, 2002, pp. 1–10.
+
+42
+
+[14] B. Kannan, V. Marmol, J. Bourne, M. B. Dias, The Autonomous
+Recharging Problem: Formulation and a Market-based Solution,
+in:
+Proceedings of the 2013 IEEE International Conference on Robotics
+and Automation (ICRA), 2013, pp. 3488–3495.
+
+[15] Y. Litus, P. Zebrowski, R. T. Vaughan, A distributed heuristic for
+energy-eﬃcient multirobot multiplace rendezvous, IEEE Transactions
+on Robotics 25 (1) (2009) 130–135. doi:10.1109/TRO.2008.2007459.
+
+[16] N. Mathew, S. L. Smith, S. L. Waslander, Multirobot Rendezvous Plan-
+ning for Recharging in Persistent Tasks, IEEE Transactions on Robotics
+31 (1) (2015) 128–142.
+
+[17] I. Vasilescu, K. Kotay, D. Rus, M. Dunbabin, P. Corke, Data collection,
+storage, and retrieval with an underwater sensor network, in: Proceed-
+ings of the 3rd International Conference on Embedded Networked Sen-
+sor Systems - SenSys ’05, 2005, pp. 154–165. doi:10.1145/1098918.
+1098936.
+
+[18] Y. Tirta, Z. Li, Y.-H. Lu, S. Bagchi, Eﬃcient collection of sensor data in
+remote ﬁelds using mobile collectors, in: Proceedings on the 13th IEEE
+International Conference on Computer Communications and Networks
+(ICCCN), 2004, pp. 515–519.
+
+[19] B. Yuan, M. Orlowska, S. Sadiq, On the Optimal Robot Routing Prob-
+lem in Wireless Sensor Networks, IEEE Transactions on Knowledge and
+Data Engineering 19 (9) (2007) 1252–1261. doi:10.1109/TKDE.2007.
+1062.
+
+[20] O. Tekdas, V. Isler, Using mobile robots to harvest data from sensor
+
+ﬁelds, IEEE Wireless Communications 16 (1) (2009) 22–28.
+
+[21] O. Tekdas, D. Bhadauria, V. Isler, Eﬃcient data collection from wire-
+less nodes under the two-ring communication model, The International
+Journal of Robotics Research 31 (6) (2012) 774–784. doi:10.1177/
+0278364912439429.
+
+[22] D. Bhadauria, O. Tekdas, V. Isler, Robotic data mules for collecting
+data over sparse sensor ﬁelds, Journal of Field Robotics 28 (3) (2011)
+388–404. doi:10.1002/rob.
+
+43
+
+[23] M. Ma, Y. Yang, M. Zhao, Tour planning for mobile data-gathering
+mechanisms in wireless sensor networks, IEEE Transactions on Vehicular
+Technology 62 (4) (2013) 1472–1483. doi:10.1109/TVT.2012.2229309.
+
+[24] Y. Yan, Y. Mostoﬁ, An Eﬃcient Clustering and Path Planning Strategy
+for Data Collection in Sensor Networks Based on Space-Filling Curves,
+in: Proceedings of the 2014 IEEE Conference on Decision and Control,
+2014, pp. 6895–6901.
+
+[25] A. Allahverdi, C. Ng, T. Cheng, M. Y. Kovalyov, A survey of scheduling
+problems with setup times or costs, European Journal of Operational
+Research 187 (3) (2008) 985–1032. doi:10.1016/j.ejor.2006.06.060.
+
+[26] C. Fang, P. Yu, B. C. Williams, Chance-Constrained Probabilistic Sim-
+ple Temporal Problems, Proceedings of the Twenty-Eighth AAAI Con-
+ference on Artiﬁcial Intelligence (2014) 2264–2270.
+
+[27] E. Raboin, P. ˇSvec, D. S. Nau, S. K. Gupta, Model-predictive asset
+guarding by team of autonomous surface vehicles in environment with
+civilian boats, Autonomous Robots 38 (2014) 261–282. doi:10.1007/
+s10514-014-9409-9.
+
+[28] D. Bertsimas, M. Sim, Robust discrete optimization and network ﬂows,
+doi:10.1007/
+
+Mathematical Programming 98 (1-3) (2003) 49–71.
+s10107-003-0396-4.
+
+[29] S. Yoon, A. Fern, R. Givan, FF-Replan: A baseline for probabilistic
+planning, Proceedings of the 17th International Conference on Auto-
+mated Planning and Scheduling (ICAPS) (2007) 352–359.
+
+[30] J.-P. Arnaout, G. Rabadi, J. H. Mun, A dynamic heuristic for the
+stochastic unrelated parallel machine scheduling problem, International
+Journal of Operations Research 3 (2) (2006) 136–143.
+
+[31] D. Ferguson, M. Likhachev, A. Stentz, A Guide to Heuristic-based Path
+Planning, in: Proceedings of the International Workshop on Planning
+Under Uncertainty for Autonomous Systems, International Conference
+on Automated Planning and Scheduling (ICAPS), 2005, pp. 9–18.
+
+44
+
+[32] A. Land, A. Doig, An automatic method of solving discrete program-
+ming problems, Econometrica: Journal of the Econometric Society
+28 (3) (1960) 497–520.
+
+[33] G. Marsaglia, Ratios of normal variables, Journal of Statistical Software
+
+16 (4) (2006) 1–10.
+
+[34] R. Ware, F. Lad, Approximating the distribution for sums of products of
+normal variables, Tech. Rep. 1978, The University of Queensland (2003).
+
+[35] J. Meng, J. M. Zhang, Y. Chen, Y. Huang, Bayesian non-negative
+factor analysis for reconstructing transcription factor mediated reg-
+ulatory networks, Proteome Science 9 (Suppl 1) (2011) S9.
+doi:
+10.1186/1477-5956-9-S1-S9.
+
+[36] A. W. Palmer, A. J. Hill, S. J. Scheding, Applying Gaussian distributed
+constraints to Gaussian distributed variables, Information Fusiondoi:
+10.1016/j.inffus.2016.02.008.
+
+45
+
+

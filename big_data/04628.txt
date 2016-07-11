@@ -1,0 +1,1557 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+5
+1
+ 
+ 
+]
+n
+y
+d
+-
+u
+l
+f
+.
+s
+c
+i
+s
+y
+h
+p
+[
+ 
+ 
+
+1
+v
+8
+2
+6
+4
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Accelerating a hybrid continuum-atomistic ﬂuidic model
+
+with on-the-ﬂy machine learning
+
+David Stephensona,∗, James R. Kermodeb, Duncan A. Lockerbya
+
+aSchool of Engineering, University of Warwick, Coventry CV4 7AL, UK
+
+bWarwick Centre for Predictive Modelling, School of Engineering, University of
+
+Warwick, Coventry CV4 7AL, UK
+
+Abstract
+
+We present a hybrid continuum-atomistic scheme which combines molecular
+dynamics (MD) simulations with on-the-ﬂy machine learning techniques for
+the accurate and eﬃcient prediction of multiscale ﬂuidic systems. By using
+a Gaussian process as a surrogate model for the computationally expensive
+MD simulations, we use Bayesian inference to predict the system behaviour
+at the atomistic scale, purely by consideration of the macroscopic inputs
+and outputs. Whenever the uncertainty of this prediction is greater than a
+predetermined acceptable threshold, a new MD simulation is performed to
+continually augment the database, which is never required to be complete.
+This provides a substantial enhancement to the current generation of hy-
+brid methods, which often require many similar atomistic simulations to be
+performed, discarding information after it is used once.
+
+We apply our hybrid scheme to nano-conﬁned unsteady ﬂow through a
+high-aspect-ratio converging-diverging channel, and make comparisons be-
+tween the new scheme and full MD simulations for a range of uncertainty
+thresholds and initial databases. For low thresholds, our hybrid solution is
+highly accurate — within the thermal noise of a full MD simulation. As the
+uncertainty threshold is raised, the accuracy of our scheme decreases and the
+computational speed-up increases (relative to a full MD simulation), enabling
+the compromise between precision and eﬃciency to be tuned. The speed-up
+of our hybrid solution ranges from an order of magnitude, with no initial
+database, to cases where an extensive initial database ensures no new MD
+
+∗Corresponding author
+Email address: david.stephenson@warwick.ac.uk (David Stephenson )
+
+Preprint submitted to Journal of Computational Physics
+
+March 16, 2016
+
+simulations are required.
+
+Keywords: Multiscale modelling, Machine Learning, Hybrid methods,
+Micro/nanoﬂuidics, Molecular Dynamics
+
+1. Introduction
+
+Almost all ﬂuid engineering systems are multiscale in their nature. At the
+smallest scale, the ﬂuid and surrounding environment are comprised of atoms,
+with interactions occurring across nanometers (10−9 m) and over femtosec-
+onds (10−15 s), while the ﬂuid ﬂow is characterised by the scale of the system
+geometry, which is often many orders of magnitude larger. In most instances,
+the separation of scales is so large that the atomistic behaviour can be ac-
+curately incorporated into a continuum ﬂuid description through empirical
+boundary conditions (e.g. no-slip at the walls) and constitutive relations (e.g.
+viscosity in the shear stress – strain rate relation). However, as some charac-
+teristic dimension of the system approaches the nanoscale (and microscale in
+gases), these approximations break down, and the ﬂuid ﬂow becomes highly
+dependent on atomistic phenomena [1–4].
+
+There are numerous applications in ﬂuid dynamics where atomistic infor-
+mation is required to capture non-continuum/non-equilibrium phenomena,
+but the macroscopic ﬂow develops over much larger length and time scales:
+for example, pumping technology that exploits thermal creep in a rareﬁed
+gas [5]; and low-power, high-throughput nanotube membranes for salt wa-
+ter desalination [6]. The multiscale nature of these systems leads to a dual
+requirement for capturing the local atomistic-scale interactions and macro-
+scale ﬂuid response. The complexity of the ﬂow necessitates modelling with
+atomistic resolution, but the state-of-the-art techniques (molecular dynamics
+(MD) for dense ﬂuid ﬂows [7], and the direct simulation Monte-Carlo method
+(DSMC) for rareﬁed gas ﬂows [8]) are extremely computationally expensive.
+This limits their application to small system sizes, typically O(100 nm3), and
+short simulation times, typically O(100 ns), rendering many important engi-
+neering problems intractable, and limiting possibilities for comparison with
+experiments.
+
+Hybrid methods provide a promising framework for simulating such sys-
+tems by combining continuum (macro) and atomistic (micro) solvers and
+exploiting scale-separation where it exists to obtain a high accuracy, yet
+eﬃcient, solution. There has already been extensive research into hybrid
+
+2
+
+approaches in ﬂuid dynamics (see, for example, recent reviews [9–12]), with
+most methodological variations concerning either a) the coupling strategy
+between the macro and micro models, or b) the boundary conditions that
+are imposed on each model. Coupling is usually performed via the exchange
+of state variable or ﬂux information, to ensure consistency between the macro
+and micro models at locations where an atomic resolution is required. The
+information passed from one model is then applied as a boundary condition
+to locally constrain the other model.
+
+Broadly speaking, the types of problems that hybrid methods are designed
+to model can be divided into three categories according to common fea-
+tures: Type A, Type B, or Type C. In Type A problems, a continuum model
+provides a reasonably accurate solution for much of the ﬂow ﬁeld, and an
+atomistic solver is only required for regions that contain non-continuum/non-
+equilibrium eﬀects such as an isolated defect, a singularity, or regions near
+nanoscale surfaces. This is often referred to as domain decomposition because
+the macro and micro domains are coupled across spatial interfaces. Examples
+of Type A problems include the moving contact line problem [2] and resolv-
+ing singularities that occur in the corners of lid-driven cavity ﬂows [13]. In
+Type B problems, a continuum model spans the entire system domain, and
+an atomistic resolution is required everywhere to continually reﬁne the con-
+tinuum solution by providing local constitutive/boundary information. This
+is an embedded coupling approach, with the macro and micro domains occu-
+pying the same physical space; an example of a Type B problem is capturing
+the non-Newtonian ﬂow of a complex nanoﬂuid [14]. In Type C problems,
+high-aspect-ratio ﬂows result in non-continuum/non-equilibrium eﬀects per-
+sisting over the entire (or majority of the) cross section of the ﬂuid stream,
+while hydrodynamic properties vary slowly in the streamwise direction. The
+former must be captured by an atomistic solver, while the latter can be de-
+scribed by a continuum. This is also an embedded coupling approach, with
+examples including the ﬂow through nanotube desalination membranes [6]
+and air-layer lubrication of liquid journal bearings [15]. However, despite
+much progress, a common ﬂaw of hybrid methods is that, often, similar and
+repetitious atomistic simulations are performed — i.e.
+information is used
+once, then wastefully discarded, despite conﬁguration conditions remaining
+similar.
+
+In recent years, machine learning (ML) techniques have been used in
+an increasingly wide range of disciplines [16]. Prominent examples based
+on Bayesian inference include the calibration of computer models [17] or the
+
+3
+
+closely related problem of developing surrogate models that can be computed
+much more cheaply [18]. These approaches can help to quantify uncertainty;
+for example, the uncertainty induced in density functional theory (DFT)
+calculations from the choice of exchange-correlation functional [19], or the
+uncertainty induced in nanoscale ﬂow simulations from the choice of inter-
+atomic potentials [20]. Hand-calibrated force ﬁelds have been successfully
+replaced by models built automatically from quantum mechanical (QM) ref-
+erence data, using neural networks [21] or Gaussian process regression [22].
+This has enabled accurate models to be produced for materials that were
+conventionally diﬃcult to describe precisely with interatomic potentials [23].
+However, all such approaches are limited by the training data used to ﬁt
+the ML model.
+In particular, they are not transferable to situations not
+envisaged at the time of construction.
+
+More recently, a new class of methods for ML-based atomistic simulation
+have been proposed, which addresses this limitation by avoiding ever at-
+tempting to build a full description of the reference database (i.e. potential
+energy surface). Instead, they accelerate MD simulations by computing new
+reference data ‘on the ﬂy’ where and when it is needed [24, 25]. The refer-
+ence data is added to a growing database that is used to infer the information
+needed to propagate the dynamics, greatly reducing the computational cost
+of MD simulations while retaining the link to QM-accurate methods [26].
+Similar ideas have been applied to develop neural network models for hybrid
+continuum-atomistic ﬂow simulations [27]. However, optimising the archi-
+tecture of parametric neural networks, while avoiding over- or under-ﬁtting,
+is a challenging task. Moreover, in [27], the criterion for computing new
+reference data is somewhat ad hoc, based on a ﬁxed diﬀerence between pa-
+rameters in input space. Here, we improve upon this idea by adopting a
+non-parametric approach to regression — using a Gaussian process to model
+the atomistic database in a hybrid continuum-atomistic scheme. The non-
+parametric model helps avoid over- or under-ﬁtting to the data, and employ-
+ing Bayesian inference for output predictions means that the criterion for
+obtaining new reference data can be based on a target threshold variance in
+output space, leading to a new robust approach to hybrid modelling in ﬂuid
+dynamics, with close-to-optimal information eﬃciency.
+
+4
+
+2. Methodology
+
+The speciﬁcs of our new scheme will depend on the exact hybrid method
+chosen, but the basic idea remains the same. Each time the continuum solver
+seeks to obtain atomistic information, rather than immediately performing a
+new simulation, we ﬁrst predict the simulation output based on the similarity
+between the current system conﬁguration and all conﬁgurations in a pre-
+existing database. A new atomistic simulation is only performed when the
+uncertainty of this prediction is above a predetermined threshold, i.e. the
+system conﬁguration is not well represented in the database; otherwise the
+prediction is deemed suﬃcient. The data from new simulations is used to
+augment the existing database, whose completeness is never required. As
+this database grows, progressively fewer atomistic simulations are required,
+because ‘new’ system conﬁgurations are more rarely encountered.
+
+The system we will use as a benchmark for our new scheme is dense
+ﬂuid ﬂow through a converging-diverging channel, with the ﬂow driven by a
+time-variant periodic external force Fext(t). The geometry of the system is
+presented in Fig. 1a. We choose this as our benchmark system for two main
+reasons: 1) it is multiscale both spatially and temporally, demonstrating
+the potential for high computational savings; and 2) the results for the full
+atomistic simulation, recently published by Borg et. al. [28], provide a useful
+basis for comparison. The hybrid method we use to model this system was
+developed by Borg et. al. [28], and described in detail therein. However, for
+completeness, we provide a short summary below.
+
+2.1. Hybrid method
+
+The benchmark system is a Type C problem, so non-continuum eﬀects
+persist over the entire cross section, and spatial scale separation can only
+be exploited in the streamwise direction. As such, atomistic subdomain
+simulations must cover the entire channel height, and are placed at regular
+intervals in the streamwise (s-) direction according to the equation:
+
+(i − 1)
+
+N
+
+L,
+
+si =
+
+(1)
+
+where i is the subdomain index, N is the number of subdomains, and L is the
+channel length. Note, the channel uses periodic boundary conditions (PBCs)
+in the (s-) direction, so the ﬁrst subdomain is simultaneously located at the
+inlet and the outlet. The number of subdomains is set large enough to resolve
+
+5
+
+Figure 1: Schematics of a) the multiscaled converging-diverging nanochannel, b) the micro
+subdomain decomposition, and c) the representation of the Gaussian-process predictive
+model, where the blue line is the mean and the grey envelope represents one standard
+deviation. All dimensions are in nm.
+
+6
+
+szy013.627.240.854.468h1=3.4h2=2.93h3=2.17a)h4=h3h5=h2h1b)c)(cid:20)
+
+(cid:18)2πs
+
+(cid:19)
+
+L
+
+(cid:21)
+
+− 1
+
+the streamwise geometrical variation; here we, like Borg et. al., use N = 5.
+The channel height h(s) is a function of the streamwise position s:
+
+h = a
+
+cos
+
++ h1,
+
+(2)
+
+where a = 0.68 nm is a constant and h1 = 3.4 nm is the channel height at
+the inlet/outlet (see Fig. 1). Temporal scale separation exists because the
+characteristic time for the evolution of the macro model (e.g.
+the period
+of the external force) is much larger than the characteristic time for the
+development of the micro model (e.g. the start-up time from rest); therefore,
+each micro subdomain simulation is considered to be in a quasi-steady state.
+The macro model consists of the unsteady one-dimensional equations for
+mass and momentum conservation. We use MD for the micro model, with
+atoms interacting through pairwise potentials and moving according to New-
+ton’s laws of motion (see Appendix A for details). Coupling is performed by
+ensuring that the mass and momentum in each MD subdomain are consistent
+with the conservation laws of the macro model. For mass, we obtain
+
+(cid:18) 1
+
+(cid:19) ∂q
+
+A
+
+∂s
+
+∂ρ
+∂t
+
++
+
+= 0,
+
+(3)
+
+where ρ(s, t) is the density, A is the cross-sectional area, and q(s, t) is the
+mass ﬂow rate which are time-averaged measurements in each MD subdomain
+simulation. For simplicity, the MD subdomains are simulated using PBCs
+in the s-direction (see Fig. 1b), which cannot support a pressure gradient.
+Therefore, for momentum ﬂux to be hydrodynamically equivalent to that in
+the macro model, the total (external) force F (s, t) applied to each atom is
+
+(cid:18) m
+
+(cid:19) dp
+
+ρ
+
+ds
+
+,
+
+(4)
+
+F = Fext −
+
+where m is the mass of a single atom.
+
+2.2. Machine learning
+For the machine learning model, we use Gaussian process (GP) regression.
+Here we provide only a brief overview of the approach, see Rasmussen and
+Williams [18] for further details. A non-parametric approach to regression
+is to model the unknown underlying function f (x) as random, with a GP
+distribution:
+
+f (x) ∼ GP(cid:0)µ(x), K(x, x(cid:48))(cid:1),
+
+(5)
+
+7
+
+h1 h2
+
+ρ1 ρ2
+F1 F2
+
+X =
+
+ ,
+
+. . . hM
+. . .
+ρM
+. . . FM
+
+where x is a point in input space, µ(x) is the mean function and K(x, x(cid:48))
+is the covariance function for the process of interest, which models the co-
+variances between function outputs y and y(cid:48) at x and x(cid:48), respectively. For
+our system, the input vector x = {h, ρ, F} is composed of three macroscopic
+input variables: channel height h, density ρ, and force F . Here, we will use
+two separate GPs to predict the output for the mass ﬂow rate y = q and
+pressure1 y = p (note, for pressure, the input vector only depends on channel
+height and density).
+
+A GP is a generalisation of a Gaussian probability distribution to an in-
+ﬁnite number of dimensions. For each point in input space x, we model the
+output y = f (x) as a random variable with a univariate Gaussian distribu-
+tion; similarly, we can model the output across the inﬁnite range of input
+space using a GP. Starting from some prior belief in our function P (f ) (de-
+ﬁned by our choice of covariance function, discussed below), we perform M
+training MD simulations with inputs
+
+(6)
+
+and observe outputs (cid:104)y(cid:105) (speciﬁcally, mass ﬂow rate (cid:104)q(cid:105) and pressure (cid:104)p(cid:105)).
+Using Bayesian inference, this leads to a posterior belief in the function
+P (f|(cid:104)y(cid:105), X) given by
+
+P (f|(cid:104)y(cid:105), X) =
+
+P ((cid:104)y(cid:105)|X, f )P (f )
+
+P ((cid:104)y(cid:105)|X)
+
+,
+
+(7)
+
+where P ((cid:104)y(cid:105)|X, f ) is the likelihood of observing the outputs, given the prior
+belief, and P ((cid:104)y(cid:105)|X) is the marginal likelihood. The angle brackets represent
+time-averaged measurements from MD simulations. The mean of the pos-
+terior E[f|(cid:104)y(cid:105), X] will closely resemble the measured outputs (cid:104)y(cid:105) near the
+input data points X, and the uncertainty (variance) will be low; however,
+the uncertainty away from the observed data remains large (see Fig. 1c).
+The posterior predictions thus become more accurate as the database grows
+and covers more of input space. As each data point ‘speaks’, the GP can
+be considered to have a ﬁnite, but unbounded, number of parameters, which
+grow with the database.
+
+1averaged across the channel cross section.
+
+8
+
+To model the covariance between outputs, we use the squared exponential
+
+kernel
+
+(cid:18)
+
+(cid:19)
+
+K(xi, xj) = σ2
+
+− d2
+ij
+2(cid:96)2
+where σf and (cid:96) are hyperparameters — with σ2
+f representing the variance
+of the unknown function and (cid:96)2 representing the length scale2 — and d2
+ij is
+the normalised Euclidean distance between the points xi = (hi, ρi, Fi) and
+xj = (hj, ρj, Fj) in input space:
+
+f exp
+
+(8)
+
+,
+
+(cid:18) hi − hj
+
+(cid:19)2
+
+(cid:18) ρi − ρj
+
+(cid:19)2
+
+(cid:18) Fi − Fj
+
+(cid:19)2
+
+.
+
+(9)
+
+d2
+ij =
+
++
+
++
+
+∆h
+
+∆ρ
+
+∆F
+
+The denominator of each term in equation (9) is the mean separation between
+inputs in the database. This normalisation ensures that each input variable
+has approximately equal weight, and is recalculated when the covariance
+matrix is updated as the database grows. For the pressure kernel, only the
+ﬁrst two terms in equation (9) are included.
+
+When making predictions for the outputs, we include the inherent noise
+in the measured outputs from MD simulations by adding Gaussian noise with
+variance σ2
+
+n to the covariance matrix
+
+C(X, X) = K(X, X) + σ2
+
+nI,
+
+(10)
+
+where I is the identity matrix and σ2
+hyperparameter (see §2.3).
+
+n can be interpreted as an additional
+
+To make predictions for a set of test conﬁgurations with inputs X∗, it can
+be shown that Eq. 7 leads to a posterior distribution for the outputs y∗ given
+by
+
+y∗|X, y, X∗ ∼ N (¯y∗, cov(y∗)) ,
+
+where the mean is
+
+¯y∗ = µ(X∗) + K(X∗, X)C(X, X)−1 ((cid:104)y(cid:105) − µ(X)) ,
+
+and the covariance matrix
+
+cov(y∗) = K(X∗, X∗) − K(X∗, X)C(X, X)−1K(X, X∗).
+
+(11)
+
+(12)
+
+(13)
+
+2Note, this is a length scale in input space of distances dij, and should not be confused
+
+with any physical length scale used in the multiscale modelling.
+
+9
+
+The variances σ2
+y∗ of the new predictions are the diagonal of the posterior co-
+variance matrix cov(y∗). In our scheme, whenever the predicted standard de-
+viation σy∗ exceeds a pre-determined uncertainty threshold σt, the prediction
+is deemed insuﬃciently accurate and a new MD simulation is automatically
+performed and added to the teaching database.
+
+2.3. Hyperparameters
+
+f , (cid:96)2, σ2
+
+n), where σ2
+
+Our non-parametric model nevertheless includes three hyperparameters
+θ = (σ2
+f is the signal variance, i.e. the expected variance of
+the output function away from any known data points; σ2
+n is the noise vari-
+ance, i.e. the variance at known data points (see Fig. 1); and (cid:96)2 is the length
+scale, i.e. a measure of the distance between input points beyond which the
+outputs become uncorrelated; see Fig. 1c for a visual representation. The
+normalisation used here, in equation (9), makes the choice of hyperparame-
+ters highly intuitive; it is likely that σ2
+f and (cid:96)2 will be approximately unity,
+and σ2
+f . We veriﬁed this intuition by comput-
+ing the marginal likelihood of observing the measured outputs (cid:104)y(cid:105) given the
+inputs X and hyperparameters θ, given by
+log P ((cid:104)y(cid:105)|X, θ) = −1
+2
+
+(cid:104)y(cid:62)(cid:105)C(X, X)−1(cid:104)y(cid:105) − 1
+2
+
+log|C(X, X)| − n
+2
+
+n will be some fraction of σ2
+
+log 2π (14)
+
+where it should be noted C(X, X) depends on θ. We wish to maximise
+log P ((cid:104)y(cid:105)|X, θ) with respect to θ, i.e. ﬁnd the hyperparameters which max-
+imise the likelihood of the outputs we observed. We calculated the log
+marginal likelihood over a small sample of training data points, which would
+later be used for initial databases (see Case D5 from Table 1 in §3.2). We
+did not optimise for σ2
+n as this could be estimated directly from the data, by
+calculating the standard deviation of the mean output for each MD simula-
+tion (using the raw time-instantaneous data) and averaging over the num-
+ber of MD simulations. We found σnq = 0.05 ng/s for mass ﬂow rate and
+σnp = 0.003 MPa for pressure3. Solving 14 numerically to maximise the log
+marginal likelihood for the other two hyperparameters, we obtained σf = 1
+(ng/s and MPa for mass ﬂow rate and pressure, respectively) and (cid:96) = 1 for
+both mass ﬂow rate and pressure, conﬁrming our intuition.
+
+3Note, we present the hyperparameters in terms of standard deviation, rather than
+
+variance, for the sake of clarity, as they share units with the outputs.
+
+10
+
+2.4. Implementation
+The procedure for our machine-learning-accelerated hybrid method is de-
+scribed in Algorithm 1. After the initial databases for pressure and mass
+ﬂow rate are loaded, and the number of subdomains N is chosen, the lo-
+cation s1...N and height h1...N of the subdomains are calculated using equa-
+tions (1) and (2), respectively. The subdomains are initialised with densities
+1...N = {1331, 1320, 1278, 1273, 1312} kg/m3, equivalent to the initial densi-
+ρ1
+ties in the full MD simulation.
+
+The nature of the hybrid method means the pressure needs to be eval-
+uated before the mass ﬂow rate, as the mass ﬂow rate is dependent on the
+force, which is in turn dependent on the pressure gradient. This is problem-
+atic because, when we encounter a ‘new’ conﬁguration (i.e. one for which
+we cannot accurately predict the output), we do not want to perform two
+separate MD simulations for pressure and mass ﬂow rate. We overcome this
+problem by ensuring the pressure prediction is always accurate, i.e. the pres-
+sure database is well represented across all of input space. This is more
+simple than it ﬁrst sounds, because pressure is only dependent on two in-
+puts: channel height and density. The channel heights at each subdomain
+are known and unchanging throughout a single case, so to robustly map den-
+sity we only need to perform one pre-simulation per subdomain.
+In each
+pre-simulation, we start from a high density of 1800 kg/m3 and measure the
+pressure as atoms are progressively removed, down to a density of 800 kg/m3.
+Our GP regression for pressure is therefore similar to the empirical equation
+of state of Borg et. al. [28]. However, using a GP, we avoid having to guess
+the functional form of this equation of state. These pre-simulations are suf-
+ﬁciently cheap that they do not aﬀect our overall computational eﬃciency
+calculations.
+
+As the macro model evolves in time, a conﬁguration x∗ = (cid:8)hi
+
+(cid:9)
+
+j, ρi
+
+j, F i
+j
+is tested to provide micro information, where j = 1, N is the spatial index
+(representing subdomain location) and i = 1, tend/∆t is the temporal index;
+tend and ∆t are the end time and time step, respectively, for the macro model.
+i
+j > σt, then a new MD simulation is performed with input x∗. In our
+If σq
+MD subdomain simulations, output measurements are averaged over 40000
+time-steps (see Appendix A, MD simulation details) after the initial start-
+up phase. To minimise the start-up phase, new MD simulations are initiated
+with the ﬁnal atomistic positions and velocities of a previously simulated
+conﬁguration from our database; the input for this prior conﬁguration xin will
+maximise the covariance with the new test input K(xin, x∗). If there is no
+
+11
+
+Algorithm 1 Hybrid scheme with on-the-ﬂy machine learning
+
+1: load initial database Cp(Xp, Xp), Xp = {h, ρ}p, (cid:104)p(cid:105), θp =(cid:8)σ2
+2: load initial database Cq(Xq, Xq), Xq = {h, ρ, F}q, (cid:104)q(cid:105), θq =(cid:8)σ2
+
+f , (cid:96)2, σ2
+n
+
+p
+f , (cid:96)2, σ2
+n
+
+(cid:9)
+
+(cid:9)
+
+q
+
+1...N , tend, ∆t, σt
+
+(cid:9) ← GPreg(Cp, Xp,(cid:104)p(cid:105), X∗; θp)
+
+1...N}
+
+(cid:46) Eqs. (12), (13)
+
+(cid:8)¯pi
+
+for i ← 1, tend/∆t do
+
+3: set case variables N, s1...N , h1...N , ρ1
+4: procedure time evolution
+5:
+6:
+7:
+8:
+9:
+10:
+11:
+12:
+
+t ← i∆t
+X∗ ← {h1...N , ρi
+1...N , σp
+p(cid:48)i
+1...N ← ∆¯pi
+set external forcing F i
+for j ← 1, N do
+(cid:9)
+ext − (m/ρi
+j, ρi
+
+1...N /∆S1...N
+ext
+
+x∗ ←(cid:8)hi
+j ← F i
+(cid:110)
+F i
+
+j)p(cid:48)i
+
+i
+1...N
+
+j
+
+1...N /∆S1...N
+
+(cid:46) Eq. (3)
+
+12
+
+13:
+
+14:
+
+15:
+16:
+17:
+18:
+
+19:
+
+20:
+21:
+22:
+23:
+
+24:
+
+i
+j
+
+¯qi
+j, σq
+i
+j > σt then
+procedure Perform new MD simulation
+
+if σq
+
+(cid:46) Eqs. (12), (13)
+
+j, F i
+j
+
+(cid:46) Eq. (4)
+
+(cid:111) ← GPreg(Cq, Xq,(cid:104)q(cid:105), x∗; θq)
+(cid:111) ← MD(xin, x∗, ts)
+(cid:110)
+append (cid:104)q(cid:105) ←(cid:2)(cid:104)q(cid:105) ¯qi
+(cid:3)
+if (cid:8)hi
+(cid:9) (cid:54)= Xp then
+(cid:9)(cid:3)
+append Xp ←(cid:2)Xp
+(cid:8)hi
+append (cid:104)p(cid:105) ←(cid:2)(cid:104)p(cid:105) ¯pi
+(cid:3)
+
+ﬁnd nearest prior input xin
+ts ← pseudoMD(xin, x∗)
+¯qi
+j, σq
+append Xq ← [Xq x∗]
+update Cq ← updateCov(Cq, Xq; θq)
+
+j, ¯pi
+
+j, ρi
+j
+
+j, ρi
+j
+
+j, σq
+
+i
+j
+
+j
+
+i
+
+update Cp ← updateCov(Cp, Xp; θp)
+
+j
+
+end if
+
+end procedure
+
+25:
+26:
+27:
+28:
+29:
+30:
+31:
+32:
+33: end procedure
+
+end if
+end for
+1...N ← ∆t(1/A)∆¯qi
+ρi+1
+end for
+
+database entry for the channel height to be tested, new MD simulations start
+with the ﬂuid atoms in a lattice, with zero mean velocity. We estimate the
+time for the start-up phase ts by performing a simple ‘pseudo MD’ simulation
+using a 1D Navier-Stokes solver with a Navier slip condition.
+j is ap-
+pended to the vector (cid:104)q(cid:105), the input x∗ appended to the input matrix Xq, and
+j, ρi
+j
+
+the covariance matrix for the data Cq([Xq x∗] , [Xq x∗]) is updated. If(cid:8)hi
+(cid:9)
+(cid:9)(cid:3)) are
+put vector (cid:104)p(cid:105), and covariance matrix Cp((cid:2)Xp
+
+do not exist in the pressure database, then the pressure input matrix Xp, out-
+
+After the simulation is complete, the measured mass ﬂow rate ¯qi
+
+(cid:9)(cid:3) ,(cid:2)Xp
+
+(cid:8)hi
+
+j, ρi
+j
+
+(cid:8)hi
+
+j, ρi
+j
+
+also updated.
+
+3. Results and Discussion
+
+Without recourse to experimental results, we test the accuracy of our hybrid
+scheme by comparing it to a full MD simulation for the same system; this
+also enables us to directly quantify the computational savings of our scheme.
+All the full MD solutions presented here are taken from Borg et. al.
+[28],
+with data points representing block averages over 2000 time-steps to reduce
+noise. For the majority of the results we present, the external forcing Fext is
+sinusoidal with an amplitude of FA = 0.487 pN and a period of T = 10.8 ns
+(Case C in [28]), i.e.
+
+(cid:18)2πt
+
+(cid:19)
+
+T
+
+Fext(t) = FA sin
+
+.
+
+(15)
+
+This large oscillation period ensures a high degree of temporal scale sepa-
+ration. Let us ﬁrst consider the case where we initially have an empty MD
+database. This could be considered the ‘purest’ form of machine learning in
+our scheme, as the input ranges that need to be learned are not inﬂuenced
+by human intuition. While it is fairly straightforward to estimate the input
+ranges for our benchmark system (as explained later), this may not be true
+for more complex systems, with a larger number of inputs; it is therefore im-
+portant to demonstrate that our scheme is suﬃciently robust to accurately
+model the ﬂow behaviour, even when we have no prior information. Never-
+theless, setting the target uncertainty threshold σt involves some subjectivity.
+A sensible approach is for the uncertainty threshold to be set larger than the
+observation noise (σnq), because it is diﬃcult for the model to make predic-
+
+13
+
+Figure 2: Transient mass ﬂow rate results for our hybrid scheme (Case 1 — subdomain
+1) and the full MD simulation [28], showing a) the full time series, and b) a close-up to
+highlight the uncertainty quantiﬁcation of the hybrid solution — the grey envelope repre-
+sents 1.96 standard deviations of the mean, representing the 95% conﬁdence interval for
+our hybrid solution. The hybrid solution uses a tight uncertainty threshold of 0.1 ng/s
+and starts from an empty database.
+
+tions with more accuracy than the data upon which it is based4. Noting from
+§2.3 that σnq = 0.05 ng/s, we initially choose a threshold of σt = 0.1 ng/s.
+This will be referred to as Case 1.
+
+The transient mass ﬂow rate results for Case 1 are displayed in Fig. 2,
+showing excellent agreement shown between the output of our hybrid scheme
+and the measurements from the full MD simulation. Mass conservation
+means that the mass ﬂow rate proﬁle is approximately the same at all sub-
+domain locations, so we present the data only for subdomain 1. As we begin
+from an empty database, initially our hybrid scheme must perform MD simu-
+lations with high frequency, because there is limited data upon which to base
+a prediction. Therefore, the hybrid solution (blue line) exhibits noise similar
+to that of the full MD simulation up until t = 2.7 ns, where the external forc-
+ing function peaks. As the system geometry and external forcing function
+are both symmetric, after this time no ‘new’ input conﬁgurations are expe-
+rienced, and no further MD simulations need to be performed. Beyond this
+
+4If there are multiple data points within close proximity to the test input, then the
+
+uncertainty can be lower than the observation noise.
+
+14
+
+0.2 ng/sa)b)time, our hybrid solution near-perfectly captures the sinusoidal variation of
+mass ﬂow rate, with smoothness resulting from our covariance prior. Figure
+2b shows a close-up of the second mass ﬂow rate peak and highlights that the
+uncertainty of our hybrid solution (grey region, representing 95% conﬁdence
+bounds) is smaller than the noise in the full MD simulation. This is because
+the properties in the full MD simulation are transient over time-averaging for
+each data point, whereas our MD subdomain simulations are steady-state.
+The uncertainty is larger at the extremes of mass ﬂow rate because these con-
+ﬁgurations exhibit the most extreme force and density inputs, so the model
+must extrapolate beyond its existing database.
+
+While building the database during the ﬁrst 2.7 ns, the model continually
+has to extrapolate for mass ﬂow rate predictions (as the increasingly large
+forces and densities render existing data less relevant to the current condi-
+tions), until the uncertainty threshold is reached and a new MD simulation
+is performed. As the ﬁrst mass ﬂow rate peak approaches, there will be a
+ﬁnal MD simulation, beyond which all conﬁgurations are suﬃciently close
+to those in the database that the uncertainty of future predictions is always
+below the threshold. This means that at all subsequent peaks, the model
+must extrapolate from the database, whereas, for all other conﬁgurations,
+the model will interpolate within the database. One potential beneﬁt of our
+machine-learning approach is the ease in which the eﬀect that uncertainty
+in the external forcing function has on the mass ﬂow rate solution can be
+quantiﬁed. Using pure MD simulations or traditional hybrid methods, it
+would be an extremely cumbersome task to model a wide range of forcing
+functions; however, with our scheme, once the database is built, new cases
+can be performed incredibly quickly (as shown in §3.3).
+
+Figure 3 displays the transient density proﬁles for Case 1, calculated at
+each of the ﬁve subdomains. Our hybrid solution shows good agreement with
+the measurements from the full MD simulation, although it fails to produce
+the subtle oscillations in subdomain #1, and occasionally overestimates the
+density in subdomains #3 and #4. However, despite overestimating the
+density, our hybrid solution successfully captures the non-harmonic proﬁle in
+these sections. The discrepancies our solution displays mirrors those in the
+solutions of Borg et. al., so are likely due to a common inaccuracy in the
+multiscaling, rather than an error in our GP regression model. We note that
+since density is an input to rather than an output of the regression model
+there is no simple method for uncertainty quantiﬁcation.
+
+15
+
+Figure 3: Transient density results for our hybrid scheme (Case 1) and the full MD sim-
+ulation, calculated at each of the ﬁve subdomains. The hybrid solution uses a tight
+uncertainty threshold of 0.1 ng/s and starts from an empty database.
+
+16
+
+3.1. The eﬀect of the uncertainty threshold
+Cases T1 – T6 demonstrate the eﬀect of the choice of uncertainty threshold
+on our hybrid solution. Case T1 is the same as Case 1, and the threshold
+increases up to 0.9 ng/s for Case T6. To isolate the eﬀect of the threshold,
+Cases T1 – T6 all start with an empty database. Figure 4 conﬁrms our intu-
+ition that the choice of threshold in our hybrid scheme is a trade-oﬀ between
+the accuracy and computational eﬃciency of its solution. As the threshold is
+raised, MD simulations are performed less frequently, so the accuracy of our
+hybrid solution drops, but the speed of computation increases. The signal
+standard deviation is σf q = 1 ng/s (see §2.3), so when the threshold σt > 1
+ng/s, MD simulations will never be performed, even when starting from an
+empty database. In this instance, the mass ﬂow rate in each subdomain is
+predicted to be zero for the entire time series, as this is the assumed mean
+(see §2.2).
+
+Figure 4a shows the total mass ﬂow rate error  for each case, relative
+to the error obtained if the database remains empty (which represents the
+(cid:80)t
+maximum possible discrepancy), deﬁned by
+(cid:80)t
+i=1|¯qi − Qi|)
+i=1|Qi| × 100%,
+
+t =
+
+(16)
+
+where ¯qi is the mass ﬂow rate, which is either measured by a MD subdomain
+simulation (when σqi > σt), or predicted by our regression model (when
+σqi ≤ σt) at time index i (averaged across all subdomains), and Qi is the
+mass ﬂow rate from the full MD simulation. To obtain a meaningful error,
+the noise from the full MD solution is ﬁltered by performing GP regression
+over the raw data, using a periodic kernel with time as the single input (see
+Appendix B for details). At ﬁrst, the errors are greater than 100%. This
+is because the weak external forcing generates a near-zero mass ﬂow rate,
+so the measurements from MD simulations (which are performed frequently
+at the start) are dominated by thermal ﬂuctuations and masked by noise.
+Somewhat counterintuitively, the errors continue to drop after the ﬁnal MD
+simulation is performed; this is because the weight of the errors incurred early
+in the trajectory diminishes as the hybrid solution becomes more accurate
+after the ﬁrst peak in the forcing function. To obtain context for the error
+magnitudes, we also use equation (16) to calculate the ‘error’ in the raw full
+MD simulation data (grey area); for clarity, the calculation at time t = 21.6
+ns is shown for the entire time series. Our results suggest that up to Case
+
+17
+
+Figure 4: The inﬂuence of the uncertainty threshold σt on the hybrid solution for mass
+ﬂow rate (starting from an empty database): a) the transient relative error to the smooth
+full MD solution (the grey area shows the error due to noise in the full MD solution); b)
+the cumulative number of MD simulations; c) the initial MD simulation rate. The vertical
+dashed line in a) and b) denotes time at the ﬁrst peak in the external forcing function,
+after which no MD simulations are performed. The data is from Cases T1 (σt = 0.1 ng/s)
+to T6 (σt = 0.9 ng/s), and the computational speed-up over the full MD solution for each
+case is displayed in parentheses in the legend.
+
+18
+
+a)b)c)T3, where σt = 0.3 ng/s, the error in our hybrid solution is comparable to
+the error in the full MD simulation due to noise.5 Overall the error increases
+with increasing threshold, as is expected.
+
+Figures 4b and c demonstrate how the computational speed of our scheme
+varies with the uncertainty threshold. Figure 4b shows the cumulative num-
+ber of MD simulations, which is proportional to the eﬃciency of the solution.
+As expected, the trend is that the lower the threshold, the more MD simula-
+tions must be performed. In all cases no further MD simulations are required
+after t = 2.7 ns. The computational speed-up, given in brackets in the legend
+of Fig. 4, is calculated by
+
+speed-up =
+
+tendNaf
+¯tsimNsim
+
+¯Nah
+
+,
+
+(17)
+
+where Naf is the number of atoms in the full MD simulation, ¯tsim is the
+average time-steps performed in a single MD subdomain simulation, Nsim is
+the number of MD subdomain simulations performed for the hybrid solution,
+and ¯Nah is the average number of atoms in each of those MD simulations.
+For the tightest threshold (Case T1), our hybrid solution provides a modest
+speed-up over the full MD simulation of 12.3×; this rises to 69.3× for the
+loosest threshold (Case T6), however the relative error of this solution is
+2.5× that of the full MD simulation. All cases (T1 – T6) all show logarithmic
+growth for the total number of MD simulations, with respect to time — i.e.
+the frequency of MD simulations decreases as the database becomes larger,
+and the predictions become more accurate.
+
+Figure 4c shows how the initial required MD simulation rate varies with
+the uncertainty threshold. This can be considered a quantiﬁcation of the
+‘novelty’ of the solution — i.e. the rate of identifying new conﬁgurations that
+are dissimilar to those on which the model has been previously trained. We
+calculate this novelty by assuming the MD simulation rate is approximately
+constant over the ﬁrst 0.27 ns.6 The results conﬁrm that lower thresholds
+produce a higher novelty as they require more certainty for a conﬁguration
+to be recognised as being similar to those in the existing database.
+
+solution.
+
+5It would be wrong to say that our hybrid solution is more accurate than the full MD
+6For the variable threshold run, the x−axis in Fig. 4c is taken to be the average
+
+threshold over the ﬁrst 0.27 ns.
+
+19
+
+3.2. The eﬀect of the initial database
+As previously acknowledged, prior to running our hybrid scheme, we can
+make some good estimations for the range of input values in our example case.
+For the particular system of interest studied here, we know that the channel
+height will always be equal to either h1, h2, or h3 (see Fig. 1 for reference; it
+is likely that the magnitude of the total force |F| will range from zero to at
+least the magnitude of the external force (0.487 pN); and from knowledge of
+nanoﬂuidic MD simulations, we conservatively estimate that density will vary
+between 1120 kg/m3 and 1480 kg/m3 — approximately ±180 kg/m3 from the
+initial values. Simulations are performed at evenly-spaced increments across
+these ranges to create an initial database to train the model. Subsequently,
+‘new’ conﬁgurations are encountered less frequently, and more predictions
+are made by interpolating between existing database entries, rather than
+extrapolating. This means predictions are made with more certainty, and
+the total number of simulations is likely to be reduced.
+
+Table 1: Initial databases for Cases D1 – D5. See Fig. 1 for channel height references.
+
+Case Channel heights
+
+Initial database size
+
+0
+15
+16
+31
+47
+
+D1
+D2
+D3
+D4
+D5
+
+−
+h1
+h3
+
+h1, h3
+
+h1, h2, h3
+
+The initial databases for cases D1 – D5 are outlined in Table 1, where Case
+D1 is the same as Case 1 — i.e. the initial database is empty. The other four
+databases are trained using one or more channel height and, for each height,
+four diﬀerent densities and forces, evenly spaced across the estimated ranges
+above. The exception is for channel height h1, the largest force (0.487 pN)
+applied to the lowest density ﬂuid (1120 kg/m3) produces a shear rate beyond
+the critical limit [29], so the mass ﬂow rate does not converge; therefore,
+this data entry is removed from the initial databases. For all cases, the
+uncertainty threshold is set at σt = 0.1 ng/s.
+
+The results for Cases D1 – D5 are presented in Fig. 5. Figure 5a demon-
+strates that the size of the initial database has a negligible eﬀect on the
+overall accuracy of the method, with all cases exhibiting errors comparable
+to the noise in the full MD simulation. This result is expected, because the
+
+20
+
+Figure 5: The inﬂuence of the initial database on the hybrid solution for mass ﬂow rate
+(with an uncertainty threshold of 0.1 ng/s): a) the transient relative error to the smooth
+full MD solution (the grey area shows the error due to noise in the full MD solution);
+b) the cumulative number of MD simulations required; c) the initial MD simulation rate.
+The vertical dashed line in a) and b) denotes time for the ﬁrst peak in the external forcing
+function, after which no MD simulations are performed. The data is from Cases D1 – D5
+(see Table 1, and the computational speed-up for each case is displayed in parentheses in
+the legend.
+
+21
+
+a)b)c)uncertainty produced by extrapolating beyond a smaller initial database is
+countered by more frequently performing MD simulations.
+
+Figure 5b shows that the total number of MD simulations decreases when
+the initial database is not empty, because more predictions are made through
+interpolation and ‘new’ conﬁgurations are not found so frequently at the start
+of the time series. This eﬀect is demonstrated in Fig. 5c, where the novelty
+of the cases decreases as the initial database increases, reaching zero for the
+largest database in Case D5. However, the total number of MD simulations
+performed does not continue to fall as the initial database grows. For larger
+initial databases, sometimes redundant information is gathered which could
+have been inferred from neighbouring conﬁgurations; this excessive training
+outweighs the beneﬁt of the increased conﬁdence in subsequent predictions.
+This eﬀect is demonstrated in the results for Case D5, where increasing the
+initial database to include simulations with channel height h2 only negligibly
+reduces the number of ‘on-the-ﬂy’ simulations performed compared to Case
+D4.
+
+Another example of redundant information is the discrepancy between the
+results for Cases D2 and D3, Despite the model training on only one extra
+conﬁguration for the latter case. This is due to the geometry of the case: a
+much larger force is required near the throat of the channel (subdomain #3)
+than at the inlet/outlet (subdomain #1) to generate equal mass ﬂow rates.7
+As such, the local pressure gradient always acts in the opposite direction to
+the external force at the inlet/outlet of the channel, so the peak external
+force is never experienced in subdomain #1, and training on it for initial
+database provides little information. Conversely, all of the information is
+used when the initial database is formed using subdomain #3. Fewer MD
+simulations corresponds to an increase in computational eﬃciency — Case D3
+is 30.5× faster than the full MD simulation while maintaining the same level
+of accuracy.
+
+3.3. Building on an existing database
+As we have already demonstrated with previous results, one important ad-
+vantage of our hybrid scheme is that it enables information to be reused
+so predictions can be made with more certainty from a continually-growing
+
+7It is diﬃcult to provide similar analysis for the density ranges, because at the
+nanoscale, viscosity varies rapidly with density, so greater density does not necessarily
+produce a larger mass ﬂow rate.
+
+22
+
+database. So far, this information has been reused by increasing the conﬁ-
+dence of our mass ﬂow rate predictions for conﬁgurations later in the time
+series, within the same case. However, we can go further. For example,
+suppose having completed the hybrid simulation, we decided that we are re-
+ally interested in a ﬂow feature occurring at s = 6.8 nm (halfway between
+subdomains #1 and #2). Our previous options would have been to run
+the expensive full MD simulation to ensure every ﬂow feature is captured,
+or to perform a new hybrid simulation using diﬀerent subdomain locations;
+both of which are computationally wasteful. However, with our machine-
+learning-accelerated hybrid scheme, we can simply create a new case which
+has more subdomains, with the model already trained on the database that
+we generated in the previous case.
+
+In Cases S1 – S4, we demonstrate how this approach can be used to con-
+tinually add subdomains and reﬁne the streamwise density proﬁle. Case S1
+is the same as case 1; in each subsequent case, the number of subdomains is
+doubled (with the new subdomain locations bisecting the old subdomain lo-
+cations), and the initial database is that generated at the end of the previous
+case.8 For all cases, the uncertainty threshold is σt = 0.1 ng/s. As the spac-
+ing between adjacent subdomains decreases, the relevance of data measured
+at neighbouring subdomains increases, and successively fewer MD simula-
+tions are performed, as shown in Fig. 6a. Using 40 subdomains, no new MD
+simulations are required at all. In addition, the streamwise density proﬁles
+calculated using ﬁve subdomains are inaccurate, because central diﬀerences
+are used to model spatial gradients, which assumes the variation between
+adjacent subdomains is linear. However, as the spacing between subdomains
+decreases, this linear assumption becomes more accurate. Figures 6b-d show
+how the streamwise density proﬁles for case S4 (40 subdomains) compares to
+the proﬁle measured by the full MD simulation, at three snapshots in time.
+Our results show good qualitative agreement with the noisy MD data.
+
+Another example of building on an existing database is evaluating the
+response to diﬀerent external forcing functions in the same geometry. Again,
+without the aid of machine learning, this would require performing an entirely
+new hybrid or full MD simulation. Using the database generated at the end
+of Case 1 as our initial database, we perform two new cases: Case F1, with
+
+8Note, extra pre-simulations for the pressure database are not required for the new
+
+subdomain heights, as the inference is already suﬃciently accurate.
+
+23
+
+Figure 6: The inﬂuence of the number of subdomains on the hybrid solution for density
+(with an uncertainty threshold of 0.1 ng/s): a) the number of new MD simulations; and
+b) streamwise density proﬁles for the full MD simulation and the hybrid solution using 40
+subdomains at t = 7.2 ns, t = 14.4 ns, and t = 21.6 ns. The data is from Cases S1 – S4.
+
+24
+
+b)a)Figure 7: Transient mass ﬂow rate results (left y−axis) for the hybrid solution of a) Case
+F1 (variable frequency external force), and b) Case F2 (variable amplitude external force).
+For Case F1, the result from the full MD simulation is also plotted. In both cases, the
+hybrid solution uses an uncertainty threshold of 0.1 ng/s, and an initial database generated
+at the end of Case 1. The cumulative number of new MD simulations is also plotted (right
+y−axis).
+
+25
+
+a)b)a variable-frequency external force; and Case F2, with a variable-amplitude
+external force. In Case F1, the oscillation period of the force starts from 0.22
+ns and gradually increases to 10.8 ns. [28]; the amplitude is 0.487 pN as case
+1. The left y−axis of Fig. 7a shows the transient mass ﬂow rate results for
+our hybrid solution and the full MD solution (Case D in Borg et. al. [28]),
+and the right y−axis shows the number of new MD simulations performed.
+Once again, our solution exhibits strong qualitative agreement with the full
+MD simulation, and the computational speed-up is eﬀectively inﬁnite9 as
+no new MD conﬁgurations are performed.
+In Case F2, the amplitude of
+the force starts from 0.487 pN and gradually increases to 0.609 pN;10 the
+oscillation period is a constant 10.8 ns as in case 1.
+In Fig. 7b, we show
+our hybrid solution for the transient mass ﬂow rate proﬁle (left y−axis) and
+the number of new MD simulations performed (right y−axis). There is no
+full MD simulation data for this forcing function, so we present our results
+in part as a challenge to others. The results appear consistent with our
+previous ﬁndings: the mass ﬂow rate proﬁle peaks at the peaks of the forcing
+function, and the magnitude of the fourth peak is approximately 1.25× the
+magnitude of the fourth peak in Case 1 — mirroring the variation of force
+amplitude. New MD simulations are only required as the mass ﬂow rate
+(and therefore forcing function) approach peaks, where the GP model has
+to extrapolate beyond the existing force entries in the database. The lack of
+smoothness in our hybrid solution, where new MD simulations are required,
+can be remedied by re-running the case with the ﬁnal frozen database, at a
+negligible cost.
+
+4. Conclusion
+
+We have presented an enhancement to existing hybrid methods in ﬂuid
+dynamics that uses on-the-ﬂy machine learning techniques to predict the
+output of new system conﬁgurations, without having to continually perform
+atomistic simulations. This procedure enables information to be reused mul-
+tiple times, drastically increasing the computational eﬃciency, while also
+providing the potential for simple uncertainty quantiﬁcation.
+
+9Of course, the speed-up is not actually inﬁnite, but the computational eﬀort to run
+
+the surrounding algorithm is neglible compared to an MD simulation.
+
+10A much large force would cause the critical shear limit to be exceeded.
+
+26
+
+We compare our new scheme to full molecular dynamics (MD) simulations
+and ﬁnd strong agreement, with errors within the range of thermal noise
+when a tight uncertainty threshold is set. As this threshold is raised, the error
+increases to up to 2.5× the MD simulation noise; however, the computational
+speed-up over a full MD simulation also increases. When starting from an
+empty database, raising the threshold from 0.1 ng/s to 0.9 ng/s increases
+speed-up from 12.3× to 69.3×. Thus, the choice of threshold is a trade-oﬀ
+between the required accuracy and computational eﬃciency.
+
+We demonstrate the computational beneﬁt of creating an initial database
+to train our predictive model, by estimating the expected range of inputs.
+This enables more predictions to be made via interpolation between data
+points, which provides less uncertainty than extrapolation leading to a re-
+quirement for fewer MD simulations to be performed ‘on-the-ﬂy’. While
+maintaining the same level of accuracy, starting with a modest initial database
+covering just a few data points can result in a speed-up of 30.5× the full MD
+simulation. Finally, we show how existing databases can be built upon (while
+never needing to be fully complete) to rapidly obtain high resolution hybrid
+solutions — i.e. cheaply add more subdomains at locations of interest — or to
+model diﬀerent ﬂow ﬁelds eﬀectively instantly — i.e. no new MD simulations
+are required.
+
+Acknowledgements
+
+We would like to thank Matthew Borg for providing the data for the full
+MD simulations. This work is ﬁnancially supported in the UK by EPSRC
+Programme Grants EP/I011927/1 and EP/N016602/1, and EPSRC grants
+EP/K038664/1 and EP/L027682/1. The computing facilities were provided
+by the Centre for Scientiﬁc Computing of the University of Warwick with
+support from the Science Research Investment Fund.
+
+Appendix A. MD parameters
+
+Non-equilibrium MD simulations of dense ﬂuid argon are performed using
+mdFoam [30, 31] — an in-house solver developed in OpenFOAM. Atoms are
+modelled as hard spheres which interact using shifted Lennard-Jones (LJ)
+pair potentials, with wall atoms frozen in place. Our MD parameters are
+[28] for the full MD
+necessarily identical to those used by Borg et. al.
+
+27
+
+simulations. The LJ potential
+
+ULJ (rij) = 4
+
+(cid:34)(cid:18) σ
+
+rij
+
+(cid:19)12 −
+
+(cid:18) σ
+
+rij
+
+(cid:19)6(cid:35)
+
+,
+
+(A.1)
+
+has a cut-oﬀ radius of 1.36 nm; for the ﬂuid-ﬂuid interactions, the LJ char-
+acteristic length and energy are σf−f = 0.34 nm and f−f = 1.65678 × 10−21
+J, respectively; for the wall-ﬂuid interactions, these parameters are σw−f =
+0.255 nm and w−f = 0.33 × 10−21 J, respectively. The mass density of
+the wall atoms is 6.809 × 103 kg/m3, and the mass of a single atom is
+m = 6.6904 × 10−26 kg. Fluid atom dynamics are described by Newton’s
+laws of motion, which are numerically integrated using the Velocity Verlet
+method [32], with a time-step of 5.4 fs. The excess heat generated by apply-
+ing an external force is removed by modifying the velocities in the z-direction
+(see Fig. 1) using a Berendsen thermostat; this ensures a thermally homoge-
+neous system, maintained at a temperature of 292.8 K. All of our simulations
+are periodic in the s- and z-directions.
+
+Appendix B. Gaussian process regression of the full MD simula-
+
+tion data
+
+To obtain error estimates for our hybrid solution, the full MD mass ﬂow rate
+proﬁle is modelled using a Gaussian process with a single input: time t. As
+the underlying proﬁle is sinusoidal, we use a periodic kernel, i.e.
+
+(cid:18)
+−2 sin2 (π|t − t(cid:48)|/T )
+
+(cid:19)
+
+K(t, t(cid:48)) = σ2
+
+f exp
+
+(cid:96)2
+
+,
+
+(B.1)
+
+where T = 10.8 ns is the period of oscillation; the covariance function is
+still calculated using equation (10). For consistency with our hybrid scheme,
+we choose the signal standard deviation σf = 1 ng/s. We anticipate the
+noise standard deviation to be larger than in our quasi-steady subdomain
+simulations, due to transience of properties during the averaging period in
+the full MD simulation. Therefore, we optimise for the length scale and the
+noise standard deviation by maximising the log marginal likelihood of the
+raw full MD data (up to the ﬁrst peak), as outlined in §2.3, and ﬁnd that
+(cid:96) = 1 and σn = 0.1 ng/s (twice that of our MD subdomain simulations).
+Gaussian process regression is performed over the entire time series using
+equations (12) and (13), with the mean mass ﬂow rate assumed to be zero.
+
+28
+
+References
+
+References
+
+[1] R. Schoch, J. Han, P. Renaud, Transport phenomena in nanoﬂuidics,
+
+Rev. Mod. Phys. 80 (3) (2008) 839–883.
+
+[2] N. G. Hadjiconstantinou, Hybrid atomistic-continuum formulations and
+the moving contact-line problem, J. Comput. Phys. 154 (2) (1999) 245–
+265.
+
+[3] M. Brenner, X. Shi, S. Nagel, Iterated instabilities during droplet ﬁssion,
+
+Phys. Rev. Lett. 73 (25) (1994) 3391–3394.
+
+[4] G. Karniadakis, A. Beskok, N. Aluru, Microﬂows and Nanoﬂows: Fun-
+
+damentals and Simulation, Springer, 2005.
+
+[5] A. Patronis, D. A. Lockerby, Multiscale simulation of non-isothermal
+
+microchannel gas ﬂows, J. Comput. Phys. 270 (2014) 532–543.
+
+[6] K. Ritos, M. K. Borg, D. A. Lockerby, D. R. Emerson, J. M. Reese,
+Hybrid molecularcontinuum simulations of water ﬂow through carbon
+nanotube membranes of realistic thickness, Microﬂuid. Nanoﬂuid. 19
+(2015) 997–1010.
+
+[7] M. P. Allen, D. J. Tildesley, Computer Simulation of Liquids, Clarendon
+
+Press, 1987.
+
+[8] G. A. Bird, Molecular Gas Dynamics and the Direct Simulation of Gas
+
+Flows, Oxford Engineering Science Series 42, Clarendon Press, 1994.
+
+[9] H. S. Wijesinghe, N. G. Hadjiconstantinou, Discussion of hybrid
+atomistic-continuum methods for multiscale hydrodynamics, Int. J. Mul-
+tiscale Comput. Eng. 2 (2) (2004) 189–202.
+
+[10] N. G. Hadjiconstantinou, Discussion of recent developments in hybrid
+atomistic-continuum methods for multiscale hydrodynamics., Bull. Pol.
+Acad. Sci.: Tech. Sci. 53 (4) (2005) 335–342.
+
+[11] M. Kalweit, D. Drikakis, Multiscale methods for micro/nano ﬂows and
+
+materials, J. Comput. Theor. Nanosci. 5 (9) (2008) 1923–1938.
+
+29
+
+[12] K. M. Mohamed, A. A. Mohamad, A review of the development of hybrid
+atomistic-continuum methods for dense ﬂuids, Microﬂuid. Nanoﬂuid.
+8 (3) (2009) 283–302.
+
+[13] X. Nie, S. Chen, M. O. Robbins, Hybrid continuum-atomistic simulation
+
+of singular corner ﬂow, Phys. Fluids 16 (10) (2004) 3579.
+
+[14] M. K. Borg, D. A. Lockerby, J. M. Reese, Fluid simulations with atom-
+istic resolution: a hybrid multiscale method with ﬁeld-wise coupling, J.
+Comput. Phys. 255 (2013) 149–165.
+
+[15] A. Patronis, D. A. Lockerby, M. K. Borg, J. M. Reese, Hybrid
+continuum-molecular modelling of multiscale internal gas ﬂows, J. Com-
+put. Phys. 255 (2013) 558–571.
+
+[16] D. J. C. MacKay, Information theory, inference and learning algorithms,
+
+Cambridge Univ Press, Cambridge, 2003.
+
+[17] M. C. Kennedy, A. O’Hagan, Bayesian calibration of computer models,
+
+J. R. Stat. Soc. Series B Stat. Methodol. 63 (3) (2001) 425–464.
+
+[18] C. E. Rasmussen, C. K. I. Williams, Gaussian processes for machine
+
+learning., MIT Press, 2006.
+
+[19] M. Aldegunde, J. R. Kermode, N. Zabaras, Development of an
+exchange–correlation functional with uncertainty quantiﬁcation capabil-
+ities for density functional theory, J. Comput. Phys. 311 (2016) 173–195.
+
+[20] P. Angelikopoulos, C. Papadimitriou, P. Koumoutsakos, Data driven,
+predictive molecular dynamics for nanoscale ﬂow simulations under un-
+certainty, J. Phys. Chem. B 117 (47) (2013) 14808–14816.
+
+[21] J. Behler, M. Parrinello, Generalized Neural-Network Representation of
+High-Dimensional Potential-Energy Surfaces, Phys. Rev. Lett. 98 (14)
+(2007) 146401.
+
+[22] A. P. Bart´ok, M. C. Payne, R. Kondor, G. Cs´anyi, Gaussian Approxi-
+mation Potentials: The Accuracy of Quantum Mechanics, without the
+Electrons, Phys. Rev. Lett. 104 (13) (2010) 136403.
+
+30
+
+[23] W. J. Szlachta, A. P. Bart´ok, G. Cs´anyi, Accuracy and transferability
+of gaussian approximation potential models for tungsten, Phys. Rev. B
+Condens. Matter 90 (10) (2014) 104108.
+
+[24] Z. Li, J. R. Kermode, A. De Vita, Molecular dynamics with On-the-
+Fly machine learning of Quantum-Mechanical forces, Phys. Rev. Lett.
+114 (March) (2015) 096405.
+
+[25] V. Botu, R. Ramprasad, Adaptive machine learning framework to ac-
+celerate ab initio molecular dynamics, Int. J. Quantum Chem. 115 (16)
+(2015) 1074–1083.
+
+[26] M. Caccin, Z. Li, J. R. Kermode, A. De Vita, A framework for machine-
+learning-augmented multiscale atomistic simulations on parallel super-
+computers, Int. J. Quantum Chem. 115 (16) (2015) 1129–1139.
+
+[27] N. Asproulis, D. Drikakis, An artiﬁcial neural network-based multi-
+scale method for hybrid atomistic-continuum simulations, Microﬂuid.
+Nanoﬂuid. 15 (4) (2013) 559–574.
+
+[28] M. K. Borg, D. A. Lockerby, J. M. Reese, A hybrid molecular-continuum
+method for unsteady compressible multiscale ﬂows, J. Fluid Mech. 768
+(2015) 388–414.
+
+[29] P. A. Thompson, S. M. Troian, A general boundary condition for liquid
+
+ﬂow at solid surfaces, Nature 389 (6649) (1997) 360–362.
+
+[30] G. B. Macpherson, J. M. Reese, Molecular dynamics in arbitrary ge-
+ometries: parallel evaluation of pair forces, Mol. Simul. 34 (1) (2008)
+97–115.
+
+[31] M. K. Borg, G. B. Macpherson, J. M. Reese, Controllers for impos-
+ing continuum-to-molecular boundary conditions in arbitrary ﬂuid ﬂow
+geometries, Mol. Simul. 36 (10) (2010) 745–757.
+
+[32] W. C. Swope, H. C. Anderson, P. H. Berens, K. R. Wilson, A computer
+simulation method for the calculation of equilibrium constants for the
+formation of physical clusters of molecules: Application to small water
+clusters, J. Chem. Phys. 76 (1) (1982) 637–649.
+
+31
+
+

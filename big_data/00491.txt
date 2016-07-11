@@ -1,0 +1,747 @@
+Wanted: Floating-Point Add Round-off Error instruction
+
+Marat Dukhan
+
+mdukhan3@gatech.edu
+
+Richard Vuduc
+
+richie@cc.gatech.edu
+
+Jason Riedy
+
+jason.riedy@cc.gatech.edu
+
+School of Computational Science and Engineering
+
+Atlanta, GA
+
+College of Computing
+
+Georgia Institute of Technology
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+1
+
+ 
+
+ 
+ 
+]
+
+A
+N
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+1
+9
+4
+0
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+ABSTRACT
+We propose a new instruction (FPADDRE) that computes
+the round-oﬀ error in ﬂoating-point addition. We explain
+how this instruction beneﬁts high-precision arithmetic opera-
+tions in applications where double precision is not suﬃcient.
+Performance estimates on Intel Haswell, Intel Skylake, and
+AMD Steamroller processors, as well as Intel Knights Corner
+co-processor, demonstrate that such an instruction would
+improve the latency of double-double addition by up to 55%
+and increase double-double addition throughput by up to
+103%, with smaller, but non-negligible beneﬁts for double-
+double multiplication. The new instruction delivers up to
+2× speedups on three benchmarks that use high-precision
+ﬂoating-point arithmetic: double-double matrix-matrix mul-
+tiplication, compensated dot product, and polynomial evalu-
+ation via the compensated Horner scheme.
+1.
+
+INTRODUCTION
+
+High-precision ﬂoating-point computations are rep-
+resented by three kinds of algorithms: packed quadruple pre-
+cision arithmetic, multi-word arithmetics like double-double,
+and compensated algorithms. Quadruple precision arith-
+metic is implemented either in rare hardware [5] or through
+integer operations in software (the orange bars in Fig. 1).
+Double-double arithmetic (the blue bars in Fig. 1) is imple-
+mented in software and extends precision, but not range, by
+representing a number as the unevaluated sum of a pair of
+double-precision values (or more for triple-double, etc.). Each
+double-double operation uses multiple double-precision oper-
+ations to evaluate and renormalize the result. Compensated
+algorithms essentially inline the double-double operations
+and remove unnecessary intermediate normalizations for per-
+formance. This research advocates for a new instruction to
+greatly optimize (the green bars in Fig. 1) the latter variants,
+double-double arithmetic, and compensated algorithms.
+
+These arithmetics have been known for decades, but un-
+til recently they remained a rarely used hack of interest
+mostly to researchers in numerical computing. However, two
+recent trends suggest that high-precision ﬂoating-point arith-
+metics will become mainstream in the next decade. First,
+the wide availability of fused multiply-add (FMA) instruc-
+tions on general-purpose hardware tremendously improves
+the performance of double-double operations and compen-
+sated algorithms. Secondly, new application requirements are
+making extended precision important for a wider audience:
+• Numerical reproducibility is an important issue
+on modern systems. First, with multiple separately
+
+Figure 1: Latency of ﬂoating-point addition operation with
+double-precision, double-double, and quad-precision ﬂoating-
+point formats
+
+clocked cores and non-uniform memory access it be-
+comes ineﬃcient to statically distribute work across
+many threads. Nondeterministic thread scheduling
+techniques, like work-stealing, help to exploit all avail-
+able thread-level parallelism, but they also makes the
+result of ﬂoating-point summations dependent on ran-
+dom scheduling events, and thus non-reproducible. Sec-
+ondly, variations in SIMD- and instruction-level paral-
+lelism across CPU and GPU architectures introduces
+similar numerical reproducibility issues across diﬀerent
+platforms. Computing intermediate results to extra
+precision can reduce reproducibility issues, and a slight
+modiﬁcation to inner loops provides portable, accurate,
+and reproducible linear algebra based on double-double
+arithmetic [4].
+
+• The 2008 revision of IEEE-754 ﬂoating-point arith-
+metic standard recommends that mathematical func-
+tions, such as logarithms or arcsine, should be correctly
+rounded, i.e. accurate to the last bit. To satisfy this
+accuracy requirement, implementations need to use
+high-precision computations internally.
+
+• The number of scientiﬁc computing applications
+
+1
+
+0255075IntelSkylakeIntelHaswellAMDSteamrollerIntel Xeon Phi(Knights Corner)Addition latency, cyclesFormatquaddouble−doubledouble−doublewith FPADDREdoublethat need more than double-precision arithmetic is
+increasing. David Bailey’s review of high-precision
+ﬂoating-point arithmetic from 2005 lists 8 areas of sci-
+ence that use high-precision arithmetic [1], whereas his
+2014 presentation has expanded the list to 12 areas [2].
+
+2. ERROR-FREE TRANSFORMATIONS
+
+Error-free transformations are the workhorses of both
+double-double arithmetic and compensated algorithms. Error-
+free addition represents the sum of two ﬂoating-point values
+a + b as s + e where s is the result of ﬂoating-point addition
+instruction and e is its round-oﬀ error. Similarly, error-free
+multiplication represents the product of two ﬂoating-point
+values a· b as p + e where p is the result of ﬂoating-point mul-
+tiplication instructions and e is the multiplication round-oﬀ
+error.
+
+The multiplication round-oﬀ error can be computed with
+only one FMA instruction. However, computing the round-oﬀ
+error of addition in general requires 5 ﬂoating-point addition
+or subtraction instructions. In a special case when operands
+are ordered by magnitude, the round-oﬀ error can be com-
+puted with 2 ﬂoating-point instructions. Algorithms 1 and 2
+illustrate the operations in the error-free addition for the
+general and the special cases.
+
+Algorithm 1 Error-free addition algorithm for the general
+case. The algorithm is due to Knuth [7], but the listing below
+follows the notation of Theorem 7 from Shewchuk [9].
+
+function Error-Free-Add-General(a, b)
+
+sum ← FPADD(a, b)
+bvirtual ← FPADD(sum,−a)
+avirtual ← FPADD(sum,−bvirtual)
+broundof f ← FPADD(b,−bvirtual)
+aroundof f ← FPADD(a,−avirtual)
+error ← FPADD(aroundof f , broundof f )
+return sum, error
+
+end function
+
+Algorithm 2 Error-free addition algorithm for the special
+case when |a| ≥ |b|. The algorithm is due to Dekker [3], but
+the listing below follows the notation of Theorem 6 from
+Shewchuk [9].
+
+function Error-Free-Add-Special(a, b)
+
+sum ← FPADD(a, b)
+bvirtual ← FPADD(sum,−a)
+error ← FPADD(b,−bvirtual)
+return sum, error
+
+end function
+
+2.1 FPADDRE Instruction
+
+We propose a new instruction, Floating-Point Addi-
+tion Round-oﬀ Error (FPADDRE), that complements
+ﬂoating-point addition instruction (FPADD), and makes pos-
+sible to compute error-free addition in just two instructions,
+as demonstrated in Alg. 3.
+
+The ﬂoating-point addition (FPADD) instruction computes
+the sum of two ﬂoating-point numbers and then rounds the
+result to the nearest ﬂoating-point number, losing informa-
+tion in the last bits of the sum. The proposed FPADDRE
+instruction performs a similar operation but returns the last,
+
+Algorithm 3 Error-free addition algorithm in the general
+case using the proposed FPADDRE instruction. Note that
+the two operations in the algorithm are independent of each
+other, and could be computed in parallel.
+
+function Error-Free-Add-With-FPADDRE(a, b)
+
+sum ← FPADD(a, b)
+error ← FPADDRE(a, b)
+return sum, error
+
+end function
+
+Figure 2: Schema of FPADD and FPADDRE operations
+(the case of operands with the same sign and overlapping
+mantissas). The operations diﬀer only in two aspects: addi-
+tion or subtraction of a sticky bit and the bits copied to the
+resulting mantissa.
+
+normally wasted, bits of the sum. Figure 2 illustrates the sim-
+ilarities and diﬀerencies of the two operations. FPADDRE
+diﬀers only slightly from addition and could reuse its circuits
+in a hardware implementation. Besides replacing 5 FPADD
+operations, FPADDRE additionally improves the latency of
+error-free transformation by breaking the dependency chain
+between the addition result and the round-oﬀ error.
+
+Algorithm 4 Error-free addition algorithm in the general
+case using the FPADD3 instruction, suggested by Ogita et
+al. [8] Note that the two operations in the algorithm form a
+dependency chain and cannot be computed in parallel.
+function Error-Free-Add-With-FPADD3(a, b)
+
+sum ← FPADD(a, b)
+error ← FPADD3(a, b,−sum)
+return sum, error
+
+end function
+
+Ogita et al. proposed the FPADD3 instruction, which adds
+three ﬂoating-point values without intermediate rounding [8].
+Algorithm 4 shows that with an FPADD3 instruction, it
+would be possible to compute the addition round-oﬀ error
+with one instruction, albeit with a dependency on the FPADD
+result. Unfortunately, no general-purpose CPU or GPU
+implements the FPADD3 operation. One reason may be
+that a fast hardware implementation of FPADD3 would
+require considering 4 overlapping options for the three inputs,
+compared to just 2 overlapping cases in regular addition.
+The suggested FPADDRE instruction does not share this
+drawback.
+
+Table 1 summarizes the performance characteristics of the
+four versions of an error-free addition algorithm. It shows
+
+2
+
++120b1101011011+70b111111110111101011011_____ _____111111011011111011101011101+___________1____11110111011________________01101Error-Free Addition
+General case
+Special case (|a| ≥ |b|)
+With FPADDRE
+With FPADD3
+
+Instructions Latency slots
+
+6
+3
+2
+2
+
+5
+3
+1
+2
+
+Table 1: Performance characteristics of error-free addition
+algorithm in diﬀerent implementations.
+
+that an FPADDRE instruction enables the most performant
+implementation.
+
+3. PERFORMANCE SIMULATION
+
+We evaluate the speedups achievable with hardware FPAD-
+DRE implementations on three recent x86-64 processor mi-
+croarchitectures from Intel and AMD as well as on the Intel
+Xeon Phi co-processor based on the Knights Corner microar-
+chitecture. Table 2 details the benchmarking platforms. We
+evaluated all processors in single-thread mode, which can
+be suboptimal for absolute performance; however, we have
+no reasons to expect that it leads to systematic errors in
+estimation of speedups due to FPADDRE instruction. Be-
+cause FPADDRE is similar to ﬂoating-point addition, we
+assume that a hardware implementation would exhibit the
+same performance characteristics as ﬂoating-point addition.
+We implemented several high-precision ﬂoating-point bench-
+marks in C with intrinsics and ran two sets of tests. In the
+ﬁrst set, all operations were implemented with the default
+instruction set of the respective architectures. In the sec-
+ond set of tests, we simulated a FPADDRE instruction by
+replacing it with an instruction that has the same perfor-
+mance characteristics as ﬂoating-point addition. On AMD
+Steamroller we simulated fpaddre(a, b) as fma(a, a, b)
+and on other architectures we replaced it with min(a, b).
+Of course, such substitutions may lead to incorrect numerical
+results, but the incorrect results do not aﬀect the control
+ﬂow of the benchmarks.
+3.1 Microbenchmarks
+
+In this set of benchmarks, we measured the eﬀect of
+FPADDRE instruction on the performance characteristics of
+double-double addition and multiplication operations. The
+double-double addition involves 2 general-case error-free ad-
+ditions and 2 special-case error-free additions, and beneﬁts
+from FPADDRE the most. The double-double multiplica-
+tion involves only one special-case error-free addition, but
+nonetheless exhibits some speedup from FPADDRE.
+
+Each microbenchmark was replicated 1000 times, with the
+best performance reported. We observed negligible variation
+in reported performance across independent runs.
+
+Figure 3 shows the reduction of latency due to FPADDRE
+for double-double addition and multiplication. In this bench-
+mark, we measured the time to add or multiply all elements
+of a double-double array that ﬁts in the L1 cache.
+
+Figure 4 shows how FPADDRE instruction improves through-
+
+put of double-double addition and multiplication. In this
+benchmark, we measured the time to add or multipliply a
+double-double array with a double-double constant. In this
+case, the operations on diﬀerent array elements are indepen-
+dent and can be performed in parallel. The array size was
+selected to ﬁt into the L1 cache.
+
+3
+
+Figure 3: Reduction of latency of double-double addition
+and multiplication due to FPADDRE instruction
+
+Figure 4: Throughput improvement of double-double addi-
+tion and multiplication due to FPADDRE instruction
+
+3.2 Applications
+
+Beyond low-level microbenchmarks, we also proﬁled three
+kernels that arise in important applications of high-precision
+arithmetic: polynomial evaluation with the compensated
+Horner scheme, compensated dot product, and double-double
+matrix multiplication. Each application benchmark was
+repeated at least 1000 times, and we report the median
+performance across runs.
+
+The compensated Horner scheme evaluates polynomial
+with double-precision coeﬃcients in approximately double-
+double intermediate precision [6]. This algorithm is useful
+in correctly-rounded implementations of mathematical func-
+tions. Figure 5 shows that a FPADDRE instruction reduces
+the latency of 15-degree polynomial evaluation by 13%− 29%
+for the microarchitectures considered.
+
+The compensated dot product algorithm computes the
+dot product of double-precision vectors in approximately
+double-double internal precision [8]. The extra precision
+helps reproducibility on large data sets. For the benchmark,
+we implemented dot product and compensated dot product
+algorithms using SIMD intrinsics and unrolled the main loop
+by factors of 1 to 8. Figure 6 shows the performance of
+the dot product algorithms with the most performant unroll
+factors for each microarchitecture, algorithm, and array size.
+When the arrays ﬁt into the L1 cache, the compensated dot
+product algorithm is compute-bound, and the FPADDRE in-
+struction increases performance by 66%, 95%, 93%, and 29%
+
+55%3%45%0%53%1%36%11%0204060IntelSkylakeIntelHaswellAMDSteamrollerIntel Xeon Phi(Knights Corner)Latency reduction, %OperationAdditionMultiplication36%11%18%16%103%14%34%0%0306090IntelSkylakeIntelHaswellAMDSteamrollerIntel Xeon Phi(Knights Corner)Throughput improvement, %OperationAdditionMultiplicationFigure 6: Dot product and compensated dot product performance with standard ISA and with FPADDRE instruction
+
+on Intel Skylake, Intel Haswell, AMD Steamroller, and Intel
+Knights Corner, respectively. One additional instruction per
+operand guarantees reproducibility in summation [4], so fully
+reproducible dot products should see similar performance
+improvements.
+
+Matrix-matrix multiplication is a basic building block
+for computational linear algebra algorithms. Recently, van
+Zee and van de Geijn showed that state-of-the-art high-
+performance implementations of matrix-matrix multiplica-
+tion can be written mostly in portable high-level code, with
+only the small inner kernels using target-speciﬁc intrinsics or
+assembly [10]. For another benchmark, we implemented
+the inner kernel of general matrix-matrix multiplication
+(DDGEMM), where inputs, outputs and intermediate val-
+ues are stored in double-double format. Typically, this inner
+kernel is responsible for over 90% of compute time in a matrix-
+matrix multiplication. We considered inner kernels with mul-
+tiple register blocking parameters and selected the parameters
+that deliver the best performance for each microarchitecture.
+Figure 7 characterises the speedups in the matrix multiplica-
+tion when the instruction set is enriched with FPADDRE, and
+
+Table 3 characterises absolute performance of double-double
+matrix multipication micro-kernel (DDGEMM) in double-
+double MFLOPS and compares it to double-precision ma-
+trix multiplication (DGEMM) in double-precision MFLOPS.
+DGEMM performance is measured on production-quality
+libraries with 4096 × 4096 matrices; the DDGEMM perfor-
+mance numbers are for the micro-kernel only and ignore the
+overhead of repacking the matrices and boundary eﬀects.
+The data in Table 3 demonstrates that double-double matrix
+multiplication is presently 35 − 69× slower than in double-
+precision, and thus FPADDRE-provided acceleration is very
+welcome.
+
+4. FPMULRE INSTRUCTION
+An error-free multiplication transformation represents the
+product of two ﬂoating-point values a·b as p+e, where p is the
+result of the ﬂoating-point multiplication instruction and e
+is the multiplication round-oﬀ error. Most modern hardware
+platforms implement fused multiply-add (FMA) instructions,
+which permit computation of error-free multiplication with
+just two instructions, as illustrated in Alg. 5.
+
+4
+
+1231K4K16K64K256K1M4M16MArray size, elementsCycles per elementAlgorithmdot productcompensateddot productcompensateddot productwith FPADDREIntel Skylake microarchitecture1231K4K16K64K256K1M4M16MArray size, elementsCycles per elementAlgorithmdot productcompensateddot productcompensateddot productwith FPADDREIntel Haswell microarchitecture2461K4K16K64K256K1M4M16MArray size, elementsCycles per elementAlgorithmdot productcompensateddot productcompensateddot productwith FPADDREAMD Steamroller microarchitecture12341K4K16K64K256K1M4M16MArray size, elementsCycles per elementAlgorithmdot productcompensateddot productcompensateddot productwith FPADDREIntel Knights Corner microarchitectureAlgorithm 6 Error-free multiplication algorithm using the
+proposed FPMULRE instruction. Note that the two oper-
+ations in the algorithm are independent of each other and
+can be computed in parallel.
+
+function Error-Free-Mul-With-FPMULRE(a, b)
+
+product ← FPMUL(a, b)
+error ← FPMULRE(a, b)
+return product, error
+
+end function
+
+vates our proposed Floating-Point Addition Round-oﬀ Error
+(FPADDRE), which can accelerate error-free addition and
+algorithms based on error-free transformations, including
+double-double arithmetics, compensated Horner scheme, com-
+pensated dot product, and compensated summation. Our
+performance simulations suggest that if FPADDRE were im-
+plemented in recent processors and co-processors, we would
+observe a 13% − 29% reduction in latency of compensated
+Horner scheme, up to 29% − 95% performance increase in
+compensated dot product, and 28%− 93% speedup in double-
+double matrix multiplication. The same idea could be trans-
+lated to multiplication, where a Floating-Point Multiplication
+Round-oﬀ Error (FPMULRE) would improve latency and
+energy eﬃciency of error-free multiplication.
+
+To facilitate and encourage further research on these ideas
+we released the source code for the implemented algorithms
+and simulations on www.GitHub.com/Maratyszcza/FPplus.
+
+Acknowledgements
+We thank Edmond Chow and his Intel Parallel Computing
+Center at Georgia Tech for access to Xeon Phi-based platform.
+We also thank James Demmel (UC Berkeley) and Greg Henry
+(Intel) for discussions on reproducibility and performance.
+
+This material is based upon work supported by the U.S.
+National Science Foundation (NSF) Award Number 1339745
+and the U.S. Dept. of Energy (DOE), Oﬃce of Science,
+Advanced Scientiﬁc Computing Research under award DE-
+FC02-10ER26006/DE-SC0004915. Any opinions, ﬁndings
+and conclusions or recommendations expressed in this mate-
+rial are those of the authors and do not necessarily reﬂect
+those of NSF or DOE. The work also partially sponsored
+by Defense Advanced Research Projects Agency (DARPA)
+under agreement #HR0011-13-2-0001. The content, views
+and conclusions presented in this document do not neces-
+sarily reﬂect the position or the policy of DARPA or the
+U.S. Government, no oﬃcial endorsement should be inferred.
+Distribution Statement A: “Approved for public release; dis-
+tribution is unlimited.”
+
+6. REFERENCES
+[1] David H Bailey. High-precision ﬂoating-point
+
+arithmetic in scientiﬁc computation. Computing in
+science & engineering, 7(3):54–61, 2005.
+
+[2] David H Bailey. Using high-precision arithmetic to
+
+conquer numerical error. Presented as the International
+Conference for High-Performance Computing,
+Networking, Storage and Analysis (2013), Denver, CO,
+2014.
+
+[3] Theodorus Jozef Dekker. A ﬂoating-point technique for
+
+extending the available precision. Numerische
+Mathematik, 18(3):224–242, 1971.
+
+Figure 5: Latency of 15-order polynomial evaluation with
+compensated Horner scheme
+
+Figure 7: Double-double matrix multiplication acceleration
+with FPADDRE instruction
+
+Nonetheless, a case can be made for an instruction sim-
+ilar to FPADDRE, but for multiplication. We would call
+this instruction Floating-Point Multiplication Round-oﬀ Er-
+ror (FPMULRE). FPMULRE would directly compute the
+round-oﬀ error of multiplication operations; the operation is
+similar to ﬂoating-point multiplication and could share hard-
+ware circuits with it. FPMULRE would beneﬁt error-free
+multiplications in two ways. First, it would allow computa-
+tion of both outputs of error-free multiplication in parallel,
+thereby reducing its latency. Algorithm 6 illustrates this
+point. Secondly, FPMULRE is simpler than fused multiply-
+add, and its implementation can be more energy-eﬃcient
+than an FMA’s implementation. As FPMULRE replaces
+FMA in the error-free multiplication, it could result in bet-
+ter energy eﬃciency of this transformation and higher-level
+high-precision operations.
+
+5. CONCLUSIONS
+
+High-precision ﬂoating-point arithmetic is about to be-
+come a common computing technique. This claim moti-
+
+Algorithm 5 Error-free multiplication algorithm using the
+FMA instruction. The two operations in the algorithm form
+a dependency chain and cannot be computed in parallel.
+
+function Error-Free-Mul-With-FMA(a, b)
+
+product ← FPMUL(a, b)
+error ← FMA(a, b,−product)
+return product, error
+
+end function
+
+5
+
+157571301577513619169153323642290100200300IntelSkylakeIntelHaswellAMDSteamrollerIntel Xeon Phi(Knights Corner)Latency, cyclesAlgorithmHorner schemecompensated Horner schemecompensated Horner schemewith FPADDRE28%84%90%93%Intel Xeon Phi(Knights Corner)AMDSteamrollerIntelHaswellIntelSkylake0255075100Speedup, %[4] J. Demmel and H. D. Nguyen. Parallel reproducible
+
+summation. IEEE Transactions on Computers,
+64(7):2060–2070, July 2015.
+
+[5] Guenter Gerwig, Holger Wetter, Eric M Schwarz,
+
+Juergen Haess, Christopher A Krygowski, Bruce M
+Fleischer, and Michael Kroener. The IBM eServer z990
+ﬂoating-point unit. IBM Journal of Research and
+Development, 48(3.4):311–322, 2004.
+
+[6] Stef Graillat, Philippe Langlois, and Nicolas Louvet.
+
+Compensated horner scheme. In Algebraic and
+Numerical Algorithms and Computer-Assisted Proofs,
+B. Buchberger, S. Oishi, M. Plum and SM Rump (eds.),
+Dagstuhl Seminar Proceedings, number 05391, 2005.
+
+[7] Donald E. Knuth. Seminumerical Algorithms, volume 2
+of The Art of Computer Programming. Addison-Wesley,
+Boston, MA, USA, 1997.
+
+[8] Takeshi Ogita, Siegfried M Rump, and Shin’ichi Oishi.
+
+Accurate sum and dot product. SIAM Journal on
+Scientiﬁc Computing, 26(6):1955–1988, 2005.
+
+[9] Jonathan Richard Shewchuk. Adaptive precision
+
+ﬂoating-point arithmetic and fast robust geometric
+predicates. Discrete & Computational Geometry,
+18(3):305–363, 1997.
+
+[10] Field G Van Zee and Robert A Van De Geijn. BLIS: A
+framework for rapidly instantiating blas functionality.
+ACM Trans. Math. Softw, 2013.
+
+6
+
+Intel Core i7-6700K Intel Core i7-4700K
+
+AMD A10-7850K
+
+Intel Xeon Phi SE10P
+
+Steamroller
+
+3.7 GHz
+
+Knights Corner
+
+1.1 GHz
+
+Skylake
+4.0 GHz
+
+32K
+256K
+8M
+4
+
+P0 or P1
+P0 or P1
+P0 or P1
+
+4
+4
+4
+
+Haswell
+3.5 GHz
+
+32K
+256K
+8M
+4
+P0
+
+P0 or P1
+P0 or P1
+
+3
+5
+5
+
+16K
+2M
+None
+
+4
+
+P0 and P1
+P0 and P1
+P0 and P1
+
+5
+5
+5
+
+32K
+512K
+None
+
+8
+
+VALU
+VALU
+VALU
+
+4
+4
+4
+
+icc 15.0.0
+-O3 -mmic
+
+Processor
+Microarchitecture
+Frequency
+L1D Cache
+L2 Cache
+L3 Cache
+SIMD width (double)
+SIMD ADD issue ports
+SIMD MUL issue ports
+SIMD FMA issue ports
+FP ADD latency
+FP MUL latency
+FP FMA latency
+Compiler
+Optimization ﬂags
+Floating-point ﬂags
+
+gcc 5.2.1
+
+gcc 5.2.1
+
+gcc 5.2.1
+
+-O3 -mavx2 -mfma
+
+-ﬀp-contract=oﬀ
+
+-O3 -mcore-avx2
+-ﬀp-contract=oﬀ
+
+-O3 -march=bdver3
+
+-ﬀp-contract=oﬀ
+
+-fp-model precise -no-fma
+
+Table 2: Processors and co-processor used in performance evaluation
+
+Operation
+1732 (≈ 1/37 DP)
+DDGEMM
+DDGEMM with FPADDRE 3344 (≈ 1/19 DP)
+63603 (MKL)
+DGEMM
+
+Intel Skylake
+
+Intel Haswell
+
+1199 (≈ 1/45 DP)
+2283 (≈ 1/24 DP)
+51409 (MKL)
+
+AMD Steamroller
+743 (≈ 1/25 DP)
+1370 (≈ 1/19 DP)
+25869 (OpenBLAS)
+
+Intel Knights Corner
+
+255 (≈ 1/17 DP)
+326 (≈ 1/14 DP)
+4439 (MKL)
+
+Table 3: Performance (in MFLOPS) of general matrix-matrix multiplication on the four benchmarked microarchitectures
+
+7
+
+

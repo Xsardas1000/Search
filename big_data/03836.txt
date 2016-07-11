@@ -1,0 +1,1468 @@
+Near-Isometric Binary Hashing for Large-scale Datasets
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+2
+1
+
+ 
+ 
+]
+S
+D
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+6
+3
+8
+3
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Amirali Aghazadeh
+Department of Electrical and Computer Engineering, Rice University, Houston, TX, USA
+Andrew Lan
+Department of Electrical and Computer Engineering, Rice University, Houston, TX, USA
+Anshumali Shrivastava
+Department of Computer Science, Rice University, Houston, TX, USA
+Richard Baraniuk
+Department of Electrical and Computer Engineering, Rice University, Houston, TX, USA
+
+AMIRALI@RICE.EDU
+
+MR.LAN@SPARFA.COM
+
+ANSHUMALI@RICE.EDU
+
+RICHB@RICE.EDU
+
+Abstract
+
+We develop a scalable algorithm to learn bi-
+nary hash codes for indexing large-scale datasets.
+Near-isometric binary hashing (NIBH) is a data-
+dependent hashing scheme that quantizes the
+output of a learned low-dimensional embed-
+ding to obtain a binary hash code.
+In contrast
+to conventional hashing schemes, which typi-
+cally rely on an (cid:96)2-norm (i.e., average distor-
+tion) minimization, NIBH is based on a (cid:96)∞-
+norm (i.e., worst-case distortion) minimization
+that provides several beneﬁts, including superior
+distance, ranking, and near-neighbor preserva-
+tion performance. We develop a practical and ef-
+ﬁcient algorithm for NIBH based on column gen-
+eration that scales well to large datasets. A range
+of experimental evaluations demonstrate the su-
+periority of NIBH over ten state-of-the-art binary
+hashing schemes.
+
+1. Introduction
+Hashing, one of the primitive operations in large-scale sys-
+tems, seeks a low-dimensional binary embedding of a high-
+dimensional data set. Such a binary embedding can in-
+crease the computational efﬁciency of a variety of tasks,
+including searching, learning, near-neighbor retrieval, etc.
+One of the fundamental challenges in machine learning is
+the development of efﬁcient hashing algorithms that embed
+data points into compact binary codes while preserving the
+geometry of the original dataset.
+
+In this paper, we are interested in learning near-isometric
+binary embeddings, i.e., hash functions that preserve the
+distances between data points up to a given distortion in
+the Hamming space. More rigorously, let Z and Y denote
+metric spaces with metrics dZ and dY, respectively. An
+embedding f : Z → Y is called near-isometric (Plan &
+Vershynin, 2014, Def. 1.1) if, for every pair of data points
+zi, zj ∈ Z, we have
+
+dZ (zi, zj) − γ≤ dY (f (zi), f (zj))≤ dZ (zi, zj) + γ,
+
+where γ is called the isometry constant. In words, f is near-
+isometric if and only if the entries of the pairwise-distortion
+vector containing the distance distortion between every pair
+of data points |dZ (zi, zj) − dY (f (zi), f (zj))|,∀i > j do
+not exceed the isometry constant γ. A near-isometric em-
+bedding is approximately distance-preserving in that the
+distance between any pairs of data points in the embedded
+space Y is approximately equal to their distance in the am-
+bient space Z (Hegde et al., 2015; Shaw & Jebara, 2007;
+Weinberger & Saul, 2006).
+The simplest and most popular binary hashing scheme,
+random projection, simply projects the data into a lower-
+dimensional (lower-bit) random subspace and then quan-
+tizes to binary values. Random projections are known to be
+near-isometric with high probability, due to the celebrated
+Johnson-Lindenstrauss (JL) lemma (Andoni et al., 2014;
+Datar et al., 2004; Plan & Vershynin, 2014). Algorithms
+based on the JL lemma belong to the family of probabilis-
+tic dimensionality reduction techniques; a notable example
+is locality sensitive hashing (LSH) (Andoni et al., 2014;
+Datar et al., 2004). Unfortunately, theoretical results on
+LSH state that the number of bits required to guarantee an
+isometric embedding can be as large as the number of data
+points (Datar et al., 2004; Plan & Vershynin, 2014). Even
+
+Near-Isometric Binary Hashing for Large-scale Datasets
+
+in practice, LSH’s requirement on the number of bits is im-
+practically high for indexing many real-world, large-scale
+datasets (Lv et al., 2007).
+Consequently, several data-dependent binary hashing algo-
+rithms have been developed that leverage the structure of
+the data to learn compact binary codes. These methods en-
+able a signiﬁcant reduction in the number of bits required
+to index large-scale datasets compared to LSH; see (Wang
+et al., 2014) for a survey. However, learning compact bi-
+nary codes that preserve the local geometry of the data re-
+mains challenging.
+These data-dependent hashing algorithms focus on the
+choice of the distortion measure. Typically, after ﬁnding
+the appropriate distortion measure, the hash functions are
+learned by minimizing the average distortion, i.e., the (cid:96)2-
+norm of the pairwise-distortion vector, which sums the dis-
+tortion among all pairwise distances with equal weights.
+Binary reconstructive embedding (BRE) (Kulis & Darrell,
+2009), for example, uses an optimization algorithm to di-
+rectly minimize the average distortion in the embedded
+sapce. Spectral Hashing (SH) (Weiss et al., 2009), Anchor
+Graph Hashing (AGH) (Liu et al., 2011), Multidimensional
+Spectral Hashing (MDSH) (Weiss et al., 2012), and Scal-
+able Graph Hashing (SGH) (Jiang & Li, 2015) deﬁne no-
+tions of similarity based on a function of (cid:96)2-distance be-
+tween the data points (cid:107)zi − zj(cid:107)2 and use spectral methods
+to learn hash functions that keep similar points sufﬁciently
+close. Some other hashing algorithms ﬁrst project the data
+onto its principal components, e.g., PCA Hashing (PCAH)
+(Jolliffe, 2002), which embeds with minimal average dis-
+tortion, and then learn a rotation matrix to minimize the
+quantization error (Gong & Lazebnik, 2011) or balance the
+variance across the components (Isotropic Hashing (Iso-
+Hash) (Kong & Li, 2012)).
+While minimizing the average distortion seems natural, this
+approach can sacriﬁce the preservation of certain pairwise
+distances in favor of others. As we demonstrate below, this
+can lead to poor performance in certain applications, such
+as the preservation of nearest neighbors.
+In response, in
+this paper, we develop a new data-driven hashing algorithm
+that minimizes the worst-case distortion among the pair-
+wise distances, i.e., the (cid:96)∞-norm of the pairwise-distortion
+vector.
+Figure 1 illustrates the advantages of minimizing the
+(cid:96)∞-norm of
+instead of
+its (cid:96)2-norm.
+Consider three clusters of points in a
+two-dimensional space. We compute the optimal one-
+dimensional embeddings of the data points by minimizing
+the (cid:96)∞-norm and the (cid:96)2-norm of the pairwise-distortion
+vector using a grid search over the angular orientation of
+the line that represents the embedding. We evaluate the
+near-neighbor preservation of a given query point in the
+
+the pairwise-distortion vector
+
+Figure 1. Comparison of the near-neighbor (NN) preservation
+performance of hashing based on minimizing the (cid:96)∞-norm
+(worst-case distortion) vs. the (cid:96)2-norm (average distortion) of
+the pairwise distance distortion vector on an illustrative data set.
+(a) For a dataset with three clusters (5 circles, 5 squares, and 60
+stars), we found the optimal embeddings for both error metrics us-
+ing grid search. (b) The projection of the data points using the (cid:96)∞-
+optimal embedding preserves three well-separated clusters; how-
+ever the projection using the (cid:96)2-optimal embedding mixes circles
+and squares, projecting them into a single cluster. For the query
+point q = (0, 0), all of its nearest neighbors NN(q) are preserved
+with the correct ordering using the worst-based distortion embed-
+ding but not the average distortion embedding.
+
+embedded space (shown in Fig. 1 (b)). For a query point
+q, located without loss of generality at the origin, the near-
+est neighbor ranking from the ambient space is destroyed
+by the (cid:96)2-optimal embedding, since the circle and square
+clusters overlap.
+In contrast, the (cid:96)∞-optimal embedding
+exactly preserves the rankings.
+This illustration emphasizes the importance of preserving
+relevant distances in data retrieval tasks. To minimize
+the average distortion, the (cid:96)2-optimal embedding (dashed
+red line) sacriﬁces the square–circle distances in favor of
+the square–star and circle–star distances, which contribute
+more to the (cid:96)2-norm of the pairwise distance distortion vec-
+tor. In contrast, the (cid:96)∞-optimal embedding focuses on the
+hardest distances to preserve (i.e., the worst-case distor-
+tion), leading to an embedding with smaller isometry con-
+stant than the (cid:96)2-optimal embedding. Preservation of these
+distances is critical for near-neighbor retrieval.
+1.1. Contributions
+
+We make four distinct contributions in this paper. First,
+conceptually, we advocate minimizing the worst-case dis-
+tortion, which is formulated as an (cid:96)∞-norm minimiza-
+tion problem, and show that this approach outperforms ap-
+proaches based on minimizing the average, (cid:96)2-norm distor-
+tion in a range of computer vision and learning scenarios
+(Hartley & Schaffalitzky, 2004).
+Second, algorithmically,
+since (cid:96)∞-norm minimization
+problems are computationally challenging, especially for
+large datasets, we develop two accelerated and scalable al-
+
+01002000Cluster 1Cluster 2Cluster 3L∞ L2  (a) 10(b) q = (0,0)NN(q) = [1-2-3-4-5-6-7-8-9-10]NN(q) = [1-2-3-4-5-6-7-8-9-10]NN(q) = [10-4-2-1-8-6-3-7-5-9]Near-Isometric Binary Hashing for Large-scale Datasets
+
+gorithms to ﬁnd the optimal worst-case embedding. The
+ﬁrst, near-isometric binary hashing (NIBH), is based on
+the alternating direction method of multipliers (ADMM)
+framework (Boyd et al., 2011). The second, NIBH-CG, is
+based on an accelerated greedy extension of the NIBH al-
+gorithm using the concept of column generation (Dantzig
+& Wolfe, 1960). NIBH-CG can rapidly learn hashing func-
+tions from large-scale data sets that require the preservation
+of billions of pairwise distances (e.g., MNIST).
+Third, theoretically, since current data-dependent hashing
+algorithms do not offer any probabilistic guarantees in
+terms of preserving near-neighbors, we develop new theory
+to prove that, under natural assumptions regarding the data
+distribution and with a notion of hardness of near-neighbor
+search, NIBH preserves the nearest neighbors with high
+probability. Our analysis approach could be of indepen-
+dent interest for obtaining theoretical guarantees for other
+data-dependent hashing schemes.
+Fourth, experimentally, we demonstrate the superior per-
+formance of NIBH as compared to ten state-of-the-art bi-
+nary hashing algorithms using an exhaustive set of experi-
+mental evaluations involving six diverse datasets and three
+different performance metrics (near-isometry, Hamming
+distance ranking, and kendall τ ranking performance). In
+particular, we show that NIBH achieves the same distance
+preservation and Hamming ranking performance as state-
+of-the-art algorithms while using up to 60% fewer bits. Our
+experiments clearly show the superiority of the (cid:96)∞-norm
+formulation over the more classical (cid:96)2-norm formulation
+that underlies many hashing algorithms, such as BRE and
+IsoHash. Our formulation also outperforms recently devel-
+oped techniques that assume more structure in their hash
+functions, such as Spherical Hamming Distance Hashing
+(SHD) (Heo et al., 2012) and Circulant Binary Embedding
+(CBE) (Yu et al., 2014).
+2. Near-Isometric Binary Hashing
+The standard formulation for data dependent binary hash
+function embeds a data point x ∈ RN into the low-
+dimensional Hamming space H = {0, 1}M by ﬁrst mul-
+tiplying it by an embedding matrix W ∈ RM×N and then
+quantizing the entries of the product Wx to binary values:
+
+1 + sgn(Wx)
+
+h(Wx) =
+
+(1)
+The function sgn(·) operates element-wise on the entries of
+Wx, transforming the real-valued vector Wx into a set of
+binary codes depending on the sign of the entries in Wx.
+
+2
+
+.
+
+2.1. Problem formulation
+
+Consider the design of an embedding f that maps Q
+high-dimensional data vectors X = {x1, x2, . . . , xQ} in
+
+the ambient space RN into low-dimensional binary codes
+H = {h1, h2, . . . , hQ} in the Hamming space with hi ∈
+{0, 1}M , where hi = f (xi), i = 1, . . . , Q, and M (cid:28) N.
+Deﬁne the distortion of the embedding by
+
+δ = inf
+λ>0
+
+sup
+(i,j)∈Ω
+
+|λdH (hi, hj) − d(xi, xj)|,
+
+with Ω = {(i, j) : i, j ∈ {1, 2, . . . , Q}, i > j},
+
+where d(xi, xj) denotes the Euclidean distance between
+the data points xi, xj, dH (hi, hj) denotes the Hamming
+distance between the binary codes hi and hj, and λ is a
+positive scaling variable. The distortion δ measures the
+worst-case deviation from perfect isometry (i.e., optimal
+distance preservation) among all pairs of data points. De-
+ﬁne the secant set S(X ) as S(X ) = {xi−xj : (i, j) ∈ Ω},
+i.e., the set of all pairwise difference vectors in X . Let
+|S(X )| = |Ω| = Q(Q − 1)/2 denote the size of the se-
+cant set. Note that the common distortion measure utilized
+in other hashing algorithms is the average distortion, i.e.,
+
+(cid:80)
+i>j(λdH (hi, hj) − d(xi, xj))2/|Ω|.
+
+We formulate the problem of minimizing the distortion pa-
+rameter δ as the following optimization problem:
+
+(cid:12)(cid:12)(cid:12)λ(cid:107)h(Wxi) − h(Wxj)(cid:107)2
+
+minimize
+W,λ>0
+
+sup
+(i,j)∈Ω
+
+(cid:12)(cid:12)(cid:12) ,
+
+2 − (cid:107)xi − xj(cid:107)2
+
+since the squared (cid:96)2-distance between a pair of binary
+codes is equivalent to their Hamming distance up to a scal-
+ing factor that can be absorbed into λ. We can rewrite the
+above optimization problem as
+
+(P∗) minimize
+
+W,λ>0
+
+(cid:107)λv(cid:48)(W) − c(cid:107)∞,
+
+where v(cid:48) ∈ NQ(Q−1)/2 is a vector containing the pairwise
+Hamming distances between the embedded data vectors
+(cid:107)h(xi) − h(xj)(cid:107)2
+2, and c is a vector containing the pair-
+wise (cid:96)2-distances between the original data vectors.
+In-
+tuitively, the (cid:96)∞-norm objective optimizes the worst-case
+distortion among all pairs of data points.
+The problem (P∗) is a combinatorial problem with com-
+plexity O(Q2M ). To overcome the combinatorial nature of
+the problem, we approximate the hash function h(·) by the
+sigmoid function (also known as the inverse logit link func-
+tion) σ(x) = (1 + e−x)−1. This enables us to approximate
+(P∗) by the following optimization problem:
+(cid:107)λv(W) − c(cid:107)∞,
+
+(P) minimize
+W,λ>0
+
++
+
+moid relaxation (cid:13)(cid:13)(1 + e−Wxi)−1 − (1 + e−Wxj )−1(cid:13)(cid:13)2
+
+where v ∈ RQ(Q−1)/2
+is a vector containing the pairwise
+(cid:96)2 distances between the embedded data vectors after sig-
+2.
+Here the sigmoid function operates element-wise on Wxi.
+In practice we use a more general deﬁnition of the sigmoid
+
+Near-Isometric Binary Hashing for Large-scale Datasets
+
+function, deﬁned as σα(x) = (1 + e−αx)−1, where α is the
+rate parameter controlling how closely it approximates the
+non-smooth function h(·). The following lemma character-
+izes the quality of such an approximation (see the Appendix
+for a proof).
+Lemma 1. Let x be a Gaussian random variable as x ∼
+N (µ, σ2). Deﬁne the distortion of the sigmoid approxi-
+mation at x as |h(x) − σα(x)|. Then, the expected dis-
+tortion is bounded as Ex[|h(x) − σα(x)|] ≤
++
+2e−(
+α+c/ασ2), where c is a positive constant. As α goes
+to inﬁnity, the expected distortion goes to 0.
+
+√
+1
+2πα
+
+√
+
+σ
+
+Remark. As has been noted in the machine vision litera-
+ture (Zoran & Weiss, 2012), a natural model for an image
+database is that its images are generated from a mixture of
+Gaussian distributions. Lem. 3 bounds the deviation of the
+sigmoid approximation from the non-smooth hash function
+(1) under this model.
+
+2.2. Near-isometry and nearest neighbor preservation
+
+Inspired by the deﬁnition of relative contrast in (He et al.,
+2012), we deﬁne a more generalized measure of data sep-
+arability to preserve k-NN that we call the k-order gap
+∆k := d(x0, xk+1) − d(x0, xk), where x0 is a query point
+and xk and xk+1 are its kth and k + 1th nearest neighbors,
+respectively. We formally show that if the data is highly
+separable (∆k is large), then the above approach preserves
+all k nearest neighbors with high probability (see the Ap-
+pendix for a proof and discussion).
+
+i.e., xi ∼ (cid:80)P
+
+Theorem 2. Assume that all the data points are indepen-
+dently generated from a mixture of Gaussian distribution
+p=1 πpN (µp, Σp). Let x0 ∈ RN denote a
+query data point in the ambient space, and the other data
+points xi be ordered so that d(x0, x1) < d(x0, x2) <
+. . . < d(x0, xQ). Let δ denote the ﬁnal value of the dis-
+tortion parameter computed from any binary hashing al-
+gorithm, and let c denote a positive constant. Then, if
+Ex[∆k] ≥ 2δ +
+ , the binary hashing algorithm
+preserves all the k-nearest neighbors of a data point with
+probability at least 1 − .
+
+»
+
+c log Qk
+
+1
+
+problem:
+
+minimize
+W,u,λ>0
+
+(cid:107)u(cid:107)∞ subject to u = λv(W) − c.
+
+(2)
+
+(cid:107)u(cid:107)∞ + ρ
+
+The augmented Lagrangian form of this problem can be
+2(cid:107)u − λv(W) + c + y(cid:107)2
+written as minimize
+2 ,
+W,u,λ>0
+where ρ is the scaling parameter in ADMM and y ∈
+RQ(Q−1)/2 is the Lagrange multiplier vector. The NIBH
+algorithm proceeds as follows. First, the variables W, λ, u,
+and Lagrange multipliers y are initialized randomly. Then,
+at each iteration, we optimize over each of the variables
+W, u, and λ while holding the other variables ﬁxed. More
+speciﬁcally, in iteration (cid:96), we perform the following four
+steps until convergence:
+
+ij −λ((cid:96))(cid:107)
+
+1+e−Wxi −
+
+(cid:80)
+over W via W((cid:96)+1)
+(i,j)∈Ω(u((cid:96))
+2− y((cid:96))
+
+←
+• Optimize
+−Wxj (cid:107)2
+arg min
+1
+2+
+2
+(cid:107)xi − xj(cid:107)2
+ij )2, where λ((cid:96)) denotes the value of λ in
+the (cid:96)th iteration. We also use u((cid:96))
+to denote the
+entries in u((cid:96)) and y((cid:96)) that correspond to the pair xi and
+xj in the dataset X . We show in our experiments below
+that using the accelerated ﬁrst-order gradient descent
+algorithm (Nesterov, 2007) to solve this subproblem
+results in good empirical convergence performance (see
+the Appendix).
+
+ij and y((cid:96))
+
+1+e
+
+W
+
+ij
+
+1
+
+1
+
+• Optimize over u while holding the other variables ﬁxed;
+it corresponds to solving the proximal problem of the
+2(cid:107)u− λ((cid:96))v((cid:96)+1) +
+(cid:96)∞-norm u((cid:96)+1) ← arg min
+c + y((cid:96))(cid:107)2
+2. We use the low-cost algorithm described in
+(Studer et al., 2014) to perform the proximal operator up-
+date.
+
+(cid:107)u(cid:107)∞ + ρ
+
+u
+
+1
+
+• Optimize over λ while holding the other variables ﬁxed;
+it corresponds to a positive least squares problem, where
+λ is updated as λ((cid:96)+1)←arg min
+2(cid:107)u((cid:96)+1)−λv((cid:96)+1)+c+
+y((cid:96))(cid:107)2
+2. We perform this update using the non-negative
+least squares algorithm (Kim & Park, 2007).
+• Update y via y((cid:96)+1)←y((cid:96)) + η(u((cid:96)+1) − λ((cid:96)+1)v((cid:96)+1) +
+c), where the parameter η controls the dual update step
+size.
+
+λ>0
+
+2.3. The NIBH algorithm
+
+2.4. Accelerated NIBH for large-scale datasets
+
+We now develop an algorithm to solve the optimization
+problem (P). We apply the alternating direction method
+of multipliers (ADMM) framework (Boyd et al., 2011) to
+construct an efﬁcient algorithm to ﬁnd a (possibly local)
+optimal solution of (P). Note that (P) is non-convex, and
+therefore no standard optimization method is guaranteed to
+converge to a globally optimal solution in general. We in-
+troduce an auxiliary variable u to arrive at the equivalent
+
+The ADMM-based NIBH algorithm is efﬁcient for small-
+scale datasets (e.g., for secant sets of size |S(X )| < 5000
+or so). However, the memory requirement of NIBH is
+quadratic in |X|, which would be problematic for appli-
+cations involving large-scale numbers of data points and
+secants.
+In response, we develop an algorithm that ap-
+proximately solves (P) while scaling very well to large-
+scale problems. The key idea comes from classical results
+
+Near-Isometric Binary Hashing for Large-scale Datasets
+
+in optimization theory related to column generation (CG)
+(Dantzig & Wolfe, 1960; Hegde et al., 2015).
+The optimization problem (2) is an (cid:96)∞-norm minimiza-
+tion problem with an equality constraint on each secant.
+The Karush-Kuhn-Tucker (KKT) condition for this prob-
+lem states that, if strong duality holds, then the optimal so-
+lution is entirely speciﬁed by a (typically very small) por-
+tion of the constraints. Intuitively, the secants correspond-
+ing to these constraints are the pairwise distances that are
+harder to preserve in the low-dimensional Hamming space.
+We call the set of such secants the active set. In order to
+solve (P), it sufﬁces to ﬁnd the active secants and solve
+NIBH with a much smaller number of active constraints.
+To leverage the idea of the active set, we iteratively run
+NIBH on a small subset of all the secants that violate the
+near-isometry condition, as detailed below:
+
+cants S(X ) using NIBH to obtain(cid:99)W, ˆδ, and ˆλ, initial
+
+• Solve (P) with a small random subset S0 of all the se-
+estimates of the parameters. Identify the active set Sa.
+Fix λ = ˆλ for the rest of the algorithm.
+• Randomly select a new subset Sv ⊂ S of secants that
+violate the near isometry condition using the current
+secant set Saug = Sa ∪ Sv.
+• Solve (P) with the secants in the set Saug using the
+NIBH algorithm.
+
+estimates of (cid:99)W, ˆδ, and ˆλ. Then, form an augmented
+
+We dub this approach NIBH-CG. NIBH-CG iterates over
+the above steps until no new violating secants are added
+to the active set. Since the algorithm searches over all the
+secants for violating secants in each iteration before ter-
+minating, NIBH-CG ensures that all of the constraints are
+satisﬁed when it terminates. A key beneﬁt of NIBH-CG
+is that only the set of active secants (and not all secants)
+needs to be stored in memory. This beneﬁt leads to signif-
+icant improvements in terms of memory complexity over
+competing algorithms, since the set of all secants quickly
+becomes large-scale and can exceed the system memory
+capacity in large-scale applications.
+
+3. Experiments
+In this section, we validate the NIBH and NIBH-CG algo-
+rithms via experiments using a range of synthetic and real-
+world datasets, including three small-scale, three medium-
+scale, and one large-scale datasets with respect to three
+metrics. We compare NIBH against ten state-of-the-art
+binary hashing algorithms, including binary reconstruc-
+tive embedding (BRE) (Kulis & Darrell, 2009), spectral
+hashing (SH) (Weiss et al., 2009), anchor graph hashing
+
+(AGH) (Liu et al., 2011), multidimensional spectral hash-
+ing (MDSH) (Weiss et al., 2012), scalable graph hashing
+(SGH) (Jiang & Li, 2015), PCA hashing (PCAH) (Jolliffe,
+2002), isotropic hashing (IsoHash) (Kong & Li, 2012),
+spherical Hamming distance hashing (SHD) (Heo et al.,
+2012), circulant binary embedding (CBE) (Yu et al., 2014),
+and locality-sensitive hashing (LSH) (Indyk & Motwani,
+1998).
+
+3.1. Performance metrics and datasets
+
+We compare the algorithms using the following three met-
+rics:
+||λˆv− c||∞, where the vector
+Maximum distortion δ = inf
+λ>0
+ˆv contains the pairwise Hamming distances between the
+learned binary codes. This metric quantiﬁes the distance
+preservation among all of the pairwise distances after pro-
+jecting the training data in the ambient space into binary
+codes. We also deﬁne the maximum distortion for unseen
+test data δtest, which measures the distance preservation on
+a hold-out test dataset using the hash function learned from
+the training dataset.
+Mean average precision (MAP) for near-neighbor preser-
+vation in the Hamming space. MAP is computed by ﬁrst
+ﬁnding the set of k-nearest neighbors for each query point
+on a hold-out test data in the ambient space Lk and the
+corresponding set Lk
+H in the Hamming space and then cal-
+culating the average precision AP = |Lk ∩Lk
+H|/k. We then
+report MAP by calculating the mean value of AP across all
+data points.
+Kendall τ ranking correlation coefﬁcient. We ﬁrst rank the
+set of k-nearest neighbors for each data point by increasing
+distance in the ambient space as T (Lk) and in the Ham-
+ming space as T (Lk
+H). The Kendall τ correlation coefﬁ-
+cient is a scalar τ ∈ [−1, 1] that measures the similarity
+between the two ranked sets T (Lk) and T (Lk
+H) (Kendall,
+1938). The value of τ increases as the similarity between
+the two rankings increases and reaches the maximum value
+of τ = 1 when they are identical. We report the average
+value of τ across all data points in the training dataset.
+To compare the algorithms, we use the following standard
+datasets from computer vision: Random consists of in-
+dependently drawn random vectors in R100 from a mul-
+tivariate Gaussian distribution with zero mean and iden-
+tity covariance matrix. Translating squares is a synthetic
+dataset consisting of 10 × 10 images that are translations
+of a 3 × 3 white square on black background (Hegde et al.,
+2015). MNIST is a collection of 60,000 28 × 28 greyscale
+images of handwritten digits (LeCun & Cortes, 1998).
+Photo-Tourism is a corpus of approximately 300,000 im-
+age patches, represented using scale-invariant feature trans-
+form (SIFT) features (Lowe, 2004) in R128 (Snavely et al.,
+
+Near-Isometric Binary Hashing for Large-scale Datasets
+
+Figure 2. Comparison of the NIBH and NIBH-CG algorithms against several baseline binary hashing algorithms using three small-scale
+datasets with 4950 secants (Q = 100). The performance of NIBH-CG closely follows that of NIBH, and both outperform all of the other
+algorithms in terms of the maximum distortion δ (superior distance preservation), mean average precision MAP of training samples
+(superior nearest neighbor preservation), and Kendall τ rank correlation coefﬁcient (superior ranking preservation).
+
+2006). LabelMe is a collection of over 20,000 images rep-
+resented using GIST descriptors in R512 (Torralba et al.,
+2008). Peekaboom is a collection of 60,000 images rep-
+resented using GIST descriptors in R512 (Torralba et al.,
+2008). Following the experimental approaches of the hash-
+ing literature (Kulis & Darrell, 2009; Norouzi & Fleet,
+2011), we pre-process the data by subtracting the mean and
+then normalizing all points to lie on the unit sphere.
+
+3.2. Small- and medium-scale experiments
+
+We start by evaluating the performance of NIBH and
+NIBH-CG using a small-scale subset of the ﬁrst three
+datasets. Small-scale datasets enable us to compare the
+performance of NIBH vs. NIBH-CG to verify that they per-
+form similarly. Also they help us assess the asymptotic be-
+havior of algorithms in preserving isometry since the total
+of number of secants are small compare to the bit budget in
+compact binary codes.
+
+Experimental setup. We randomly select Q = 100 data
+points from the Random, Translating squares, and MNIST
+datasets. We then apply the NIBH, NIBH-CG, and all the
+baseline algorithms on each dataset for different target bi-
+nary code word lengths M from 1 to 70 bits. We set the
+NIBH and NIBH-CG algorithm parameters to the common
+choice of ρ = 1 and η = 1.6. To generate hash func-
+tion of length M for LSH, we draw M random vectors
+from a Gaussian distribution with zero mean and an iden-
+tity covariance matrix. We use the same random vectors
+to initialize NIBH and other baseline algorithms.
+In the
+near-neighbor preservation experiments, to show the direct
+advantage of minimizing (cid:96)∞-norm over (cid:96)2-norm, we fol-
+lowed the exact procedure described in BRE (Kulis & Dar-
+rell, 2009) to select the training secants, i.e., we apply the
+NIBH algorithm on only the lowest 5% of the pairwise dis-
+tances (which are set to zero as in BRE) combined with the
+highest 2% of the pairwise distances.
+We follow the continuation approach (Wen et al., 2010) to
+
+1102030405060701102030405060701102030405060701102030405060701102030405060701102030405060701102030405060701102030405060701102030405060700.511.522.53δ0.511.522.530.511.522.5300.20.40.60.81MAP00.20.40.60.8100.20.40.60.8100.20.40.60.8Kendallτ00.20.40.60.800.20.40.60.8RandomTranslating squaresMNISTNumber of bits (M)NIBHNIBH−CGBRECBEAGHSGHSHDSHMDSHPCAHIsoHashLSHNear-Isometric Binary Hashing for Large-scale Datasets
+
+Figure 3. Comparison of NIBH and NIBH-CG against several state-of-the-art binary hashing algorithms in preserving isometry on
+MNIST data. (a) NIBH-CG outperforms the other algorithms in minimizes the isometry constant on unseen data δtest. (b) . NIBH and
+NIBH-CG provide better isometry guarantee with a small sacriﬁce to universality.
+
+set the value of α. We start with a small value of α, (e.g.,
+α = 1) to avoid becoming stuck in bad local minima, and
+then gradually increase α as the algorithm proceeds. As
+the algorithm gets closer to convergence and has obtained
+a reasonably good estimate of the parameters W and λ, we
+set α = 10, which enforces a good approximation of the
+sign function (see Lemma 3).
+
+Results. The plots in the top row of Figure 2 illustrate
+the value of the distortion parameter δ as a function of
+the number of projections (bits) M. The performance of
+NIBH and NIBH-CG closely follow each other, indicat-
+ing that NIBH-CG is a good approximation to NIBH. Both
+NIBH and NIBH-CG outperform the other baseline algo-
+rithms in terms of the distortion parameter δ. Among these
+baselines, LSH has the lowest isometry performance since
+random projections are oblivious to the intrinsic geometry
+of the training dataset. To achieve δ = 1, NIBH(-CG) re-
+quires 60% fewer bits M than CBE and BRE. NIBH(-CG)
+also achieves better isometry performance asymptotically,
+i.e., up to δ ≈ 0.5, given a sufﬁcient number of bits (M ≥
+70), while for most of the other algorithms the performance
+plateaus after δ = 1. NIBH’s superior near-isometry per-
+formance extends well to unseen data. Figure 3(a) demon-
+strates that NIBH achieves the lowest isometry constant on
+a test dataset δtest compared to other hashing algorithms.
+Figure 3(b) further suggests that NIBH’s superior isometry
+performance comes with smallest sacriﬁce to the universal-
+ity of the hash functions.
+The plots in the middle and bottom row of Figure 2 shows
+the average precision for retrieving training data and the
+Kendall τ correlation coefﬁcient respectively, as a func-
+tion of the number of bits M. We see that NIBH pre-
+serves a higher percentage of nearest neighbors compared
+to other baseline algorithms as M increases with better av-
+erage ranking among k = 10-nearest neighbors.
+
+Now we showcase the performance of NIBH-CG on three
+medium-scale, real-world datasets used in (Kulis & Darrell,
+2009; Norouzi & Fleet, 2011), including Photo-tourism,
+LabelMe, and Peekaboom for the popular machine learning
+task of data retrieval. From each dataset we randomly se-
+lect Q = 1000 training points, following the setup in BRE
+(Kulis & Darrell, 2009), and use them to train NIBH-CG
+and the other baseline algorithms. We then randomly se-
+lect a separate set of Q = 1000 data points and use it to
+test the performance of NIBH-CG and other baseline al-
+gorithms in terms MAP with k = 50. Figure 4 illustrates
+the performance of NIBH-CG on these datasets. NIBH-CG
+outperforms all the baseline algorithms with large margins
+in Hamming ranking performance in term of MAP with
+top-50 near-neighbors.
+
+3.3. Large-scale experiments
+
+We now demonstrate that NIBH-CG scales well to large-
+scale datasets. We use the full MNIST dataset with 60,000
+training images and augment it with three rotated versions
+of each image (rotations of 90◦, 180◦, and 270◦) to cre-
+ate a larger dataset with Q = 240,000 data points. Next,
+we construct 4 training sets with 1,000, 10,000, 100,000,
+and 240,000 images out of this large set. We train all algo-
+rithms with M = 30 bits and compare their performance
+on a test set of 10,000 images. BRE fails to execute on a
+standard desktop PC with 12 GB of RAM for training sets
+with more than 100,000 points due to the size of the secant
+set |X|. The results for all algorithms are given in Table 1;
+we tabulate their performance in terms of MAP for the top-
+500 neighbors. The performance of NIBH-CG is signiﬁ-
+cantly better than the baseline algorithms and, moreover,
+improves as the size of the training set grows. This empha-
+sizes that NIBH-CG excels at large-scaled problems thanks
+to its very small memory requirement; indeed, the memory
+requirement of NIBH-CG is linear in the number of active
+
+102030405060700.81.11.41.722.3No. of bits (M) δtest0.511.522.530.511.522.53δδtestNIBHNIBH−CGBRECBEAGHSGHSHDSHMDSHPCAHIsoHashLSHa)b)MNISTNear-Isometric Binary Hashing for Large-scale Datasets
+
+tributions. In Proc. 20th Annual Symposium on Compu-
+tational Geometry, pp. 253–262, June 2004.
+
+Figure 4. Hamming ranking performance comparison on three medium-scale datasets (Q = 1000). The top-50 neighbors are used to
+report MAP over a test data of same size.
+secants rather than the total number of secants.
+4. Discussion
+We have demonstrated that the worst-case, (cid:96)∞-norm-based
+near-isometric binary hashing (NIBH) algorithm is supe-
+rior to a wide range of algorithms based on the more tra-
+ditional average-case, (cid:96)2-norm. Despite its non-convexity
+and non-smoothness, NIBH admits an efﬁcient optimiza-
+tion algorithm that converges to a high-performing local
+minimum. Moreover, NIBH-CG, the accelerated version
+of NIBH, provides signiﬁcant memory advantages over ex-
+isting algorithms. Our exhaustive experiments with six
+datasets, three metrics, and ten algorithms have shown
+that NIBH outperforms all of the state-of-the-art data-
+dependent hashing algorithms. The results in this paper
+provide a strong motivation for exploring (cid:96)∞-norm formu-
+lations in binary hashing.
+
+Gong, Y. and Lazebnik, S. Iterative quantization: A pro-
+In Proc.
+crustean approach to learning binary codes.
+IEEE Conf. on Computer Vision and Pattern Recogni-
+tion, pp. 817–824, June 2011.
+
+Hartley, R. and Schaffalitzky, F. L∞ minimization in geo-
+metric reconstruction problems. In Proc. IEEE Conf. on
+Computer Vision and Pattern Recognition, pp. 504–509,
+June 2004.
+
+References
+Andoni, A., Indyk, P., Nguyen, H. L., and Razenshteyn,
+I. Beyond locality-sensitive hashing. In Proc. 25th An-
+nual ACM-SIAM Symposium on Discrete Algorithms, pp.
+1018–1028, Jan 2014.
+
+Boyd, S., Parikh, N., Chu, E., Peleato, B., and Eckstein, J.
+Distributed optimization and statistical learning via the
+alternating direction method of multipliers. Foundations
+and Trends in Machine Learning, 3(1):1–122, Jan. 2011.
+
+Cover, T. M. and Thomas, J. A. Elements of information
+
+theory. John Wiley & Sons, 2012.
+
+Dantzig, G. B. and Wolfe, P. Decomposition principle for
+linear programs. Operations Research, 8(1):101–111,
+Feb. 1960.
+
+Datar, M., Immorlica, N., Indyk, P., and Mirrokni, V. S.
+Locality-sensitive hashing scheme based on p-stable dis-
+
+He, J., Kumar, S., and Chang, S. On the difﬁculty of nearest
+neighbor search. In Proc. 29th Intl. Conf. on Machine
+Learning, pp. 1127–1134, June 2012.
+
+Hegde, C., Sankaranarayanan, A. C., Yin, W., and Bara-
+niuk, R. G. Numax: A convex approach for learning
+IEEE Trans. Signal
+near-isometric linear embeddings.
+Processing, 63(22):6109–6121, Nov. 2015.
+
+Heo, J., Lee, Y., He, J., Chang, S., and Yoon, S. Spherical
+hashing. In Proc. IEEE Conf. on Computer Vision and
+Pattern Recognition, pp. 2957–2964, 2012.
+
+Horn, R. A. and Johnson, C. R. Topics in Matrix Analysis.
+
+Cambridge University Press, 1991.
+
+Indyk, P. and Motwani, R. Approximate nearest neighbors:
+Towards removing the curse of dimensionality. In Proc.
+30th Annual ACM Symposium on Theory of Computing,
+pp. 604–613, May 1998.
+
+Jiang, Q. Y. and Li, W. J. Scalable graph hashing with
+
+feature transformation. IJCAI, 2015.
+
+Jolliffe, I. Principal Component Analysis. Wiley Online
+
+Library, 2002.
+
+00.10.20.30.40.50.6MAP00.10.20.30.40.50.600.10.20.30.40.50.6BRECBE−optAGHSGHSHDSHMDSHPCAHIsoHashLSHNIBH−CGPhoto-tourismLabelMePeekaboom110203040501102030405011020304050Number of bits (M)Near-Isometric Binary Hashing for Large-scale Datasets
+
+Table 1. Comparison of NIBH-CG against several baseline binary hashing algorithms on large-scale MNIST datasets with over 28 billion
+secants |S(X )|. We tabulate the Hamming ranking performance in terms of mean average precision MAP for different sizes of the
+dataset. All training times are in seconds.
+
+M = 30 bits
+Training size Q
+Secant size |S(X )|
+
+NIBH-CG
+
+BRE
+CBE
+SPH
+SH
+
+MDSH
+AGH
+SGH
+PCAH
+IsoHash
+
+LSH
+
+MAP / Top-500 ( MNIST + rotations)
+
+Training time
+
+1K
+500K
+
+52.79 (±0.15)
+48.33 (±0.65)
+38.70 (±1.18)
+44.33 (±0.74)
+40.12 (±0.00)
+41.06 (±0.00)
+45.81 (±0.34)
+51.32 (±0.07)
+39.90 (±0.00)
+50.91 (±0.00)
+33.69 (±0.94)
+
+10K
+50M
+
+54.69 (±0.18)
+50.67(±0.33)
+38.12 (±1.34)
+44.24 (±0.61)
+39.37 (±0.00)
+41.23 (±0.00)
+47.78 (± 0.38)
+51.33 (±0.20)
+38.53 (±0.00)
+50.90 (±0.00)
+33.69 (±0.94)
+
+100K
+
+5B
+
+–
+
+54.93 (±0.23)
+38.50 (±2.05)
+44.37 (±0.71)
+38.79 (±0.00)
+40.80 (±0.00)
+47.69 (±0.41)
+51.01 (±0.23)
+38.81 (±0.00)
+50.72 (±0.00)
+33.69 (±0.94)
+
+240K
+28B
+
+–
+
+55.52 (±0.11)
+38.53 (±0.83)
+44.32 (±0.63)
+38.26 (±0.00)
+40.39 (±0.00)
+47.38 (±0.32)
+50.66 (±0.76)
+37.50 (±0.00)
+50.55 (±0.00)
+33.69 (±0.94)
+
+240K
+28B
+541.43
+18685.51
+
+68.94
+184.46
+3.05
+15.00
+4.49
+5.89
+0.08
+2.82
+
+2.29 × 10−4
+
+Kendall, M. G. A new measure of rank correlation.
+
+Biometrika, 30(1–2):81–93, June 1938.
+
+Kim, H. and Park, H. Sparse non-negative matrix factor-
+izations via alternating non-negativity-constrained least
+squares for microarray data analysis. Bioinformatics, 23
+(12):1495–1502, Apr. 2007.
+
+Kong, W. and Li, W. J. Isotropic hashing. In Advances in
+Neural Information Processing Systems, pp. 1646–1654,
+2012.
+
+Kulis, B. and Darrell, T. Learning to hash with binary re-
+constructive embeddings. In Advances in Neural Infor-
+mation Processing Systems, pp. 1042–1050, Dec. 2009.
+
+LeCun, Y. and Cortes, C. The MNIST database of hand-
+
+written digits, 1998.
+
+Ledoux, M. and Talagrand, M. Probability in Banach
+Spaces: Isoperimetry and Processes. Springer-Verlag,
+1991.
+
+Liu, W., Wang, J., Kumar, S., and Chang, S. Hashing with
+graphs. In Proc. 28th intl. Conf. on Machine Learning,
+pp. 1–8, July 2011.
+
+Lowe, D. G. Distinctive image features from scale-
+Intl. Journal of Computer Vision,
+
+invariant keypoints.
+60(2):91–110, Nov. 2004.
+
+Lv, Q., Josephson, W., Wang, Z., Charikar, M., and Li, K.
+Multi-probe lsh: efﬁcient indexing for high-dimensional
+In Proceedings of the 33rd interna-
+similarity search.
+tional conference on Very large data bases, pp. 950–961.
+VLDB Endowment, 2007.
+
+Norouzi, M. and Fleet, D. J. Minimal loss hashing for com-
+pact binary codes. In Proc. 28th Intl. Conf. on Machine
+Learning, pp. 353–360, June 2011.
+
+Plan, Y. and Vershynin, R. Dimension reduction by random
+hyperplane tessellations. Discrete & Computational Ge-
+ometry, 51(2):438–461, Mar. 2014.
+
+Shaw, B. and Jebara, T. Minimum volume embedding.
+In Proc. 11th Intl. Conf. on Artiﬁcial Intelligence and
+Statistics, pp. 460–467, Mar. 2007.
+
+Snavely, N., Seitz, S. M., and Szeliski, R. Photo tourism:
+Exploring photo collections in 3D. ACM Trans. Graph-
+ics, 25(3):835–846, July 2006.
+
+Studer, C., Goldstein, T., Yin, W., and Baraniuk, R. G.
+Preprint, 2014. URL
+
+Democratic representations.
+http://www.csl.cornell.edu/~studer/
+papers/14TIT-linf-submitted.pdf.
+
+Torralba, A., Fergus, R., and Weiss, Y. Small codes and
+In Proc. IEEE
+large image databases for recognition.
+Conf. on Computer Vision and Pattern Recognition, pp.
+1–8, June 2008.
+
+Wainwright, M. J. Sharp thresholds for high-dimensional
+and noisy sparsity recovery using (cid:96)1 -constrained
+quadratic programming (Lasso). IEEE Trans. Informa-
+tion Theory, 55(5):2183–2202, May 2009.
+
+Wang, J., Shen, H. T., Song, J., and Ji, J. Hashing for simi-
+larity search: A survey. arXiv preprint arXiv:1408.2927,
+2014.
+
+Nesterov, Y. Gradient methods for minimizing com-
+posite objective function. Technical report, Université
+Catholique de Louvain, Sep. 2007.
+
+Weinberger, K. Q. and Saul, L. K. Unsupervised learning
+of image manifolds by semideﬁnite programming. Intl.
+Journal of Computer Vision, 70(1):77–90, May 2006.
+
+Near-Isometric Binary Hashing for Large-scale Datasets
+
+Weiss, Y., Torralba, A., and Fergus, R. Spectral hashing.
+In Advances in Neural Information Processing Systems,
+pp. 1753–1760, Dec. 2009.
+
+Weiss, Y., Fergus, R., and Torralba, A. Multidimensional
+spectral hashing. In European Conf. on Computer Vision,
+pp. 340–353. Oct. 2012.
+
+Wen, Z., Yin, W., Goldfarb, D., and Zhang, Y. A fast algo-
+rithm for sparse reconstruction based on shrinkage, sub-
+space optimization, and continuation. SIAM Journal on
+Scientiﬁc Computing, 32(4):1832–1857, June 2010.
+
+Yu, F. X., Kumar, S., Gong, Y., and Chang, S. Circulant
+binary embedding. In Proc. 31st Intl. Conf. on Machine
+Learning, pp. 946–954, June 2014.
+
+Zoran, D. and Weiss, Y. Natural images, gaussian mixtures
+and dead leaves. In Advances in Neural Information Pro-
+cessing Systems, pp. 1736–1744, Dec. 2012.
+
+A. Appendix
+In the appendix, we prove Lem. 3 and Thm. 4 on the per-
+formance of NIBH on k-nearest neighbor preservation. Fi-
+nally, we include additional numerical simulation results
+and discussions on the empirical convergence of the NIBH
+algorithm.
+
+Proof of Lem. 3
+Lemma 3. Let x be a Gaussian random variable as x ∼
+N (µ, σ2). Deﬁne the distortion of the sigmoid approxima-
+tion at x as |h(x) − σα(x)|. Then, the expected distortion
+is bounded as
+
+Ex[|h(x) − σα(x)|] ≤
+
+√
+1
+2πα
+
+σ
+
+√
+
++ 2e−(
+
+α+c/ασ2),
+
+where c is a positive constant. As α goes to inﬁnity, the
+expected distortion goes to 0.
+Proof. It is easy to see that the distortion |h(x) − σα(x)|
+occurs at x = 0. Therefore, among different values of µ,
+µ = 0 gives the largest distortion since the density of x
+peaks at x = 0. Therefore, we bound the distortion at set-
+ting µ = 0, which is an upper bound of the distortion when
+µ (cid:54)= 0. By deﬁnition (1) in the main text, h(x) can be
+written as
+
+ß
+
+if x ≥ 0
+otherwise.
+
+h(x) =
+
+1
+0
+When x ∼ N (0, σ2), we have
+Ex[|h(x) − σα(x)|] =
+
+(cid:90) ∞
+
+−∞
+
+(h(x) − σα(x))N (x; 0, σ2)dx
+
+(h(x) − σα(x))N (x; 0, σ2)dx
+
+|h(x) − σα(x)|N (x; 0, σ2)dx
+
+= 2
+
+= 2
+
+0
+
+(cid:90) ∞
+(cid:90) x0
+(cid:90) ∞
+(cid:90) x0
+
+0
+
+x0
+1
+2
+
+0
+
++ 2
+
+≤ x0√
+2πσ
+√
+1
+2πα
+
+≤
+
+σ
+
+(h(x) − σα(x))N (x; 0, σ2)dx
+
+(cid:90) ∞
+
+1
+
+1 + eαx0
+
+x0
+
+≤ 2
+
+N (x; 0, σ2)dx+2
+
+0/σ2
+
+e−cx2
+1 + eαx0
+
++ 2
+
+√
+
++ 2e−(
+
+α+c/ασ2),
+
+(3)
+
+N (x; 0, σ2)dx
+(4)
+
+(5)
+
+(6)
+
+when we set x0 = 1√
+α and c is a positive constant. In (3),
+we used the fact that σα(x) and h(x) are symmetric with
+respect to the point (0, 1
+2 ). (4) is given by the properties of
+the sigmoid function, (5) is given by the Gaussian concen-
+tration inequality (Ledoux & Talagrand, 1991), and (6) is
+
+Near-Isometric Binary Hashing for Large-scale Datasets
+
+given by the inequality 1/(1 + eαx0) ≤ e−αx0. The fact
+that Ex[|h(x) − σα(x)|] → 0 as α → ∞ is obvious from
+the bound above.
+
+i.e., xi ∼ (cid:80)P
+
+Proof of Thm. 4
+Theorem 4. Assume that all the data points are indepen-
+dently generated from a mixture of Gaussian distribution,
+p=1 πpN (µp, Σp). Let x0 ∈ RN denote a
+query data point in the ambient space, and the other data
+points xi be ordered so that d(x0, x1) < d(x0, x2) <
+. . . < d(x0, xQ). Let δ denote the ﬁnal value of the dis-
+tortion parameter computed from any binary hashing al-
+gorithm, and let c denote a positive constant. Then, if
+Ex[∆k] ≥ 2δ +
+ , the binary hashing algorithm
+preserves the k-nearest neighbors of a point with probabil-
+ity at least 1 − .
+
+»
+
+c log Qk
+
+1
+
+In order to prove this theorem, we need the following
+Lemma:
+Lemma 5. Let x0, . . . , xN and ∆k be deﬁned as in Thm. 4.
+Then, there exist a constant c such that P (∆k − Ex[∆k] <
+t) ≤ e−ct2 for t > 0.
+
+Proof. Since the data points x0, xk and xk+1 are in-
+dependently generated from a ﬁnite mixture of Gaussian
+distributions, the random variable of their concatenation
+k+1]T ∈ R3N is sub-Gaussian (Wain-
+y = [xT
+wright, 2009). Then, we have
+∆k(y) = (cid:107)x0 − xk+1(cid:107)2 − (cid:107)x0 − xk(cid:107)2
+
+k , xT
+
+0 , xT
+
+(cid:17)
+
+y(cid:107)2
+
+0
+
+0
+0 −I 0
+0
+0
+
+0
+
+(cid:17)
+
+y(cid:107)2 − (cid:107)(cid:16) I
+(cid:17)
+
+y(cid:107)2
+
+= (cid:107)(cid:16) I
+≤ (cid:107)(cid:16) 2I
+
+0
+0
+0 0
+0
+0 0 −I
+
+0
+0
+0 −I
+0
+0 −I
+0
+≤ 2(cid:107)y(cid:107)2,
+
+where we have used the triangular inequality in the sec-
+ond to last step, the Rayleigh-Ritz theorem (Horn & John-
+son, 1991), and the fact that the maximum singular value
+of the matrix in the step before is 2. This result means
+that ∆k(y) is a Lipschitz function of y. Thus, by Tala-
+grand’s inequality (Ledoux & Talagrand, 1991), we have
+that P (∆k − Ex[∆k] < −t) ≤ e−ct2 for some positive
+constant c and t > 0, since y is sub-Gaussian.
+
+Now we are ready to prove Thm. 4.
+
+Proof. Let E denote the event that the set of top-k nearest
+neighbors is not preserved in the Hamming space. Then,
+we have E = ∪em,n, where em,n denote the event that
+
+dH (x0, xm) > dH (x0, xn) with m ∈ {1, . . . , k} and n ∈
+{k + 1, . . . , Q}. Then, using the union bound (Cover &
+Thomas, 2012), we have
+
+P (E) ≤(cid:88)
+
+P (em,n) ≤ k(Q − k)P (ek,k+1)
+
+m,n
+
+= k(Q − k)P (dH (x0, xk) > dH (x0, xk+1))
+= k(Q − k)P (dH (x0, xk+1) < dH (x0, xk)),
+
+where we have used the fact that the most possible event
+among all em,n events is the one corresponding to the
+order mismatch between the kth and k + 1th nearest
+neighbor. Now, note that the NIBH output δ satisﬁes
+maxi,j |dH (xi, xj) − d(xi, xj)| ≤ δ1. Observe that ∆k =
+d(x0, xk+1) − d(x0, xk) ≥ 2δ is a sufﬁcient condition for
+dH (x0, xk+1) ≥ dH (x0, xk), since
+
+dH (x0, xk+1) − dH (x0, xk)
+
+≥ d(x0, xk+1) − δ − d(x0, xk) − δ
+≥ 2δ − 2δ = 0,
+
+by the triangular inequality. This leads to
+
+P (dH (x0, xk+1) < dH (x0, xk))
+
+= 1 − P (dH (x0, xk+1) ≥ dH (x0, xk))
+≤ 1 − P (∆k ≥ 2δ) = P (∆k < 2δ).
+
+Therefore, combining all the above and Lem. 5, the prob-
+ability that
+the k-nearest neighbor is not preserved is
+bounded by
+P (E) ≤ k(Q − k)P (dH (x0, xk+1) < dH (x0, xk))
+
+≤ k(Q − k)P (∆k < 2δ)
+= k(Q − k)P (∆k − Ex[∆k] < −(Ex[∆k] − 2δ))
+≤ k(Q − k)e−c(Ex[∆k]−2δ)2
+≤ kQe−c(Ex[∆k]−2δ)2
+
+.
+
+Now, let kQe−c(Ex[∆k]−2δ)2 ≤ , we have that the require-
+ment for the k-nearest neighbors to be exactly preserved
+with probability at least 1 −  is
+
+…
+
+Ex[∆k] ≥ 2δ +
+
+1
+c
+
+log
+
+Qk
+
+
+.
+
+Remark Note that our bound on the number of near-
+est neighbor preserved k depends on the ﬁnal outcome of
+the NIBH algorithm in the value of δ.
+In order to re-
+late our result to the number of binary hash functions M
+required, we can make use of (Plan & Vershynin, 2014,
+
+1Here we assume λ = 1 without loss of generality.
+
+Near-Isometric Binary Hashing for Large-scale Datasets
+
+Thm. 1.10). For a bounded set K ⊂ RN with diameter 1,
+let M ≥ Cδ−6w(K)2 where w(K) = Ex[supx∈K(cid:104)g, x(cid:105)]
+denotes the Gaussian width of K and some constant C.
+Then, (Plan & Vershynin, 2014, Thm. 1.10) states that,
+with high probability, h(x) as deﬁned in (1) with a random
+matrix W whose entries are independently generated from
+N (0, 1) is a δ0-isometric embedding. Therefore, if we ini-
+tialize NIBH with such a random W which is likely to be
+δ0-isometric, then empirically (see Figure 5), the NIBH al-
+gorithm will learn a better embedding that is δ-isometric
+with δ < δ0. Therefore, we have that the number of hash
+functions M required for k-nearest neighbor preservation
+
+is at least M ∼ (Ex[∆k] −(cid:112)log(kQ/)−6w(X)2 assum-
+
+ing that the training dataset X is properly normalized.
+
+Empirical convergence of the NIBH
+algorithm
+Figure 5 shows the empirical loss and the actual distor-
+tion parameter δ as a function of the iteration count (cid:96) in
+the NIBH algorithm as applied on 4950 secants (i.e., Q =
+100) from the MNIST dataset. The behavior of the empir-
+ical loss function closely matches that of δ as they gradu-
+ally converge. The curve empirically conﬁrms that mini-
+mizing the loss function in each iteration of NIBH (using
+the ADMM framework) directly penalizes the non-convex
+loss function (distortion parameter δ). After initializing the
+NIBH algorithm with random entries for W, the value of
+the distortion parameter δ signiﬁcantly drops in the ﬁrst few
+iterations, empirically conforming that NIBH learns an em-
+bedding with signiﬁcantly lower distortion parameter after
+a few iterations.
+
+Figure 5. Empirical convergence behavior of the NIBH algorithm.
+Both the maximum distortion parameter δ and the loss function
+||λv− c||∞ that approximates δ gradually decrease and converge
+as the number of iterations increases. We see that the loss func-
+tion of NIBH closely matches the behavior of the actual distortion
+parameter in each iteration.
+
+020040060080010000.511.522.5Objective valueIteration  ||λv−c||∞δ

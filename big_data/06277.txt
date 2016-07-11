@@ -1,0 +1,1931 @@
+Structured VAEs: Composing Probabilistic Graphical Models
+
+and Variational Autoencoders
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+0
+2
+
+ 
+ 
+]
+L
+M
+
+.
+t
+a
+t
+s
+[
+ 
+ 
+
+1
+v
+7
+7
+2
+6
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Matthew J. Johnson
+Harvard University, Cambridge, MA 02138
+David Duvenaud
+Harvard University, Cambridge, MA 02138
+Alexander B. Wiltschko
+Harvard University and Twitter, Cambridge, MA 02138
+Sandeep R. Datta
+Harvard Medical School, Boston, MA 02115
+Ryan P. Adams
+Harvard University and Twitter, Cambridge, MA 02138
+
+Abstract
+
+We develop a new framework for unsupervised
+learning that composes probabilistic graphical
+models with deep learning methods and com-
+bines their respective strengths. Our method
+uses graphical models to express structured prob-
+ability distributions and recent advances from
+deep learning to learn ﬂexible feature models
+and bottom-up recognition networks. All compo-
+nents of these models are learned simultaneously
+using a single objective, and we develop scal-
+able ﬁtting algorithms that can leverage natural
+gradient stochastic variational inference, graph-
+ical model message passing, and backpropaga-
+tion with the reparameterization trick. We illus-
+trate this framework with a new structured time
+series model and an application to mouse behav-
+ioral phenotyping.
+
+1. Introduction
+Unsupervised probabilistic modeling often has two goals:
+ﬁrst, to learn a model that is ﬂexible enough to represent
+complex high-dimensional data, such as images or speech
+recordings, and second, to learn model structure that is in-
+terpretable, admits meaningful priors, and generalizes to
+new tasks. That is, it is often not enough just to learn the
+probability density of the data: we also want to learn a
+meaningful representation. Probabilistic graphical models
+(Koller & Friedman, 2009; Murphy, 2012) provide many
+
+MATTJJ@SEAS.HARVARD.EDU
+
+DDUVENAUD@SEAS.HARVARD.EDU
+
+AWILTSCH@FAS.HARVARD.EDU
+
+SRDATTA@HMS.HARVARD.EDU
+
+RPA@SEAS.HARVARD.EDU
+
+tools to build such structured representations, but can be
+limited in their capacity and may require signiﬁcant feature
+engineering before being applied to data. Alternatively,
+advances in deep learning have yielded not only ﬂexible,
+scalable generative models for complex data like images
+but also new techniques for automatic feature learning and
+bottom-up inference (Kingma & Welling, 2014; Rezende
+et al., 2014).
+Consider the problem of learning an unsupervised genera-
+tive model for a depth video of a tracked freely-behaving
+mouse, illustrated in Figure 1. Learning interpretable rep-
+resentations for such data, and studying how those rep-
+resentations change as the animal’s genetics are edited
+or its brain chemistry altered, can create powerful be-
+havioral phenotyping tools for neuroscience and for high-
+throughput drug discovery (Wiltschko et al., 2015). Each
+frame of the video is a depth image of a mouse in a par-
+ticular pose, and so even though each image is encoded as
+30 × 30 = 900 pixels, the data lie near a low-dimensional
+nonlinear manifold. A good generative model must not
+only learn this manifold but also represent many other
+salient aspects of the data. For example, from one frame to
+the next the corresponding manifold points should be close
+to one another, and in fact the trajectory along the mani-
+fold may follow very structured dynamics. To inform the
+structure of these dynamics, a natural class of hypotheses
+used in ethology and neurobiology (Wiltschko et al., 2015)
+is that the mouse’s behavior is composed of brief, reused
+actions, such as darts, rears, and grooming bouts. There-
+fore a natural representation would include discrete states
+
+Structured variational autoencoders
+
+with respect to some variational parameters, enabling ef-
+fective second-order optimization (Martens, 2015), while
+using backpropagation to compute gradients with respect
+to all other parameters. We refer to our general approach
+as the structured variational autoencoder (SVAE). In this
+paper we illustrate the SVAE using graphical models based
+on switching linear dynamical systems (SLDS) (Murphy,
+2012; Fox et al., 2011).
+Code is available at github.com/mattjj/svae.
+
+2. Background
+Here we brieﬂy review some of the ideas on which this
+paper builds. This section also ﬁxes notation that is reused
+throughout the paper.
+
+2.1. Natural gradient stochastic variational inference
+
+Stochastic variational inference (SVI) (Hoffman et al.,
+2013) applies stochastic gradient ascent to a mean ﬁeld
+variational inference objective in a way that exploits ex-
+ponential family conjugacy to efﬁciently compute natural
+gradients (Amari, 1998; Martens, 2015). Consider a model
+composed of global latent variables θ, local latent variables
+x = {xn}N
+
+n=1, and data y = {yn}N
+
+n=1,
+
+p(θ, x, y) = p(θ)
+
+p(xn|θ)p(yn|xn, θ),
+
+(1)
+
+N(cid:89)
+
+n=1
+
+where p(θ) is the natural exponential family conjugate prior
+to the exponential family p(xn, yn|θ),
+
+ln p(θ) = (cid:104)ηθ, tθ(θ)(cid:105) − ln Zθ(ηθ)
+
+(2)
+ln p(xn, yn|θ) = (cid:104)ηxy(θ), txy(xn, yn)(cid:105) − ln Zxy(ηxy(θ))
+(3)
+
+= (cid:104)tθ(θ), (txy(xn, yn), 1)(cid:105).
+
+Figure 2 shows the graphical model. The mean ﬁeld
+variational inference problem is to approximate the pos-
+terior p(θ, x| y) with a tractable distribution q(θ, x)
+by ﬁnding a local minimum of
+the KL divergence
+(cid:21)
+KL(q(θ, x)(cid:107)p(θ, x| y)) or, equivalently, using the identity
+p(θ, x, y)
+ln p(y) = KL(q(θ, x)(cid:107)p(θ, x| y))+E
+q(θ, x)
+to choose q(θ, x) to maximize the objective
+
+(cid:20)
+
+q(θ,x)
+
+ln
+
+,
+
+ln
+
+q(θ,x)
+
+p(θ, x, y)
+q(θ, x)
+
+L[q(θ, x)] (cid:44) E
+
+Consider the mean ﬁeld family q(θ)q(x) = q(θ)(cid:81)
+
+n q(xn).
+Because of the conjugate exponential family structure, the
+optimal global mean ﬁeld factor q(θ) is in the same family
+as the prior p(θ),
+
+≤ ln p(y).
+
+(4)
+
+ln q(θ) = (cid:104)(cid:101)ηθ, tθ(θ)(cid:105) − ln Zθ((cid:101)ηθ).
+
+(5)
+
+(cid:20)
+
+(cid:21)
+
+Figure 1. Illustration of unsupervised generative modeling ap-
+plied to depth video of a mouse. Each video frame lies near a
+low-dimensional image manifold, and we wish to learn a param-
+eterization of this manifold in which trajectories can be modeled
+with switching linear dynamics.
+
+with each state representing the simple dynamics of a par-
+ticular primitive action, a representation that would be difﬁ-
+cult to encode in an unsupervised recurrent neural network
+model. These two tasks, of learning the image manifold
+and learning a structured dynamics model, are complemen-
+tary: we want to learn the image manifold not just as a set
+but in terms of manifold coordinates in which the struc-
+tured dynamics model ﬁts the data well. A similar model-
+ing challenge arises in speech (Hinton et al., 2012), where
+high-dimensional data lie near a low-dimensional manifold
+because they are generated by a physical system with rel-
+atively few degrees of freedom (Deng, 1999) but also in-
+clude the discrete latent dynamical structure of phonemes,
+words, and grammar (Deng, 2004).
+To address these challenges, we propose a new method to
+design and learn such models. Our approach uses graph-
+ical models for representing structured probability dis-
+tributions, and uses ideas from variational autoencoders
+(Kingma & Welling, 2014) for learning not only the non-
+linear feature manifold but also bottom-up recognition net-
+works to improve inference. Thus our method enables the
+combination of ﬂexible deep learning feature models with
+structured Bayesian and even Bayesian nonparametric pri-
+ors. Our approach yields a single variational inference ob-
+jective in which all components of the model are learned
+simultaneously. Furthermore, we develop a scalable ﬁtting
+algorithm that combines several advances in efﬁcient infer-
+ence, including stochastic variational inference (Hoffman
+et al., 2013), graphical model message passing (Koller &
+Friedman, 2009), and backpropagation with the reparam-
+eterization trick (Kingma & Welling, 2014). Thus our al-
+gorithm can leverage conjugate exponential family struc-
+ture where it exists to efﬁciently compute natural gradients
+
+manifoldcoordinatesimagemanifolddepthvideoStructured variational autoencoders
+
+Figure 2. Prototypical graphical model for SVI.
+
+(a) VAE generative model.
+
+(b) VAE variational family.
+
+Figure 3. Graphical models for the variational autoencoder.
+
+The mean ﬁeld objective on the global variational param-
+
+eters(cid:101)ηθ, optimizing out the local variational factors q(x),
+L((cid:101)ηθ) (cid:44) max
+
+can then be written
+
+p(θ, x, y)
+q(θ)q(x)
+
+≤ ln p(y)
+
+E
+q(θ)q(x)
+
+(cid:20)
+
+(cid:21)
+
+(6)
+
+q(x)
+
+ln
+
+N(cid:88)
+
+and the natural gradient of the objective (6) decomposes
+into a sum of local expected sufﬁcient statistics (Hoffman
+et al., 2013):
+
+(cid:101)∇(cid:101)ηθL((cid:101)ηθ) = ηθ +
+q∗(xn)(txy(xn, yn), 1) −(cid:101)ηθ, (7)
+given(cid:101)ηθ. Thus we can compute a stochastic natural gradi-
+
+where q∗(xn) is a locally optimal local mean ﬁeld factor
+
+ent update for our global mean ﬁeld objective by sampling
+a data minibatch yn, optimizing the local mean ﬁeld factor
+q(xn), and computing scaled expected sufﬁcient statistics.
+
+n=1
+
+E
+
+2.2. Variational autoencoders
+
+The variational autoencoder (VAE) (Kingma & Welling,
+2014; Rezende et al., 2014) is a recent model and varia-
+tional inference method that links neural network autoen-
+coders (Vincent et al., 2008) with mean ﬁeld variational
+Bayes. Given a high-dimensional dataset y = {yn}N
+n=1
+such as a collection of images, the VAE models each ob-
+servation yn in terms of a low-dimensional latent variable
+xn and a nonlinear observation model with parameters ϑ,
+
+iid
+
+xn
+
+∼ N (0, I), n = 1, 2, . . . , N
+
+yn | xn, ϑ ∼ N (µ(xn; ϑ), Σ(xn; ϑ))
+
+(8)
+(9)
+
+where µ(xn; ϑ) and Σ(xn; ϑ) might depend on xn through
+a multilayer perceptron (MLP) with L layers,
+
+µ(xn; ϑ) = WµhL(xn) + bµ,
+Σ(xn; ϑ) = diag(exp(Wσ2hL(xn) + bσ2 )),
+
+h(cid:96)(xn) = f (W(cid:96)h(cid:96)−1(xn) + b(cid:96)), (cid:96) = 1, 2, . . . , L, (10)
+(11)
+(12)
+(cid:96)=1, (Wµ, bµ), (Wσ2, bσ2)), (13)
+with h0(xn) = xn and f (x) = tanh(x) elementwise. Be-
+cause we will reuse this particular MLP construction, we
+introduce the notation
+
+ϑ = ({(W(cid:96), b(cid:96))}L
+
+(µ(xn; ϑ), Σ(xn; ϑ)) = MLP(xn; ϑ).
+
+(14)
+
+To approximate the posterior p(ϑ, x| y), the variational au-
+toencoder uses the mean ﬁeld family
+
+N(cid:89)
+
+n=1
+
+q(ϑ)q(x| y) = q(ϑ)
+
+q(xn | yn).
+
+(15)
+
+A key insight of the variational autoencoder is to use a con-
+ditional variational density q(xn | yn), where the param-
+eters of the variational distribution on xn depend on the
+corresponding data point yn.
+In particular, we can take
+the mean and covariance parameters of q(xn | yn) to be
+µ(yn; φ) and Σ(yn; φ), respectively, where
+
+(µ(yn; φ), Σ(yn; φ)) = MLP(yn; φ)
+
+(16)
+
+and φ denotes a set of MLP parameters. Thus the varia-
+tional distribution q(xn | yn) acts like a stochastic encoder
+from an observation to a distribution over latent variables,
+while the forward model p(yn | xn) acts as a stochastic de-
+coder from a latent variable value to a distribution over
+observations. Furthermore,
+the functions µ(yn; φ) and
+Σ(yn; φ) act as a recognition or inference network for ob-
+servation yn, outputting a distribution over the latent vari-
+able xn using a feed-forward neural network applied to yn.
+See Figure 3 for graphical models of the VAE.
+The resulting mean ﬁeld objective expresses a variational
+
+the variational parameters for the factor q(ϑ), the varia-
+tional parameters are then the encoder parameters φ and
+
+Bayesian version of an autoencoder. Using (cid:101)ηϑ to denote
+the decoder parameters(cid:101)ηϑ, and the objective is
+(cid:35)
+L((cid:101)ηϑ, φ) (cid:44) E
+
+N(cid:88)
+
+q(ϑ)q(x | y)
+
+p(ϑ)
+q(ϑ)
+
+(cid:34)
+
+ln
+
+ln
+
++
+
+.
+
+p(xn, yn | ϑ)
+q(xn | yn)
+
+n=1
+
+To optimize this objective efﬁciently, Kingma & Welling
+(2014) applies a reparameterization trick. To simplify no-
+tation and computation, we take q(ϑ) to be a singular factor
+q(ϑ) = δϑ∗(ϑ) so that the corresponding variational param-
+
+eters(cid:101)ηϑ can be denoted ϑ∗ and some terms can be dropped.
+
+First, we rewrite the objective as
+
+∗
+
+, φ) = E
+
+∗
+q(x | y) ln p(y | x, ϑ
+
+L(ϑ
+) − KL(q(x| y)(cid:107) p(x)).
+The term KL(q(x| y)(cid:107) p(x)) is the KL divergence be-
+tween two Gaussians and its gradient with respect to φ
+
+✓xnynNynxnN#ynxnN#Structured variational autoencoders
+
+N(cid:88)
+
+n=1
+
+can be computed in closed form. To compute stochastic
+gradients of the expectation term, since a random variable
+xn ∼ q(xn | yn) can be parameterized as
+xn = g(φ, ) (cid:44) µq(yn; φ) + Σq(yn; φ)
+1
+ ∼ N (0, I),
+2 ,
+the expectation term can be rewritten in terms of g(φ, )
+and its gradient approximated via Monte Carlo over ,
+
+∗
+∇ϑ∗,φEq ln p(y | x, ϑ
+
+) ≈
+
+∗
+∇ϑ∗,φ ln p(yn | g(φ, ˆn), ϑ
+
+)
+
+iid
+
+where ˆn
+∼ N (0, I). Because g(φ, ) is a differentiable
+function of φ, these gradients can be computed using stan-
+dard backpropagation. For scalability, the sum over data
+points is also approximated via Monte Carlo. General non-
+singular factors q(ϑ) can also be handled by the reparame-
+terization trick (Kingma & Welling, 2014, Appendix F).
+
+3. Generative model and variational family
+In this section we develop an SVAE generative model and
+corresponding variational family. To be concrete we fo-
+cus on a particular generative model for time series based
+on a switching linear dynamical system (SLDS) (Murphy,
+2012; Fox et al., 2011), which illustrates how the SVAE can
+incorporate both discrete and continuous latent variables
+with rich probabilistic dependence. To simplify notation
+we consider modeling only one data sequence of length T ,
+denoted y = y1:T .
+First, Section 3.1 describes the generative model, which
+illustrates the combination of a graphical model express-
+ing latent structure with a ﬂexible neural net to generate
+observations. Next, Section 3.2 describes the structured
+variational family, which leverages both graph-structured
+mean ﬁeld approximations and ﬂexible recognition net-
+works. Section 3.3 discusses variations and extensions.
+
+3.1. A switching linear dynamical system with
+
+nonlinear observations
+
+A switching linear dynamical system (SLDS) represents
+data in terms of continuous latent states that evolve ac-
+cording to a discrete set of linear dynamics. At each time
+t ∈ {1, 2, . . . , T} there is a discrete-valued latent state
+zt ∈ {1, 2, . . . , K}, which indexes the dynamical mode,
+and a continuous-valued latent state xt ∈ RM that evolves
+according to that mode’s linear Gaussian dynamics:
+
+xt+1 = A(zt)xt + B(zt)ut,
+
+(17)
+where A(k), B(k) ∈ RM×M for k = 1, 2, . . . , K. The dis-
+crete latent state zt evolves according to Markov dynamics,
+
+∼ N (0, I),
+
+ut
+
+iid
+
+zt+1 | zt, π ∼ π(zt)
+
+(18)
+
+where π = {π(k)}K
+trix and π(k) ∈ Rn
+generated separately:
+
+k=1 denotes the Markov transition ma-
++ is its kth row. The initial states are
+
+z1 | πinit ∼ πinit,
+
+x1 | z1, µinit, Σinit ∼ N (µ(z1)
+
+init , Σ(z1)
+init ).
+
+(19)
+(20)
+
+Thus inferring the latent variables and parameters of an
+SLDS identiﬁes a set of reused dynamical modes, each de-
+scribed as a linear dynamical system on latent states, in
+addition to Markov switching between different linear dy-
+namics. We use θ to denote all the dynamical parameters,
+θ = (π, πinit,{(A(k), B(k), µ(k)
+At each time t, the continuous latent state xt gives rise to
+an observation yt that is conditionally Gaussian with mean
+µ(xt; ϑ) and covariance Σ(xt; ϑ),
+
+init , Σ(k)
+
+init )}K
+
+k=1).
+
+yt | xt, ϑ ∼ N (µ(xt; ϑ), Σ(xt; ϑ)).
+
+(21)
+
+In a typical SLDS (Fox et al., 2011), µ(xt; ϑ) is linear in
+xt and Σ(xt; ϑ) is a constant function, so that we can take
+ϑ = (C, D) for some matrices C and D and write
+
+yt = Cxt + Dvt,
+
+vt
+
+iid
+
+∼ N (0, I).
+
+(22)
+
+However, to enable ﬂexible modeling of images and other
+complex features, we allow the dependence to be a more
+general nonlinear model.
+In particular, we consider
+µ(xt; ϑ) and Σ(xt; ϑ) to be MLPs with parameters ϑ as
+in Eqs. (10)-(13) of Section 2.2,
+
+(µ(xt; ϑ), Σ(xt; ϑ)) = MLP(xt; ϑ).
+
+(23)
+
+By allowing a nonlinear emission model, each low-
+dimensional
+state xt can be mapped into a high-
+dimensional observation yt, and hence the model can rep-
+resent high-dimensional data in terms of structured dynam-
+ics on a low-dimensional manifold. The overall generative
+model is summarized in Figure 4a.
+Note that by construction the density p(z, x| θ) is an expo-
+nential family. We can choose the prior p(θ) to be a natural
+exponential family conjugate prior, writing
+
+ln p(θ) = (cid:104)ηθ, tθ(θ)(cid:105) − ln Zθ(ηθ)
+
+ln p(z, x|θ) = (cid:104)ηzx(θ), tzx(z, x)(cid:105) − ln Zzx(ηzx(θ))
+
+= (cid:104)tθ(θ), (tzx(z, x), 1)(cid:105).
+
+(24)
+
+(25)
+
+We can also use a Bayesian nonparametric prior, choosing
+K = ∞ and generating the discrete state sequence z1:T ac-
+cording to an HDP-HMM (Fox et al., 2011). Though we do
+not discuss the Bayesian nonparametric case further, the al-
+gorithms we develop here immediately extend to the HDP-
+HMM using the methods in Johnson & Willsky (2014).
+
+Structured variational autoencoders
+
+(a) SLDS generative model with nonlinear observation
+model parameterized by ϑ.
+
+(b) Structured CRF variational family with node po-
+tentials {ψ(x(n)
+
+t=1 parameterized by φ.
+
+, φ)}T
+
+; y(n)
+
+t
+
+t
+
+Figure 4. Graphical models for the SLDS generative model and corresponding structured CRF variational family.
+
+(a) LDS
+
+(b) GMM
+
+(c) G-HMM
+
+Figure 5. Special cases of the SLDS generative model.
+
+iid
+
+This construction contains the generative model of the
+VAE, described in Section 2.2, as a special case. Specif-
+ically, the VAE uses the same class of MLP observation
+models, but each latent value xt is modeled as an indepen-
+dent and identically distributed Gaussian, xt
+∼ N (0, I),
+while the SVAE model proposed here allows the xt to
+have a rich joint probabilistic structure. The SLDS gen-
+erative model also includes as special cases the Gaussian
+mixture model (GMM), Gaussian-emission discrete-state
+HMM (G-HMM), and Gaussian linear dynamical system
+(LDS), and thus the algorithms we develop here for the
+SLDS directly specialize to these models. See Figure 5 for
+graphical models of these special case models.
+While using conditionally linear dynamics within each
+state may seem limited, the ﬂexible nonlinear observation
+distribution greatly extends the capacity of such models.
+Indeed, recent work on neural word embeddings (Mikolov
+et al., 2013) as well as neural image models (Radford et al.,
+2015) has demonstrated learned latent spaces in which lin-
+ear structure corresponds to meaningful semantics. For ex-
+ample, addition and subtraction of word vectors can corre-
+spond to semantic relationships between words and trans-
+lation in an image model’s latent space can correspond to
+an object’s rotation. Therefore linear models in a learned
+latent space can yield signiﬁcant expressiveness while en-
+abling fast probabilistic inference, interpretable priors and
+parameters, and a host of other tools. In particular, linear
+dynamics allow us to learn or encode information about
+timescales and frequencies:
+the eigenvalue spectrum of
+each transition matrix A(k) directly represents its charac-
+
+teristic timescales, and so we can control and interpret the
+structure of linear dynamics in ways that nonlinear dynam-
+ics models do not allow.
+
+3.2. Variational family and CRF recognition networks
+
+Here we describe a structured mean ﬁeld family with which
+we can perform variational inference in the posterior distri-
+bution of the generative model from Section 3.1. This mean
+ﬁeld family illustrates how an SVAE can leverage not only
+graphical model and exponential family structure but also
+learn bottom-up inference networks. As we show in Sec-
+tion 4, these structures allow us to compose several efﬁ-
+cient inference algorithms including SVI, message passing,
+backpropagation, and the reparameterization trick.
+In mean ﬁeld variational
+inference, one constructs a
+tractable variational family by breaking dependencies in
+the posterior (Wainwright & Jordan, 2008). To construct
+a structured mean ﬁeld family for the generative model de-
+veloped in Section 3.1, we break the posterior dependen-
+cies between the dynamics parameters θ, the observation
+parameters ϑ, the discrete state sequence z = z1:T and
+the continuous state sequence x = x1:T , writing the cor-
+responding a factorized density as
+
+q(θ, ϑ, z1:T , x1:T ) = q(θ)q(ϑ)q(z1:T )q(x1:T ).
+
+(26)
+
+Note that this structured mean ﬁeld family does not break
+the dependencies among the discrete states z1:T or among
+the continuous states x1:T as in a naive mean ﬁeld model
+because these random variables are highly correlated in the
+posterior. By preserving joint dependencies across time,
+these structured factors provide a much more accurate rep-
+resentation of the posterior while still allowing tractable in-
+ference via graphical model message passing (Wainwright
+& Jordan, 2008).
+To leverage bottom-up inference networks, we parameter-
+ize the factor q(x1:T ) as a conditional random ﬁeld (CRF)
+(Murphy, 2012). That is, using the fact that the optimal fac-
+tor q(x1:T ) is Markov according to a chain graph, we write
+
+………N✓z(n)1z(n)2z(n)3z(n)Tx(n)1x(n)2x(n)3x(n)Ty(n)1y(n)2y(n)3y(n)T#………N✓z(n)1z(n)2z(n)3z(n)Tx(n)1x(n)2x(n)3x(n)Ty(n)1y(n)2y(n)3y(n)T#(cid:26)
+
+it terms of pairwise potentials and node potentials as
+
+(cid:32)T−1(cid:89)
+
+(cid:33)(cid:32) T(cid:89)
+
+q(x1:T ) ∝
+
+ψ(xt, xt+1)
+
+ψ(xt; yt, φ)
+
+(27)
+
+t=1
+
+t=1
+
+where the node potential ψ(xt; yt, φ) is a function of the
+observation yt. Speciﬁcally, we choose each node poten-
+tial to be a Gaussian factor in which the precision matrix
+J(yt; φ) and potential vector h(yt; φ) depend on the corre-
+sponding observation yt through an MLP,
+
+ψ(xt; yt, φ) ∝ exp
+
+1
+2
+
+−
+
+xT
+t J(yt; φ)xt + h(yt; φ)Txt
+
+(h(yt; φ), J(yt; φ)) = MLP(yt; φ),
+
+using the notation from Section 2.2. These local recogni-
+tion networks allow us to ﬁt a regression from each obser-
+vation yt to a probabilistic guess at the corresponding la-
+tent state xt. Using graphical model inference, these local
+guesses can be synthesized with the dynamics model into a
+coherent joint factor q(x1:T ) over the entire state sequence.
+While we could write q(x1:T | y1:T ) to emphasize this de-
+pendence and match the notation in Section 2.2, we only
+write q(x1:T ) to simplify notation. The overall variational
+family is summarized in Figure 4b.
+There are many alternative designs for such recognition
+networks; for example, the node potential on xt need not
+depend only on the observation yt. See Section 3.3.
+This structured mean ﬁeld family can be directly compared
+to the fully factorized family used in the variational autoen-
+coder described in Section 2.2. That is, there is no graph
+structure among the latent variables of the VAE. The SVAE
+generalizes the VAE by allowing the output of the recogni-
+tion network to be arbitrary potentials in a graphical model,
+such as the node potentials considered here. Furthermore,
+in the SVAE some of the graphical model potentials are
+induced by the probabilistic model rather than being the
+output of a recognition network; for example, the optimal
+pairwise potentials ψ(xt, xt+1) are induced by the varia-
+tional factors on the dynamical parameters and latent dis-
+crete states, q(θ) and q(z1:T ), and the forward generative
+model p(z, x| θ) (see Section 4.2.1). Thus the SVAE pro-
+vides a way to combine bottom-up information from ﬂex-
+ible inference networks with top-down information from
+other latent variables in a structured probabilistic model.
+When p(θ) is chosen to be a conjugate prior, as in Eq. (24),
+the optimal factor q(θ) is in the same exponential family:
+
+q(θ) = exp{(cid:104)(cid:101)ηθ, tθ(θ)(cid:105) − log Zθ((cid:101)ηθ)} ,
+
+where (cid:101)ηθ denotes the variational natural parameters. To
+
+simplify notation, as in Section 2.2 we take the variational
+factor on the observation parameters to be a singular distri-
+bution, q(ϑ) = δϑ∗(ϑ). The mean ﬁeld objective in terms
+
+(29)
+
+Structured variational autoencoders
+
+(cid:33)
+
+(cid:27)
+
+,
+
+(28)
+
+(a)
+
+(b)
+
+Figure 6. Alternative SLDS recognition models.
+
+(a)
+
+(b)
+
+Figure 7. Variations on the SLDS generative model.
+
+(cid:20)
+
+ln
+
+∗
+, φ)(cid:44) max
+
+of the global variational parameters(cid:101)ηθ, ϑ∗, and φ is then
+(cid:21)
+L((cid:101)ηθ, ϑ
+p(θ, z, x)p(y | x, ϑ∗)
+(30)
+where, as in Eq. (6), the maximization is over the free pa-
+ﬁxed values of(cid:101)ηθ, ϑ∗, and φ. In Section 4 we show how to
+rameters of the local variational factors q(z) and q(x) given
+
+E
+q(θ)q(z)q(x)
+
+q(θ)q(z)q(x)
+
+q(z)q(x)
+
+optimize this variational objective.
+
+3.3. Variations and extensions
+
+The SVAE construction is general: it can admit many latent
+probabilistic models as well as many ﬂexible observation
+models and recognition network designs.
+In this section
+we outline some of these possibilities.
+While the SVAE recognition network described in Sec-
+tion 3.2 only produces node potentials depending on single
+data points, in general SVAE recognition networks can out-
+put potentials on more than one node or take as input more
+than one data point. For example, a recognition network
+could output node potentials of the form φ(xt; yt, yt−1)
+that depend also on the previous data point, as sketched in
+Figure 6a, or even depend on many data points through a re-
+current neural network (RNN). Recognition networks may
+also output factors on discrete latent variables, as sketched
+in Figure 6b.
+The observation model may also be extended, for example
+to allow data to be generated according to a nonlinear au-
+toregression, as sketched in Figure 7a. This extension may
+be useful when modeling video so that a frame can be gen-
+erated in part by reference to the preceding frame.
+Finally, the SVAE also admits many generative models,
+
+Structured variational autoencoders
+
+both structured probabilistic graphical models and more
+ﬂexible alternatives. As mentioned in Section 3.2, the
+SLDS described here includes many common structured
+graphical models as special cases, shown in Figure 5.
+For example, by using a GMM inside an SVAE, one
+can express a warped mixture model (Iwata et al., 2013).
+The SLDS also lends itself to many extensions, including
+explicit-duration semi-Markov modeling of discrete states
+(Johnson & Willsky, 2013) or IO-HMMs (Bengio & Fras-
+coni, 1995), sketched in Figure 7b. More generally, SVAEs
+provide a direct way to incorporate hierarchical Bayesian
+modeling, which enables many ways to share latent ran-
+dom variables and generalize across datasets. Because
+the SVAE can draw on the vast literature on probabilistic
+graphical models, there is a rich library of potential SVAEs.
+Finally, though we focus on traditional probabilistic graph-
+ical models here, the SVAE generative model can also be
+an RNN expressing ﬂexible nonlinear dynamics (Archer
+et al., 2015), though such models would not in general ad-
+mit the efﬁcient inference algorithms and natural gradients
+provided by exponential families.
+
+4. Learning and inference
+In this section we give an efﬁcient algorithm for comput-
+ing stochastic gradients of the SVAE objective in Eq. (30).
+These stochastic gradients can be used in a generic op-
+timization routine such as stochastic gradient ascent or
+Adam (Kingma & Ba, 2015).
+As we show, the SVAE algorithm is essentially a combi-
+nation of SVI (Hoffman et al., 2013) and AEVB (Kingma
+& Welling, 2014), described in Sections 2.1 and 2.2, re-
+spectively. By drawing on SVI, our algorithm is able to
+exploit exponential family conjugacy structure, when it is
+available, to efﬁciently compute natural gradients with re-
+spect to some variational parameters. Because natural gra-
+dients are adapted to the geometry of the variational family
+and are invariant to model reparameterizations (Amari &
+Nagaoka, 2007) natural gradient ascent provides an effec-
+tive second-order optimization method (Martens & Grosse,
+2015; Martens, 2015). By drawing on AEVB, our algo-
+rithm can ﬁt both general nonlinear observation models and
+ﬂexible bottom-up recognition networks.
+The algorithm is split into two parts. First, in Section 4.1
+we describe the general algorithm for computing gradi-
+ents of the objective in terms of the results from a model-
+speciﬁc inference subroutine. Next, in Section 4.2 we detail
+this model inference subroutine for the SLDS.
+
+4.1. SVAE algorithm
+
+Here we show how to compute stochastic gradients of the
+SVAE mean ﬁeld objective (30) using the results of a model
+
+To compute these gradients, as in Section 2.2 we split the
+
+inference subroutine. The algorithm is summarized in Al-
+gorithm 1 and implemented in svae.py.
+For scalability, the stochastic gradients used here are com-
+puted on minibatches of data. To simplify notation, we as-
+n=1,
+sume the dataset is a collection of N sequences, {y(n)}N
+each of length T . We sample one sequence y(n) uni-
+formly at random and compute a stochastic gradient with
+it. It is also possible to sample subsequences and compute
+controllably-biased stochastic gradients (Foti et al., 2014).
+The SVAE algorithm computes a natural gradient with re-
+
+spect to(cid:101)ηθ and standard gradients with respect to ϑ∗ and φ.
+objective L((cid:101)ηθ, ϑ∗, φ) as
+dynamics parameter (cid:101)ηθ. Furthermore, it is a KL diver-
+with respect to(cid:101)ηθ as
+N(cid:88)
+(cid:101)∇(cid:101)ηθL = ηθ +
+
+gence between two members of the same exponential fam-
+ily (Eqs. (24) and (29)), and so as in Hoffman et al. (2013)
+and Section 2.1 we can write the natural gradient of (31)
+
+q(z)q(x)(tzx(z(n), x(n)), 1)−(cid:101)ηθ (32)
+
+Note that only the second term depends on the variational
+
+) − KL(q(θ, z, x)(cid:107) p(θ, z, x)).
+
+∗
+E
+q(x) ln p(y | x, ϑ
+
+(31)
+
+E
+
+n=1
+
+where q(z) and q(x) are taken to be locally optimal local
+mean ﬁeld factors as in Eq. (7). Therefore by sampling the
+sequence index n uniformly at random, an unbiased esti-
+mate of the natural gradient is given by
+
+(cid:101)∇(cid:101)ηθL ≈ ηθ + NE
+
+q(z)q(x)(tzx(z(n), x(n)), 1) −(cid:101)ηθ. (33)
+
+zx (cid:44) E
+
+s
+
+(φ)}S
+
+s=1 where ˆx(n)
+
+We abbreviate ¯t(n)
+q(z)q(x)tzx(z(n), x(n)). These ex-
+pected sufﬁcient statistics are computed efﬁciently using
+the model inference subroutine described in Section 4.2.
+To compute the gradient of the SVAE objective with re-
+spect to the observation parameters ϑ∗, note that only the
+ﬁrst term in (31) depends on ϑ∗. As in Section 2.2, we can
+compute a Monte Carlo approximation to this gradient us-
+ing samples {ˆx(n)
+∼ q(x(n)) and
+we write ˆx(n)
+(φ) to note the dependence on φ. These sam-
+ples are generated efﬁciently (and as differentiable func-
+tions of φ) by the model inference subroutine described in
+Section 4.2. To simplify notation we take S = 1.
+Finally, we compute gradients with respect to the recog-
+nition network parameters φ. Both the ﬁrst and second
+terms of (31) depend on φ, the ﬁrst term through the sam-
+ple ˆx(n)(φ) and the second term through the KL divergence
+KL(φ) (cid:44) KL(q(θ, z(n), x(n))(cid:107) p(θ, z(n), x(n))). Thus we
+
+must differentiate through the procedures that the model
+inference subroutine uses to compute these quantities. As
+
+(φ)
+
+iid
+
+s
+
+s
+
+Structured variational autoencoders
+
+Algorithm 1 Computing gradients of the SVAE objective
+
+vation model parameter ϑ∗, recognition network param-
+eters φ, sampled sequence y(n)
+
+Input: Variational dynamics parameter(cid:101)ηθ of q(θ), obser-
+function SVAEGRADIENTS((cid:101)ηθ, ϑ∗, φ, y(n))
+zx , KL(φ)) ← INFERENCE((cid:101)ηθ, ψ)
+ψ ← RECOGNIZE(y(n), φ)
+(cid:101)∇(cid:101)ηθL ← ηθ + N (¯t(n)
+zx , 1) −(cid:101)ηθ
+(cid:2)N ln p(y(n)| ˆx(n)(φ), ϑ∗) − KL(φ)(cid:3)
+(ˆx(n)(φ), ¯t(n)
+returnnatural gradient (cid:101)∇(cid:101)ηθL, gradient ∇ϑ∗,φL
+
+∇ϑ∗,φL ←∇ϑ∗,φ
+
+end function
+
+1:T ) as
+−1(φ)h(φ) + J(φ)
+
+described in Section 4.2, performing this differentiation
+efﬁciently for the SLDS corresponds to backpropagation
+through message passing.
+To observe that both ˆx(n)(φ) and KL(φ) can be computed
+differentiably by the model inference subroutine of the
+SLDS, and to relate this process to the reparameterization
+trick of Section 2.2, note that the objective only depends
+on φ through the optimal factor q(x(n)
+1:T ), which is a joint
+Gaussian factor over the latent continuous states. That is,
+we can write the sample ˆx(n)(φ) ∼ q(x(n)
+
+− 1
+2 
+
+ˆx(n)(φ) = g(φ, ) (cid:44) J
+
+(34)
+where  ∼ N (0, I), h(φ) ∈ RT M , and J(φ) ∈ RT M×T M .
+The matrix J(φ) is a block tridiagonal matrix correspond-
+ing to the Gaussian LDS of (27), the block diagonal of
+which depends on φ. Since g(φ, ) is differentiable with
+respect to φ, this representation shows that ˆx(n)(φ) is dif-
+ferentiable with respect to φ. Given a sample ˆ, to evalu-
+ate ∇φg(φ, ˆ) efﬁciently we can exploit the block tridiago-
+nal structure of J(φ), which corresponds exactly to back-
+propagating through the message passing procedure used to
+sample q(x(n)
+1:T ). Similarly, to evaluate the gradient of the
+second term of (31), which is computed analytically, we
+simply backpropagate through the message passing routine
+used to compute it. Both message passing computations are
+part of the model inference subroutine described in Sec-
+tion 4.2. Computing each of these gradients using stan-
+dard backpropagation tools requires twice the time of the
+message passing algorithms used to compute them. When
+the reparameterization trick is not available, the score func-
+tion estimator can be used instead (Kleijnen & Rubinstein,
+1996; Gelman & Meng, 1998; Ranganath et al., 2014)
+
+4.2. Model inference subroutine
+
+Here we describe the model inference subroutine used by
+the SVAE algorithm.
+Because the VAE corresponds to a particular SVAE with
+limited latent probabilistic structure, this inference sub-
+
+t=1 from recognition network
+
+Algorithm 2 Model inference subroutine for the SLDS
+
+Input: Variational dynamics parameter (cid:101)ηθ of q(θ), node
+function INFERENCE((cid:101)ηθ, {ψ(xt; yt)}T
+potentials {ψ(xt; yt)}T
+Initialize factor q(x)
+repeat
+q(z) ∝ exp{E
+q(x) ∝ exp{E
+until q(z) and q(x) converge
+ˆx ← sample q(x)
+¯tzx ← E
+q(z)q(x)tzx(z, x)
+KL ← KL(q(θ)(cid:107) p(θ))
++NE
+returnsample ˆx, expected stats ¯tzx, divergence KL
+
+q(θ)q(x)ln p(z, x| θ)}
+q(θ)q(z)ln p(x| z, θ)}
+
+q(θ) KL(q(z)q(x)(cid:107) p(z, x| θ))
+
+t ψ(xt; yt)
+
+end function
+
+t=1)
+
+(cid:81)
+
+routine can be viewed as a generalization of two steps in
+the AEVB algorithm (Kingma & Welling, 2014). Specif-
+ically, using the notation of Section 2.2,
+in the spe-
+cial case of the VAE the inference subroutine computes
+KL(q(x| y)(cid:107) p(x)) in closed form and generates samples
+x ∼ q(x| y) used to approximate E
+q(x) ln p(y | x). How-
+ever, the inference subroutine of an SVAE may in gen-
+eral perform other computations: ﬁrst, because the SVAE
+can include other latent random variables and graph struc-
+ture, the inference subroutine may optimize local mean
+ﬁeld factors or run message passing. Second, because the
+SVAE can perform stochastic natural gradient updates on
+the global factor q(θ), the inference subroutine may also
+compute expected sufﬁcient statistics.
+In this subsection, we detail these computations for the
+SLDS model. Speciﬁcally, the inference subroutine must
+ﬁrst optimize the local mean ﬁeld factors q(z1:T ) and
+q(x1:T ), then compute and return a sample ˆx1:T ∼ q(x1:T ),
+expected sufﬁcient statistics E
+q(z)q(x)tzx(z, x), and a KL
+divergence KL(q(θ, z, x)(cid:107) p(θ, z, x)). To simplify nota-
+tion, we drop the sequence index n, writing y in place of
+y(n). The algorithm is summarized in Algorithm 2 and im-
+plemented in slds svae.py.
+
+4.2.1. OPTIMIZING LOCAL MEAN FIELD FACTORS
+
+As in the SVI algorithm of Section 2.1, for a given data se-
+quence y we need to optimize the local mean ﬁeld factors
+q(z) and q(x). That is, for a ﬁxed global parameter factor
+
+q(θ) with natural parameter (cid:101)ηθ and ﬁxed node potentials
+
+t=1 output by the recognition network,
+ψ = {ψ(xt; yt)}T
+we optimize the variational objective with respect to both
+the local variational factor on discrete latent states q(z1:T )
+and the local variational factor on continuous latent states
+q(x1:T ). This optimization can be performed efﬁciently by
+exploiting the SLDS exponential family form and the struc-
+tured variational family.
+
+Structured variational autoencoders
+
+The algorithm proceeds by alternating between optimizing
+q(x1:T ) and optimizing q(z1:T ). Fixing the factor on the
+discrete states q(z1:T ), the optimal variational factor on the
+continuous states q(x1:T ) is proportional to
+
+T(cid:88)
+
+(cid:27)
+
+ln ψ(xt, xt+1) +
+
+ln ψ(xt; yt)
+
+,
+
+t=1
+
+t=1
+
+(cid:26)
+
+T−1(cid:88)
+
+exp
+
+ln ψ(x1) +
+
+where
+
+ψ(x1) = E
+ψ(xt, xt+1) = E
+
+q(θ)q(z) ln p(x1 | z1, θ)
+q(θ)q(z) ln p(xt+1 | xt, zt, θ),
+
+(35)
+(36)
+Because the densities p(x1 | z1, θ) and p(xt+1 | xt, zt, θ)
+the expectations in
+are Gaussian exponential families,
+Eqs. (35)-(36) can be computed efﬁciently, yielding Gaus-
+sian potentials with natural parameters that depend on both
+q(θ) and q(z1:T ). Furthermore, because each ψ(xt; yt) is
+itself a Gaussian potential, the overall factor q(x1:T ) is
+a Gaussian linear dynamical system with natural parame-
+ters computed from the variational factor on the dynami-
+cal parameters q(θ), the variational parameter on the dis-
+crete states q(z1:T ) and the recognition model potentials
+{ψ(xt; yt)}T
+Because the optimal factor q(x1:T ) is a Gaussian linear dy-
+namical system, we can use message passing to perform
+efﬁcient inference.
+In particular, the expected sufﬁcient
+statistics of q(x1:T ) needed for updating q(z1:T ) can be
+computed efﬁciently. Message passing can also be used
+to draw samples or compute the log partition function efﬁ-
+ciently, as we describe in Section 4.2.2.
+Similarly, ﬁxing q(x1:T ) the optimal factor q(z1:T ) is pro-
+portional to
+
+t=1.
+
+T(cid:88)
+
+(cid:41)
+
+(cid:40)
+
+T−1(cid:88)
+
+exp
+
+ln ψ(z1) +
+
+where
+
+ln ψ(zt, zt+1) +
+
+ln ψ(zt)
+
+,
+
+t=1
+
+t=1
+
+ψ(z1) = E
+ψ(zt, zt+1) = E
+ψ(zt) = E
+
+q(θ) ln p(z1 | θ) + E
+q(θ) ln p(zt+1 | zt)
+q(θ)q(x) ln p(xt+1 | xt, zt, θ)
+
+q(θ)q(x) ln p(x1 | z1, θ)
+(37)
+
+Again, because the densities involved are exponential fam-
+ilies, these expectations can be computed efﬁciently. The
+resulting factor q(z1:T ) is an HMM with natural parameters
+that are functions of q(θ) and q(x1:T ). Both the expected
+sufﬁcient statistics required for updating q(x1:T ) as well as
+the log partition function required in Section 4.2.2 can be
+computed efﬁciently by message passing.
+
+4.2.2. SAMPLES, EXPECTED STATISTICS, AND KL
+
+After optimizing the local variational factors, the model in-
+ference subroutine uses the optimized factors to draw sam-
+ples, compute expected sufﬁcient statistics, and compute
+
+a KL divergence. The results of these inference computa-
+tions, which we detail here, are then used to compute gra-
+dients of the SVAE objective as described in Section 4.1.
+To draw S samples {ˆx(s)}S
+∼ q(x1:T ), we
+can perform message passing in q(x1:T ), which is a Gaus-
+sian distribution that is Markov with respect to a chain
+graph. Given two neighboring nodes i and j we deﬁne the
+message from i to j as
+
+s=1 where ˆx(s)
+
+1:T
+
+iid
+
+mi→j(xj) (cid:44)
+
+ψ(xi; yi)ψ(xi, xj)mk→i(xi) dxi
+
+(38)
+
+(cid:90)
+
+where k is the other neighbor of node i. We can pass mes-
+sages backward once, running a Kalman ﬁlter, and then
+sample forward S times. That is, after computing the mes-
+sages mt+1→t(xt) for t = T − 1, . . . , 1, we compute the
+marginal distribution on x1 as
+
+q(x1) ∝ ψ(x1)ψ(x1; y1)m2→1(x1)
+
+(39)
+and sample ˆx1 ∼ q(x1). Iterating, given a sample of ˆxt−1,
+we sample ˆxt from the conditional distributions
+
+(40)
+
+q(xt | ˆx1:t−1) ∝ ψ(ˆxt−1, xt)ψ(xt; yt)mt+1→t(xt),
+q(xT | ˆx1:T−1) ∝ ψ(ˆxT−1, xT )ψ(xT ; yT ),
+thus constructing a joint sample ˆx1:T ∼ q(x1:T ).
+gradient step on(cid:101)ηθ we can also use message passing, this
+To compute the expected sufﬁcient statistics for the natural
+
+time in both factors q(x1:T ) and q(z1:T ) separately. Recall
+the exponential family notation from Eqs. (24)-(25). The
+required expected sufﬁcient statistics, which we abbreviate
+as ¯tzx (cid:44) E
+E
+q(z)
+
+q(x)q(z)tzx(z, x), are of the form
+
+I[zt = i],
+
+q(z)
+
+I[zt = i, zt+1 = j], E
+E
+q(z)
+I[zt = k]E
+
+(cid:3) , E
+
+(cid:2)xtxT
+
+I[zt = k]E
+
+q(x)
+
+(cid:2)xtxT
+
+t+1
+
+(cid:3) ,
+
+t
+
+q(z)
+
+q(x)
+
+q(x)[x1] ,
+
+I[z1 = k]E
+
+E
+q(z)
+where I[· ] denotes an indicator function. Each of these
+can be computed easily from the marginals q(xt, xt+1) and
+q(zt, zt+1) for t = 1, 2, . . . , T − 1, and these marginals
+can be computed in terms of the respective graphical
+model messages. For example, to compute the marginal
+q(xt, xt+1), we write
+
+(41)
+
+q(xt, xt+1) ∝ ψ(xt; yt)ψ(xt, xt+1)ψ(xt+1; yt+1)
+
+· mt−1→t(xt)mt+2→t+1(xt+1).
+
+(42)
+
+Because each of the factors is a Gaussian potential, the
+product yields a Gaussian marginal with natural parameters
+computed from the sum of the factors’ natural parameters.
+The corresponding expected sufﬁcient statistics can then be
+computed by converting from natural parameters to mean
+parameters. The computations for q(zt, zt+1) are similar.
+
+Structured variational autoencoders
+
+Finally, to compute the required KL divergence efﬁciently,
+we split KL(q(θ, z, x)(cid:107) p(θ, z, x)) into three terms:
+
+KL(q(θ, z, x)(cid:107) p(θ, z, x)) = KL(q(θ)(cid:107) p(θ)) + (43)
+q(θ) KL(q(z)(cid:107)p(z | θ)) + E
+E
+q(θ)q(z) KL(q(x)(cid:107)p(x| z, θ)).
+Each term is a divergence between members of the same
+exponential family and thus can be computed in terms of
+natural parameters, expected sufﬁcient statistics, and log
+partition functions. In particular, the ﬁrst term is
+
+(cid:21)
+= (cid:104)(cid:101)ηθ − ηθ, ¯tθ(cid:105)−(ln Zθ((cid:101)ηθ) − ln Zθ(ηθ)),
+
+q(θ)
+p(θ)
+
+E
+q(θ)
+
+ln
+
+(cid:20)
+
+¯tθ (cid:44) E
+
+q(θ)tθ(θ).
+
+(44)
+
+t=1 in q(x).
+
+Because the factors q(z) and q(x) are locally optimal for
+q(θ) (Beal, 2003), the second and third terms are simply
+the log partition functions of q(z) and q(x), respectively,
+each of which can be computed efﬁciently from message
+passing, along with some linear terms. Note that the third
+term in the KL divergence (43) is a function of the recog-
+nition network parameters φ through the conditional node
+potentials {ψ(xt; yt, φ)}T
+5. Related work
+In addition to the papers already referenced, there are sev-
+eral recent papers to which this work is related. The two
+papers closest to this work are Krishnan et al. (2015) and
+Archer et al. (2015).
+In Krishnan et al. (2015) the authors consider combining
+variational autoencoders with continuous state-space mod-
+els, emphasizing the relationship to linear dynamical sys-
+tems (also called Kalman ﬁlter models). They primarily fo-
+cus on nonlinear dynamics and an RNN-based variational
+family, as well as allowing control inputs (analogous to the
+IO-HMM extension mentioned in Section 3.3 and in Fig-
+ure 7b, though with no discrete states and with the covari-
+ates inﬂuencing the continuous states). The approach in
+Krishnan et al. (2015) covers many nonlinear probabilistic
+state-space models but does not extend to general graphi-
+cal models and in particular discrete latent variables. That
+approach also does not leverage SVI, natural gradients, or
+efﬁcient message passing inference in the case of (switch-
+ing) linear dynamics. However, their nonlinear dynamcis
+model is more general than the conditionally linear dynam-
+ics we explicitly consider here. The authors also emphasize
+causal and counterfactual inference.
+In Archer et al. (2015) the authors also consider the prob-
+lem of variational inference in general continuous state
+space models but focus on using a structured Gaussian vari-
+ational family. They show how to extend the AEVB al-
+gorithm of Kingma & Welling (2014) to leverage block
+
+tridiagonal-structured precision (inverse covariance) matri-
+ces, and hence develop a method more suitable for time
+series and state space models. Leveraging this tridiago-
+nal structure in the AEVB algorithm is the same as the
+backpropagation through message passing in q(x1:T ) dis-
+cussed in Section 4.2.2, though our algorithm also back-
+propagates through message passing in the discrete state
+factor q(z1:T ). The authors do not discuss learning dy-
+namics models; instead, they focus on the case of infer-
+ence with known nonlinear dynamics. As with Krishnan
+et al. (2015), their model does not include discrete latent
+variables (or any latent variables other than the continuous
+states) and does not discuss SVI for learning. The over-
+all algorithm of Archer et al. (2015) can be most directly
+compared to part of the model inference subroutine we dis-
+cuss in Section 4.2, namely to the steps of optimizing the
+chain-structured factor q(x1:T ) and performing efﬁcient in-
+ference in it, with the key difference of emphasizing non-
+linear dynamics. Indeed, the inference algorithm of Archer
+et al. (2015) can be used in an SVAE to handle inference
+with conditionally nonlinear dynamics, and so these works
+are complementary. Notably, Section 4.1 and speciﬁcally
+Eq. (16) of Krishnan et al. (2015) demonstrate a recogni-
+tion network that outputs pairwise potentials (i.e. dynamics
+potentials).
+There are many other recent related works, especially lever-
+aging new deep learning ideas. In particular, both Gregor
+et al. (2015) and Chung et al. (2015) extend the variational
+autoencoder framework to sequential models, though they
+focus on models based on RNNs rather than probabilistic
+graphical models. More classical approaches for nonlin-
+ear ﬁltering, smoothing, and model ﬁtting are surveyed in
+Krishnan et al. (2015).
+
+6. Experiments
+In this section we apply the SVAE to both synthetic and
+real data and demonstrate its ability to learn both rich fea-
+ture representations and simple latent dynamics. First, we
+apply a linear dynamical system (LDS) SVAE to synthetic
+data and illustrate some aspects of its training dynamics.
+Second, we apply an LDS SVAE and switching linear dy-
+namical system (SLDS) SVAE to modeling depth video
+recordings of mouse behavior.
+
+6.1. Image of a moving dot
+
+As a synthetic data example, consider a sequence of 1D
+images representing a dot bouncing from one side of the
+image to the other, as shown in the top panel of Figure 8a.
+While these images are simple, the task of modeling such
+sequences captures many salient aspects of the SVAE: to
+make predictions far into the future with coherent uncer-
+tainty estimates, we can use an LDS SVAE to ﬁnd a low-
+
+Structured variational autoencoders
+
+dimensional latent state space representation, along with a
+nonlinear image model and a simple model of dynamics in
+the latent state space.
+We trained the LDS SVAE on 80 random image sequences
+each of length 50, using one sequence per update, and show
+the model’s future predictions given a preﬁx of a longer se-
+quence. We used MLP image and recognition models each
+with one hidden layer of 50 units. Figures 8a and 8b show
+predictions from an LDS SVAE at two stages of training.
+Taken from an early stage in training, Figure 8a shows that
+the LDS SVAE ﬁrst learns an autoencoder that can repre-
+sent the image data accurately. However, while the latent
+space allows the images to be encoded and decoded ac-
+curately, the latent space trajectories are not well modeled
+by a linear dynamical system and hence future predictions
+are highly uncertain. As training proceeds, the SVAE ad-
+justs the latent space representation so that the trajectories
+can be accurately modeled and predicted using an LDS, as
+shown in Figure 8b, and hence long-range predictions be-
+come very accurate. Figure 9 shows the same experiment
+repeated with a higher resolution image.
+Figure 10 shows predictions from the ﬁt LDS SVAE based
+on revealing data preﬁxes of different lengths. Note that
+when only a single frame is revealed, the model is uncertain
+as to whether the dot is moving upwards or downwards in
+the image. However, instead of showing a bifurcation in the
+predictions corresponding to these two distinct hypotheses,
+because the latent dynamics are linear the model’s predic-
+tions encompass all possible trajectories between these two
+hypotheses. With a nonlinear dynamics model, such as a
+switching LDS (SLDS) or a more general recurrent neu-
+ral network (RNN), a model that explicitly represents this
+bimodal hypothesis could be learned, at least in principle.
+Finally, we also use this synthetic data problem to illus-
+trate the signiﬁcant optimization advantages that can be
+provided by the natural gradient updates with respect to the
+variational dynamics parameters. In Figure 11 we compare
+natural gradient updates with standard gradient updates at
+three different learning rates. The natural gradient algo-
+rithm not only learns much faster but also is less dependent
+on parameterization details: while the natural gradient up-
+date used an untuned stepsize of 0.1, the standard gradient
+dynamics at step sizes of both 0.1 and 0.05 resulted in some
+matrix parameters that are required to be positive deﬁnite
+to be updated to indeﬁnite values. This particular indef-
+initeness error with standard gradients can be avoided by
+working in a different parameterization of the positive def-
+inite parameter matrices, but we used a direct parameter-
+ization to make the learning rate comparison more direct.
+While a step size of 0.01 yielded a stable standard gradient
+update, training is signiﬁcantly slower than with the natu-
+ral gradient algorithm, and this speed advantage of natural
+
+gradients is often greater in larger models and higher di-
+mensions (Martens & Grosse, 2015).
+
+Figure 11. Comparison on the dot problem of natural gradient up-
+dates (blue) and standard gradient updates (orange). The X’s indi-
+cate that the algorithm was terminated early due to indeﬁniteness.
+
+6.2. Application to mouse behavioral phenotyping
+
+As a real data experiment, we apply the SVAE to modeling
+depth video of freely-behaving mice. The goal of behav-
+ioral phenotyping is to identify patterns of behavior and
+study how those patterns change when the animal’s envi-
+ronment, genetics, or brain function are altered. The SVAE
+framework is well-suited to provide new modeling tools for
+this task because it can learn rich nonlinear image features
+while learning an interpretable representation of the latent
+dynamics.
+We use a version of the dataset from Wiltschko et al.
+(2015), in which a mouse is recorded from above using a
+depth camera, as shown in Figure 12. The mouse’s posi-
+tion and orientation are tracked and the depth image of the
+mouse’s body is extracted, as shown in the insets. We apply
+the SVAE to the task of modeling these extracted videos.
+We used a subset of the dataset consisting of 8 recordings,
+each of a distinct mouse and each 20 minutes in length at
+30 frames per second, for a total of 288000 video frames.
+First, we show that the variational autoencoder (VAE) ar-
+chitecture allows us to accurately represent the manifold of
+depth images. We ﬁt a standard VAE to the depth video
+frames, using two hidden layers of size 200 for the en-
+coder and decoder along with a 10D latent space; we reuse
+this same architecture for the subsequent SVAE models.
+Figure 13 shows both samples of the real video frames
+(top panel) and images generated from the VAE by sam-
+pling from a standard Gaussian in the latent space (bottom
+panel), demonstrating that the VAE image model can gen-
+erate very accurate synthetic mouse images. Furthermore,
+
+01000200030004000iteration−15−10−50510−LStructured variational autoencoders
+
+(a) Predictions after 200 training epochs.
+
+(b) Predictions after 1100 training epochs.
+
+Figure 8. Predictions from an LDS SVAE ﬁt to 1D dot image data at two different stages of training. In each subﬁgure, the top panel
+shows an example data sequence with time on the horizontal axis. The middle panel shows the noiseless LDS SVAE predictions given
+the data up to the vertical line, while the bottom panel shows the corresponding latent states.
+
+(a) Predictions after 200 training epochs.
+
+(b) Predictions after 1100 training epochs.
+
+Figure 9. As in Figure 8 but with a higher-resolution image sequence.
+
+(a) Prediction given one frame of data.
+
+(b) Prediction given 5 frames of data.
+
+Figure 10. As in Figure 8 but showing predictions given different data preﬁxes.
+
+Structured variational autoencoders
+
+Figure 12. Mouse depth video acquisition. A freely-behaving mouse is recorded from above with a depth camera. The mouse position
+and orientation are tracked and the mouse body depth image is extracted, as shown in each inset. Our models are applied to these
+extracted image sequences after some ﬁltering and downsampling.
+
+Structured variational autoencoders
+
+to illustrate that the learned manifold naturally represents
+smooth variation in the mouse’s pose, Figure 14 shows im-
+ages generated from regular lattices on random 2D sub-
+spaces of the latent space.
+While the VAE can accurately model the marginal distri-
+bution on each image, to model entire depth videos jointly
+we use the SVAE to learn dynamics in the latent space.
+To show that a Gaussian linear dynamical system (LDS)
+can accurately represent these latent space dynamics, we
+ﬁt an LDS SVAE to the depth video sequences. Figure 15
+shows predictions from this model over 1-second horizons,
+illustrating that the LDS SVAE retains the ﬂexible image
+modeling capabilities of the VAE while additionally mod-
+eling smooth dynamics that can generate plausible video
+sequences.
+Finally, because latent linear dynamics paired with the
+nonlinear image model can accurately represent the depth
+videos over short timescales, by extending the latent dy-
+namics to a switching LDS (SLDS) we can discover dis-
+tinct dynamical modes to represent the syllables of behav-
+ior. Figure 16 shows some of the discrete states that arise
+from ﬁtting an SLDS SVAE with 30 discrete states to the
+depth video data. The discrete states that emerge show a
+natural clustering of short-timescale patterns into behav-
+ioral units. Thus the SLDS SVAE provides an interpretable,
+structured representation of behavioral patterns.
+
+7. Conclusion
+Structured variational autoencoders (SVAEs) provide a
+new set of tools for probabilistic modeling that leverage
+both graphical models and deep learning techniques. By
+building on variational autoencoders and neural network ar-
+chitectures, SVAEs can learn features and bottom-up infer-
+ence networks automatically and represent complex high-
+dimensional data. By enabling the latent probabilistic mod-
+els to be expressed in terms of graphical models, exponen-
+tial families, and hierarchical structures, SVAEs also allow
+powerful modeling and algorithmic tools to be applied, in-
+cluding efﬁcient natural gradient computations, graphical
+message passing, priors that encourage sparsity or repre-
+sent domain knowledge, and discrete latent random vari-
+ables. Furthermore, these structured latent representations
+can provide both interpretability and tractability for non-
+inference tasks, such as planning or control. Finally, be-
+cause SVAE learning ﬁts in the standard variational opti-
+mization framework, many recent advances in neural net-
+work optimization (Martens & Grosse, 2015) and vari-
+ational inference (Burda et al., 2015) can be applied to
+SVAEs.
+
+Acknowledgements
+We thank Roger Grosse, Scott Linderman, Dougal Maclau-
+rin, Andrew Miller, Oren Rippel, Yakir Reshef, Miguel
+Hernandez-Lobato, and the members of the Harvard Intelli-
+gent Probabilistic Systems (HIPS) Group for many helpful
+discussions and advice.
+M.J.J. is supported by a fellowship from the Harvard/MIT
+Joint Grants program. A.B.W. is supported by an NSF
+Graduate Research Fellowship and is a Stuart H.Q. & Vic-
+toria Quan Fellow. S.R.D. is supported by fellowships
+from the Burroughs Wellcome Fund, the Vallee Founda-
+tion, the Khodadad Program, by grants DP2OD007109 and
+RO11DC011558 from the National Institutes of Health,
+and by the Global Brain Initiative from the Simons Foun-
+dation. R.P.A. is supported by NSF IIS-1421780.
+
+References
+Amari, Shun-Ichi. Natural gradient works efﬁciently in
+
+learning. Neural computation, 10(2):251–276, 1998.
+
+Amari, Shun-ichi and Nagaoka, Hiroshi. Methods of In-
+formation Geometry. American Mathematical Society,
+2007.
+
+Archer, Evan, Park, Il Memming, Buesing, Lars, Cun-
+ningham, John, and Paninski, Liam. Black box varia-
+tional inference for state space models. arXiv preprint
+arXiv:1511.07367, 2015.
+
+Beal, Matthew James. Variational algorithms for approxi-
+
+mate Bayesian inference. University of London, 2003.
+
+Bengio, Yoshua and Frasconi, Paolo. An input output hmm
+In Advances in Neural Information Pro-
+
+architecture.
+cessing Systems, pp. 427–434, 1995.
+
+Burda, Yuri, Grosse, Roger, and Salakhutdinov, Rus-
+lan. Importance weighted autoencoders. arXiv preprint
+arXiv:1509.00519, 2015.
+
+Chung, Junyoung, Kastner, Kyle, Dinh, Laurent, Goel,
+Kratarth, Courville, Aaron C, and Bengio, Yoshua. A
+recurrent latent variable model for sequential data.
+In
+Advances in Neural information processing systems, pp.
+2962–2970, 2015.
+
+Deng, Li. Computational models for speech production.
+In Computational Models of Speech Pattern Processing,
+pp. 199–213. Springer, 1999.
+
+Deng, Li. Switching dynamic system models for speech
+In Mathematical Founda-
+articulation and acoustics.
+tions of Speech and Language Processing, pp. 115–133.
+Springer, 2004.
+
+Structured variational autoencoders
+
+(a) Real frames from mouse depth video.
+
+(b) Generated random samples from a VAE ﬁt to mouse depth video.
+
+Figure 13. Real data frames and generated images from a variational autoencoder (VAE) ﬁt to mouse depth video data. In the second
+panel, images were generated by sampling latent coordinates from a standard 10D Gaussian.
+
+Structured variational autoencoders
+
+Figure 14. Generated images from variational autoencoder (VAE) ﬁt to mouse depth video data. Each image grid was generated by
+choosing a random 2D subspace of the 10D latent space and sampling a regular 2D lattice of points on the subspace.
+
+Structured variational autoencoders
+
+Figure 15. Examples of predictions from an LDS SVAE ﬁt to depth video. In each panel, the top row is a sampled prediction from the
+LDS-SVAE and the bottom row is real data. To the left of the line, the model is conditioned on the corresponding data frames and hence
+generates denoised versions of the same images. To the right of the line, the model is not conditioned on the data, thus illustrating the
+model’s predictions. The frame sequences are temporally subsampled to reduce their length, showing one of every four video frames.
+
+Structured variational autoencoders
+
+(a) Entering a rear
+
+(b) Grooming
+
+(c) Extension into running
+
+(d) Fall from rear
+
+Figure 16. Examples of behavior states inferred from depth video. For each state, four example frame sequences are shown, including
+frames during which the given state was most probable according to the variational distribution on the hidden state sequence. Each frame
+sequence is padded on both sides, with a square in the lower-right of a frame depicting that the state was active in that frame. The frame
+sequences are temporally subsampled to reduce their length, showing one of every four video frames. Examples were chosen to have
+durations close to the median duration for that state.
+
+Structured variational autoencoders
+
+Foti, Nicholas, Xu, Jason, Laird, Dillon, and Fox, Emily.
+Stochastic variational inference for hidden markov mod-
+els. In Advances in Neural Information Processing Sys-
+tems, pp. 3599–3607, 2014.
+
+Fox, E.B., Sudderth, E.B., Jordan, M.I., and Willsky, A.S.
+Bayesian nonparametric inference of switching dynamic
+linear models. IEEE Transactions on Signal Processing,
+59(4), 2011.
+
+Gelman, Andrew and Meng, Xiao-Li. Simulating normal-
+izing constants: From importance sampling to bridge
+sampling to path sampling. Statistical science, pp. 163–
+185, 1998.
+
+Gregor, Karol, Danihelka, Ivo, Graves, Alex, and Wierstra,
+Daan. DRAW: A recurrent neural network for image
+generation. arXiv preprint arXiv:1502.04623, 2015.
+
+Hinton, Geoffrey, Deng, Li, Yu, Dong, Dahl, George E,
+Mohamed, Abdel-rahman, Jaitly, Navdeep, Senior, An-
+drew, Vanhoucke, Vincent, Nguyen, Patrick, Sainath,
+Tara N, et al. Deep neural networks for acoustic mod-
+eling in speech recognition: The shared views of four
+research groups. Signal Processing Magazine, IEEE, 29
+(6):82–97, 2012.
+
+Hoffman, Matthew D., Blei, David M., Wang, Chong, and
+Paisley, John. Stochastic variational inference. Journal
+of Machine Learning Research, 2013.
+
+Iwata, Tomoharu, Duvenaud, David, and Ghahramani,
+Zoubin. Warped mixtures for nonparametric cluster
+shapes. In 29th Conference on Uncertainty in Artiﬁcial
+Intelligence, pp. 311–319, 2013.
+
+Johnson, Matthew J. and Willsky, Alan S. Bayesian non-
+parametric hidden semi-markov models. Journal of Ma-
+chine Learning Research, 14:673–701, February 2013.
+
+Johnson, Matthew J. and Willsky, Alan S. Stochastic vari-
+In
+
+ational inference for Bayesian time series models.
+International Conference on Machine Learning, 2014.
+
+Kingma, Diederik and Ba, Jimmy. Adam: A method for
+stochastic optimization. In International Conference on
+Learning Representations, 2015.
+
+Kingma, Diederik P. and Welling, Max. Auto-encoding
+variational Bayes. International Conference on Learning
+Representations, 2014.
+
+Kleijnen, Jack PC and Rubinstein, Reuven Y. Optimization
+and sensitivity analysis of computer simulation models
+by the score function method. European Journal of Op-
+erational Research, 88(3):413–427, 1996.
+
+Koller, Daphne and Friedman, Nir. Probabilistic graphical
+
+models: principles and techniques. MIT Press, 2009.
+
+Krishnan, Rahul G, Shalit, Uri, and Sontag, David. Deep
+Kalman ﬁlters. arXiv preprint arXiv:1511.05121, 2015.
+
+Martens, James. New insights and perspectives on the nat-
+ural gradient method. arXiv preprint arXiv:1412.1193,
+2015.
+
+Martens, James and Grosse, Roger. Optimizing neural net-
+works with Kronecker-factored approximate curvature.
+In Proceedings of the 32nd International Conference on
+Machine Learning, 2015.
+
+Mikolov, Tomas, Sutskever, Ilya, Chen, Kai, Corrado,
+Greg S, and Dean, Jeff. Distributed representations of
+In Ad-
+words and phrases and their compositionality.
+vances in Neural Information Processing Systems, pp.
+3111–3119, 2013.
+
+Murphy, Kevin P. Machine Learning: a Probabilistic Per-
+
+spective. MIT Press, 2012.
+
+Radford, Alec, Metz, Luke, and Chintala, Soumith. Un-
+supervised representation learning with deep convolu-
+tional generative adversarial networks. arXiv preprint
+arXiv:1511.06434, 2015.
+
+Ranganath, Rajesh, Gerrish, Sean, and Blei, David M.
+Black box variational inference. In International Con-
+ference on Artiﬁcial Intelligence and Statistics, pp. 814–
+822, 2014.
+
+Rezende, Danilo J, Mohamed, Shakir, and Wierstra, Daan.
+Stochastic backpropagation and approximate inference
+in deep generative models. In Proceedings of the 31st In-
+ternational Conference on Machine Learning, pp. 1278–
+1286, 2014.
+
+Vincent, Pascal, Larochelle, Hugo, Bengio, Yoshua, and
+Manzagol, Pierre-Antoine. Extracting and composing
+robust features with denoising autoencoders. In Proceed-
+ings of the 25th international conference on Machine
+learning, pp. 1096–1103. ACM, 2008.
+
+Wainwright, Martin J. and Jordan, Michael I. Graphical
+models, exponential families, and variational inference.
+Foundations and Trends in Machine Learning, 2008.
+
+Wiltschko, Alexander B., Johnson, Matthew J., Iurilli, Giu-
+liano, Peterson, Ralph E., Katon, Jesse M., Pashkovski,
+Stan L., Abraira, Victoria E., Adams, Ryan P., and
+Datta, Sandeep Robert. Mapping sub-second structure
+in mouse behavior. Neuron, 88(6):1121–1135, 2015.
+
+

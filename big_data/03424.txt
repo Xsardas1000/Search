@@ -1,0 +1,2905 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+ 
+0
+1
+
+.
+
+ 
+ 
+]
+P
+E
+h
+p
+-
+o
+r
+t
+s
+a
+[
+ 
+ 
+
+1
+v
+4
+2
+4
+3
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Mon. Not. R. Astron. Soc. 000, 000–000 (0000)
+
+Printed 14 March 2016
+
+(MN LATEX style ﬁle v2.2)
+
+Second-order variational equations for N-body simulations
+
+Hanno Rein1,2, Daniel Tamayo1,3,4
+1 Department of Physical and Environmental Sciences, University of Toronto at Scarborough, Toronto, Ontario M1C 1A4, Canada
+2 Department of Astronomy and Astrophysics, University of Toronto, Toronto, Ontario, M5S 3H4, Canada
+3 Canadian Institute for Theoretical Astrophysics, 60 St. George St, University of Toronto, Toronto, Ontario M5S 3H8, Canada
+4 Centre for Planetary Sciences Fellow
+
+Submitted: 14 February 2016, Accepted: 10 March 2016.
+
+ABSTRACT
+First-order variational equations are widely used in N-body simulations to study how nearby
+trajectories diverge from one another. These allow for eﬃcient and reliable determinations of
+chaos indicators such as the Maximal Lyapunov characteristic Exponent (MLE) and the Mean
+Exponential Growth factor of Nearby Orbits (MEGNO).
+
+In this paper we lay out the theoretical framework to extend the idea of variational equa-
+tions to higher order. We explicitly derive the diﬀerential equations that govern the evolution
+of second-order variations in the N-body problem. Going to second order opens the door to
+new applications, including optimization algorithms that require the ﬁrst and second deriva-
+tives of the solution, like the classical Newton’s method. Typically, these methods have faster
+convergence rates than derivative-free methods. Derivatives are also required for Riemann
+manifold Langevin and Hamiltonian Monte Carlo methods which provide signiﬁcantly shorter
+correlation times than standard methods. Such improved optimization methods can be applied
+to anything from radial-velocity/transit-timing-variation ﬁtting to spacecraft trajectory opti-
+mization to asteroid deﬂection.
+
+We provide an implementation of ﬁrst and second-order variational equations for the pub-
+licly available REBOUND integrator package. Our implementation allows the simultaneous in-
+tegration of any number of ﬁrst and second-order variational equations with the high-accuracy
+IAS15 integrator. We also provide routines to generate consistent and accurate initial condi-
+tions without the need for ﬁnite diﬀerencing.
+Key words: methods: numerical — gravitation — planets and satellites: dynamical evolution
+and stability
+
+1
+
+INTRODUCTION
+
+Calculating the orbital motion of planets and predicting the position
+of planets in the night sky is one of astronomy’s oldest reoccurring
+tasks. Today this is considered a solved problem, a simple appli-
+cation of Newtonian physics. Typically the dynamical system is
+solved by numerically integrating forward in time using an N-body
+integrator. Diﬀerent techniques are available to do this very accu-
+rately over both short (see e.g. Rein & Spiegel 2015) and long (see
+e.g. Wisdom & Holman 1991; Rein & Tamayo 2015) timescales.
+
+But often the solutions of even very simple dynamical systems
+are complex, in some cases exhibiting chaos. This means that small
+perturbations in the initial conditions lead to exponentially diverg-
+ing solutions at late times. The solar system is one such chaotic dy-
+namical system (Roy et al. 1988; Sussman & Wisdom 1988; Laskar
+& Gastineau 2009). One way to characterize chaotic systems is to
+numerically determine the Maximal Lyapunov characteristic Ex-
+ponent (MLE), which measures the rate of exponential divergence
+between neighbouring trajectories in phase space.
+c(cid:13) 0000 RAS
+
+Calculating how particle trajectories vary with respect to their
+initial conditions is therefore an important numerical task in mod-
+ern celestial mechanics. It is also immediately relevant to orbital
+ﬁtting and optimization. For example, when ﬁtting an N-body sim-
+ulation of a planetary system to data, one might want to calculate
+the derivative of the χ2 value with respect to a planet’s initial orbital
+eccentricity.
+
+The MLE, or more generally any derivative with respect to
+initial conditions, can be calculated by running a separate N-body
+simulation with shadow particles, where the initial conditions of
+one or more particles are slightly perturbed. Measuring how fast
+the distance in phase space of the shadow particles with respect to
+their unperturbed counterparts grows then yields the MLE (Benet-
+tin et al. 1976).
+
+However, it is well known that there are problems associated
+with this shadow-particle method (Tancredi et al. 2001). On the one
+hand, we want to start the shadow particles close so that we obtain
+a local measure of the divergence of trajectories, and so that as the
+
+2
+
+Hanno Rein, Daniel Tamayo
+
+paths begin to drift apart, there are several decades over which to
+characterize the rate of divergence. On the other hand, the closer
+we put the shadow particles, the more digits we lose to numeri-
+cal roundoﬀ error. One workaround is to periodically rescale the
+separation vectors to keep shadow particles nearby their real coun-
+terparts (see, e.g., Sec. 9.3.4 of Murray & Dermott 2000). How-
+ever, we show in Sec. 5.4 that the use of shadow particles requires
+problem-dependent ﬁne-tuning and that the problem is exacerbated
+when computing higher-order derivatives.
+
+Luckily, instead of integrating a separate simulation of shadow
+particles, one can also use variational equations to measure diver-
+gences. Rather than diﬀerencing two nearly equal trajectories, one
+instead derives a new linearized dynamical system that directly
+evolves the small distance between two initially oﬀset particles.
+These variational equations are scale-free and circumvent the nu-
+merical pitfalls associated with the shadow-particle method (Tan-
+credi et al. 2001).
+
+First-order variational equations have been widely discussed
+and applied in the literature (e.g., Mikkola & Innanen 1999; Tan-
+credi et al. 2001; Cincotta et al. 2003). In this paper we derive
+second-order variational equations for the N-body problem for the
+ﬁrst time. These provide the second derivatives of the solution with
+respect to the initial conditions. Although mathematically straight-
+forward to calculate, the number of terms and therefore the com-
+plexity rises signiﬁcantly. As we will see below, some terms involve
+7 diﬀerent (summation) indices.
+
+Our work opens up many new opportunities for a variety of
+applications. Perhaps most importantly, it is now straightforward to
+implement derivative-based optimization methods. While the ﬁrst
+derivatives provide a gradient that yields the direction towards a lo-
+cal minimum on a χ2 landscape, the second derivatives provide the
+scale for how far one should move to reach the minimum. This can,
+among other things, dramatically improve ﬁtting algorithms for ra-
+dial velocity and transit planet searches, posterior estimation using
+Markov Chain Monte Carlo (MCMC) methods and even spacecraft
+trajectory optimization.
+
+We begin in Sec. 2 with a formal introduction to variational
+equations that generalizes to higher order. In Sec. 3 we specialize
+to the case we are interested in, the N-body problem. For complete-
+ness, in Sec. 3.1 we rederive the ﬁrst-order variational equations for
+the N-body problem. We then go one step further in Sec. 3.2 and
+derive the second-order variational equations.
+
+We have implemented the second-order variational equations
+within the REBOUND package and make them freely available.
+REBOUND is a very modular N-body package written in C99 and
+comes with an optional python interface. We have abstracted the
+complexity of higher order variations signiﬁcantly, and summarize
+our adopted syntax in Sec. 4. Obtaining consistent initial condi-
+tions for variational equations in terms of Keplerian orbital ele-
+ments without relying on ﬁnite diﬀerence is non-trivial. We have
+therefore also implemented several convenience methods for this
+purpose.
+
+In Sec. 5 we demonstrate how second-order variational equa-
+tions and Newton’s method can be used to ﬁt observational data to
+a dynamical N-body model. Finally, we compare variational and
+ﬁnite-diﬀerence methods in Sec. 5.4, and conclude in Sec. 6 by
+outlining the next steps in using higher order variational equations
+eﬃciently in optimization problems and MCMC methods.
+
+2 DERIVATION OF DIFFERENTIAL EQUATIONS
+
+2.1 Variational Equations
+
+In this section, we deﬁne what we mean by variational equations
+and introduce our notation. We follow the work of Morales-Ruiz
+et al. (2007) and start with an analytic diﬀerential equation of the
+form
+
+˙x = X(x).
+(1)
+In the case that we are interested in later, x ∈ R6N encodes the 3
+position and 3 velocity coordinates for each particle. X is then a
+vector ﬁeld on R6N. The dot represents a time derivative. Given a
+suitable set of initial conditions x0, an N-body simulation allows
+us to calculate (or at least approximate) the solution to Eq 1. We
+denote this solution φ(x0, t), a 6N dimensional vector that depends
+on the initial conditions x0 ≡ x(0) and time t.
+
+Our goal is to estimate the solution vector φ for diﬀerent ini-
+tial conditions, i.e. we want to approximate φ(y0, t). One way to
+do that is to simply solve the diﬀerential equation in Eq. 1 with
+the new initial conditions y0. However, depending on the problem,
+ﬁnding the new solution with an N-body integration can be either
+very ineﬃcient or inaccurate1.
+
+Thus, we are looking for a better way to estimate solutions for
+the initial conditions y0 in a neighbourhood of x0. The approach we
+consider here uses the fact that one can expand φ(y0, t) around a
+reference solution φ(x0, t) in a power series. For simplicity, we ﬁrst
+consider the case of varying a single scalar parameter α on which
+the initial conditions depend, y0(α). If α = 0, then y0(α) = x0.
+This could correspond to varying a Cartesian component of x0, or a
+parameter that mixes Cartesian components, such as a planet’s or-
+bital eccentricity. Then each component of φ(y0, t) can be expanded
+around the reference solution as a power series in α,
+
+φ(y0, t) =
+
+1
+m! φ(m) αm,
+
+(2)
+
+(cid:88)
+
+m(cid:62)0
+
+In the above equation, φ(0) ≡ φ(x0, t), i.e. the reference solution,
+and
+φ(m) ≡ ∂mφ(y0(α), t)
+
+(3)
+
+,
+
+(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)α=0
+
+∂αm
+
+i.e. a vector of the m-th derivative of each of the reference solu-
+tion’s components with respect to the parameter α. For suﬃciently
+small α and t, this approximation is accurate even if we terminate
+the series at a ﬁnite m = mmax . The precise domain on which the
+solution can be trusted depends on the system and the initial condi-
+tions. For example, in chaotic dynamical systems, φ(1) might grow
+exponentially fast, limiting the domain to relatively short times or
+small α.
+
+In conclusion, if one can obtain the φ(m), one can approximate
+all nearby solutions of φ(x0, t). Each φ(m) is a function of time and
+must be numerically integrated. We therefore seek their governing
+diﬀerential equations.
+
+We henceforth denote the reference solution φ(x0, t) simply
+as φ. The solution φ, by deﬁnition, satisﬁes the original Eq. 1, in
+other words ˙φ = X (φ). We now take the derivative of this equation
+
+1 In particular, it might be inaccurate if we are interested in the diﬀerence
+of the two solutions. See the discussion in Sec. 1 about shadow particles.
+c(cid:13) 0000 RAS, MNRAS 000, 000–000
+
+Second-order variational equations for N-body simulations
+
+3
+
+(cid:88)
+
+b
+
+with respect α, the parameter we are varying,
+
+∂
+∂t
+
+∂φ
+∂α
+
+=
+
+∂X(φ)
+
+∂α
+
+=
+
+∂X(φ)
+∂φb
+
+∂φb
+∂α
+
+,
+
+(4)
+
+where we changed the order of the derivatives and made use of the
+chain rule. The summation index b runs over all 6N elements of
+the vector φ. The derivative of φ with respect to α is the φ(1) we
+seek for use in Eq. 2. Let us deﬁne the 6N by 6N matrix X(1) with
+components
+ab (φ) ≡ ∂Xa(φ)
+X(1)
+Using the matrix X(1) we then arrive at a compact set of diﬀerential
+equations for the vector φ(1):
+˙φ(1) = X(1)(φ) φ(1).
+
+∂φb
+
+(5)
+
+(6)
+
+.
+
+This equation is the ﬁrst-order variational equation. We will later
+calculate the components of the matrix X(1) explicitly. We then
+solve for the vector φ(1) by integrating the diﬀerential equation nu-
+merically. Note that X(1) depends on the time-dependent reference
+solution φ but not on φ(1). It is a linear operator acting on φ(1).
+
+Repeating the steps above but diﬀerentiating Eq. 1 twice in-
+stead of once, we can write down the diﬀerential equation for φ(2).
+Because we apply the chain rule in the process, one ﬁnds that the
+time derivative of the second-order variations φ(2) depends not only
+on φ(2) but also on φ(1). Explicitly, the diﬀerential equation after two
+derivatives becomes
+
+∂
+∂t
+
+∂2φ
+∂α2
+
+=
+
+∂2X(φ)
+
+∂α2
+
+=
+
+∂2X(φ)
+∂φb∂φc
+
+∂φb
+∂α
+
+∂φc
+∂α
+
++
+
+∂X(φ)
+∂φb
+
+∂2φb
+∂α2 .
+
+(7)
+
+(cid:88)
+
+b,c
+
+(cid:88)
+
+b
+
+,
+
+∂φb∂φc
+
+Deﬁning the 6N by 6N by 6N tensor X(2) with components
+abc(φ) ≡ ∂Xa(φ)
+X(2)
+and using a short hand notation that suppresses the summation in-
+dices as well as the function arguments (we give explicit component
+forms for the general case in Sec. 2.3), we have
+˙φ(1) = X(1) φ(1),
+
+(8)
+
+˙φ(2) = X(1) φ(2) + X(2) (cid:104)
+
+φ(1)(cid:105)2
+
+.
+
+(9)
+
+This set of equations is not linear anymore. But note that the linear
+term of the second line is the same as in the ﬁrst line.
+
+Higher order equations can be constructed in a straightforward
+way. Using the shorthand notation makes this particularly easy. One
+can reintroduce the indices at the end of the calculation. In this
+paper, we will only use variational equations up to second order
+(see e.g. Morales-Ruiz et al. 2007, for equations up to order 3).
+
+2.2
+
+Initial conditions
+
+To integrate a diﬀerential equation forward in time, one needs ap-
+propriate initial conditions. To obtain the initial conditions for φ(1)
+and φ(2), one simply applies the chain rule to Eq. 3 and evaluates it
+at t = 0,
+
+φ(1)(x0, 0) =
+
+φ(2)(x0, 0) =
+
+∂y0(α)
+
+∂α
+
+,
+
+∂2y0(α)
+
+∂α2
+
+(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)α=0
+(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)α=0
+
+c(cid:13) 0000 RAS, MNRAS 000, 000–000
+
+.
+
+(10)
+
+(11)
+
+˙φ(1)
+a,ξ
+
+=
+
+˙φ(2)
+a,ξη
+
+=
+
+In the case where the varied parameter α corresponds to a
+Cartesian component, choosing the initial conditions for φ(1) and
+φ(2) is straightforward. If we assume the varied parameter has the
+coordinate index b, then the initial conditions for φ(y0(α), t) in com-
+ponent form are
+
+φa(y0(α), 0) = φa(x0, 0) + αδab,
+
+where δab is the Kronecker delta. Thus
+φ(1)
+a (x0, 0) = δab
+
+and
+
+φ(2)
+a (x0, 0) = 0.
+
+(12)
+
+(13)
+
+In practice, the function y0(α) can be very complicated. As
+an example, let us consider a planetary system with one planet of
+mass m on an initially circular and coplanar orbit around a star with
+mass M. The initial conditions of the planet might then be deﬁned
+through the semi-major axis a as
+
+ry
+rz
+If we vary the initial semi-major axis by some length α, then the
+initial conditions for the ﬁrst-order variation are given by Eq. 10, in
+our case
+
+(14)
+
+0
+
+ .
+
+0
+
+√
+G(m + M)/a
+
+=
+
+− 1
+
+2
+
+G(m + M)/a3
+
+(15)
+
+rx
+ =
+(1)
+rx
+(2)
+rx
+
+ry
+
+ry
+
+rz
+
+rz
+
+0
+0
+
+ ,
+a
+ ,
+1
+ ,
+0
+
+0
+0
+
+=
+
+=
+
+0
+0
+
+vy
+vz
+
+
+vx
+ =
+(1)
+vx
+(2)
+vx
+
+vy
+
+vy
+
+vz
+
+vz
+
+
+
+
+(cid:112)
+
+(cid:112)
+
+0
+
+0
+
+0
+
+0
+
+ .
+ .
+
+The initial conditions for the second-order variation are given by
+Eq. 11, which for the present case are
+
+=
+
+3
+4
+
+G(m + M)/a5
+
+(16)
+
+The components of φ(1) and φ(2) that we calculated above corre-
+spond to the planet. All components corresponding to the star are 0.
+The initialization can quickly get complicated. Suppose we
+work in the centre-of-mass frame. Then the star’s initial conditions
+will also depend on the semi-major axis of the planet. Similarly, if
+we add an additional outer planet and work in Jacobi coordinates,
+the outer planet’s initial conditions depend on the inner planet’s
+orbital parameters. For that reason we’ve implemented convenience
+functions for the initialization of orbits which we present later in
+Sec. 4.3.
+
+2.3 Multiple sets of variational equations
+
+The above derivation of variational equations can be straightfor-
+wardly generalized when varying multiple parameters. Consider
+varying the initial value of Npar separate parameters αξ. Here and
+in the rest of this paper Greek variables indicate to variations with
+respect to one parameter and will run over the interval [0, Npar − 1].
+We write all equations in this section in component form for direct
+comparison with our later results.
+
+When varying several parameters, the coupled set of diﬀeren-
+
+tial equations, Eq. 9, becomes
+
+ab φ(1)
+X(1)
+b,ξ,
+
+X(1)
+ab φ(2)
+b,ξη
+
++
+
+(cid:88)
+
+b,c
+
+X(2)
+abc φ(1)
+
+b,ξφ(1)
+c,η,
+
+(17)
+
+(cid:88)
+(cid:88)
+
+b
+
+b
+
+4
+
+Hanno Rein, Daniel Tamayo
+
+a,ξ ≡ ∂φa(x0,t)
+
+a,ξη ≡ ∂2φa(x0,t)
+
+∂αξ
+
+, and φ(2)
+
+where φ(1)
+. Therefore, when varying
+Npar parameters, there are Npar sets of ﬁrst-order variational equa-
+tions, one for each of the vectors φ(1)
+par sets of second-
+order variational equations (one for each of the vectors φ(2)
+ξη ). Each
+set of variational equations has 6N components.
+
+ξ . There are N2
+
+∂αξ ∂αη
+
+Once numerically integrated, these variations can then be
+plugged into a multi-variate power series expansion analog to Eq. 2
+to obtain trajectories for arbitrary nearby initial conditions. Explic-
+itly, to second order,
+φa(y0, t) ≈ φa(x0, t) +
+
+(cid:88)
+
+(cid:88)
+
+φ(2)
+a,ξηαξαη.
+
+φ(1)
+a,ξαξ +
+
+(18)
+
+1
+2
+
+ξ
+
+ξ,η
+
+Note that because derivatives commute we ﬁnd that φ(2)
+= φ(2)
+ηξ .
+Thus the total number of diﬀerential equations we need to inte-
+grate for the second order variations can be reduced from 6 N N2
+par
+to 3 N Npar(Npar + 1). This is in addition to the 6N diﬀerential equa-
+tions for the reference simulation and 6 N Npar equations for the ﬁrst
+order variations.
+
+ξη
+
+2.4
+
+Index convention
+
+As we saw above, the number of indices in second-order expres-
+sions is high. We therefore adopt a consistent index notation for the
+remainder of this paper. Speciﬁcally, we will consider a dynamical
+system consisting of N particles and use the indices i, j, k and l to
+label diﬀerent particles. These indices thus run from 0 to N−1. The
+indices a, b, c and d label coordinate axes. Above, these indices ran
+over the 6N coordinates of the N-body system. We will ﬁnd below
+that for the N-body system, it is simpler to consider positions and
+velocities separately. Therefore, in what follows a, b, c and d will
+run over the Cartesian x, y, and z components only. As before, we
+will also make use of Greek characters ξ and η to indicate diﬀer-
+ent sets of variational equations corresponding to diﬀerent varied
+parameters (diﬀerent variations). In the following sections we ex-
+plicitly write summation symbols, i.e., we do not use a summation
+convention over repeating indices.
+
+3 VARIATIONAL EQUATIONS FOR THE N-BODY
+
+SYSTEM
+
+Let us now derive the diﬀerential equations from above for a spe-
+ciﬁc problem: the dynamical system of N gravitationally interact-
+ing particles. The diﬀerential equation for the N-body problem in
+vector notation is
+
+Gm jrrri j
+
+j, j(cid:44)i
+
+(19)
+where rrri j = rrri − rrr j and ri j is the norm of rrri j. We can also write the
+equation in component form
+
+r3
+i j
+
+¨ri = −(cid:88)
+˙vi,a = −(cid:88)
+
+Gm j ri j,a
+
+.
+
+r3
+i j
+
+j, j(cid:44)i
+
+(20)
+where ri j,a = ri,a−r j,a is the relative position between particles i and
+j. This is a second-order diﬀerential equation. However, note that
+the ﬁrst time-derivative of the position is just the velocity, ˙rrr = vvv.
+The diﬀerential equation can thus easily be brought into the form
+of Eq. 1 by introducing
+
+r0,x r0,y . . . rN−1,y rN−1,z v0,x v0,y . . . vN−1,y vN−1,z
+
+(21)
+
+x ≡(cid:16)
+
+(cid:17)T
+
+(cid:16)
+
+v0,x v0,y . . . vN−1,y vN−1,z ¨r0,x ¨r0,y . . . ¨rN−1,y ¨rN−1,z
+
+such that
+(22)
+˙x =
+We end up with a ﬁrst-order diﬀerential equation with twice as
+many variables as Eq. 19 (6N compared to 3N). This set of diﬀer-
+ential equations together with suitable initial conditions completely
+describes the N-body problem.
+
+.
+
+(cid:17)T
+
+3.1 First-order variational equations
+
+To derive the ﬁrst-order variational equation for the N-body prob-
+lem, we start by diﬀerentiating Eq. 20 with respect to r j,b. To be as
+explicit as possible we do this in component form. We end up with
+an equation with four indices. Two of the indices run over coordi-
+nates, and two over particles,
+∂˙vi,a
+Gmk rik,a
+∂r j,b
+
+∂
+∂r j,b
+
+
+
+=
+
+k, k(cid:44)i
+
+−(cid:88)
+= −(cid:88)
+(cid:18)− Gmk δab
+
+(cid:80)
+
+k, k(cid:44)i
++ Gm j δab
+
+k, k(cid:44)i
+
+r3
+ik
+
+r3
+ik
+
+=
+
+r3
+i j
+
+.
+Gmk (δi j − δk j)δab
+
+r3
+ik
+
+(cid:88)
+(cid:19)
+
+k, k(cid:44)i
++ 3 Gmkrik,a rik,b
+
++
+
+r5
+ik
+
+− 3 Gm jri j,a ri j,b
+
+r5
+i j
+
+3
+
+Gmkrik,a rik,b
+
+r5
+ik
+
+if i = j
+if i (cid:44) j
+
+.
+
+(δi j − δk j)
+
+(23)
+
+The above expression gives us the matrix elements of X(1) (Eq. 5).
+Note that two indices j and b combined correspond to the row of
+that matrix, the other two (i and a) correspond to the column of the
+matrix.
+
+We also want to consider the inﬂuence of varying masses.
+Note that one can think of the masses mi as part of the initial con-
+ditions. However, we assume that the masses do not vary with time
+after the system has been initialized, thus ˙mi = 0. We need the
+derivative of the force with respect to the mass:
+
+−(cid:88)
+
+k, k(cid:44)i
+
+∂˙vi,a
+∂m j
+
+=
+
+∂
+∂m j
+
+G mk rik,a
+
+r3
+ik
+
+ =
+
+− G ri j,a
+
+r3
+i j
+
+0
+
+if j (cid:44) i
+if j = i.
+
+(24)
+
+(cid:16)
+
+(cid:17)T
+
+We can now write down the diﬀerential equation for the ﬁrst-
+order variational equation using Eq. 6. We could do this in terms of
+φ(1) and its components, but choose to use two separate vectors for
+the variational position and velocity components (to be consistent
+with Eq. 19). Variational quantities are denoted by double-striped
+symbols r, v and m. First-order variational quantities receive the
+superscript (1). Thus, one might write φ(1) in terms of r
+(1):
+
+(1) and v
+
+φ(1) =
+
+(1)
+r
+0
+
+. . .
+
+(1)
+N−1 v
+
+r
+
+(1)
+0
+
+. . . v
+
+(1)
+N−1
+
+(25)
+
+(1) de-
+which should be compared to Eq. 21. The units of r
+pend on the variation we are considering. In general the units are
+not the same as those of r and v (see Eq. 10). We end up with the
+(1) (correspond-
+following set of equations for the components of ˙v
+ing to the second half of the components of ˙φ(1)):
+
+(1) and v
+
+(cid:88)
+(cid:88)
+(cid:88)
+
+j, j(cid:44)i
+
+j
+
+r
+
+b
+
++
+
+(1)
+j,b
+
+(cid:88)
+(cid:88)
+(cid:88)
+
+∂˙vi,a
+∂r j,b
+∂˙vi,a
+∂r j,b
+
+(cid:88)
+(cid:88)
+−Gm j δab
+
+(1)
+j,b, +
+
+b
+
+b
+
+r
+
+j
+
+r3
+i j
+
+j, j(cid:44)i
+
+b
+
++ 3
+
+∂˙vi,a
+∂m j
+∂˙vi,a
+∂ri,b
+
+˙v
+
+(1)
+i,a
+
+=
+
+=
+
+=
+
+m
+
+(1)
+j
+
+,
+
+(cid:88)
+ r
+
+(1)
+i,b
+
+r
+
++
+
+j
+Gm jri j,a ri j,b
+
+r5
+i j
+
+,
+
+m
+
+(1)
+j
+
+∂˙vi,a
+∂m j
+i j,b − G ri j,a
+r3
+i j
+
+(1)
+
+ ,
+
+m
+
+(1)
+j
+
+(26)
+
+c(cid:13) 0000 RAS, MNRAS 000, 000–000
+
+Second-order variational equations for N-body simulations
+
+5
+
+(1)
+
+i,b − r
+
+(cid:17) − G rrri j
+
+(1)
+j,b. We can rewrite this in vector notation,
+
+(1)
+i j,b
+
+= r
+
+where r
+(cid:16)
+which allows us to drop the indices a and b:
+rrri j · rrr
+
+−Gm j
+
+(cid:88)
+
+Gm jrrri j
+
++ 3
+
+(1)
+i
+
+(1)
+i j
+
+rrr
+
+(1)
+i j
+
+=
+
+j, j(cid:44)i
+
+r5
+i j
+
+r3
+i j
+
+˙vvv
+(27)
+The · represent the usual vector product. The equations for the vari-
+(1) (the ﬁrst half of the components of φ(1)), are
+ational positions, r
+signiﬁcantly easier to write down:
+(1)
+˙rrr
+i
+
+= vvv
+
+(28)
+
+r3
+i j
+
+(1)
+i
+
+m
+
+(1)
+j
+
+
+
+3.2 Second-order variational equations
+
+As mentioned before, the masses are assumed to be constant
+throughout a simulation; thus, the variational equation for the mass
+coordinates are not dynamic:
+
+(1)
+˙m
+i
+
+= 0.
+
+(29)
+
+The solutions are trivial, mi(t) = mi(0), and we therefore do not
+evolve the quantities mi.
+
+We now derive the second-order variational equations. As a warning to the reader: this will get messy. We nevertheless present the calculation
+in full detail as it is easy to get confused with up to 7 indices in a single term. This should ease derivations for alternate dynamical systems,
+for example if one want to include additional non-gravitational eﬀects. Conceptually, this is the same procedure as in the previous section,
+just to second order. Because of the chain rule, we end up with signiﬁcantly more terms.
+We begin by calculating various second-order derivatives that we will need later. The second-order derivative of the force with respect to the
+positions is
+
+∂2 ˙vi,a
+
+∂r j,b∂rk,c
+
+=
+
+∂
+∂rk,c
+
++ 3 Gmlril,a ril,b
+
+r5
+il
+
+l, l(cid:44)i
+
++ Gm j δab
+
+r3
+i j
+
+− 3 Gm jri j,a ri j,b
+
+r5
+i j
+
+if i = j
+if i (cid:44) j
+
+We look at both cases individually. The ﬁrst case, i = j, gives
+
+(cid:18)− Gml δab
+
+r3
+il
+
+
+(cid:80)
+(cid:32)
+
+(cid:88)
+
+(cid:19)
+
+(cid:33)
+
+(30)
+
+(31)
+
+(32)
+
+(33)
+
+(34)
+
+(35)
+
+−Gml δab
+
++ 3
+
+Gmlril,a ril,b
+
+l, l(cid:44)i
+Gml δab
+
+r3
+il
+ril,c(δik − δlk) +
+
+r5
+il
+
+(cid:88)
+
+l, l(cid:44)i
+
+3
+
+Gmlδac
+
+r5
+il
+
+∂2 ˙vi,a
+∂ri,b∂rk,c
+
+=
+
+=
+
+=
+
+3
+
+∂
+∂rk,c
+
+(cid:88)
+
+(cid:80)
+−(cid:18)
+
+l, l(cid:44)i
+
+(cid:18)
+
+r5
+il
+3 Gml δabril,c
+
+l, l(cid:44)i
+r5
+il
+3 Gmk δabrik,c
+
+r5
+ik
+
++ 3 Gmlδacril,b
+
++ 3 Gmlδbcril,a
+
+r5
+il
++ 3 Gmkδacrik,b
+
+r5
+il
++ 3 Gmkδbcrik,a
+
+r5
+ik
+
+r5
+ik
+
+r7
+ik
+
+ril,b(δik − δlk) +
+
+(cid:88)
+(cid:19)
+(cid:19)
+− 15 Gmlril,a ril,bril,c
+− 15 Gmkrik,a rik,brik,c
+
+l, l(cid:44)i
+
+r7
+il
+
+3
+
+ril,a(δik − δlk) −(cid:88)
+
+15
+
+l, l(cid:44)i
+
+Gmlδbc
+
+r5
+il
+
+Gmlril,a ril,b
+
+r7
+il
+
+ril,c(δik − δlk)
+
+if i = k
+if i (cid:44) k
+
+The second case, i (cid:44) j, is similar but with the sign reversed and without the summation:
+
+Gm jδac
+
+ri j,b(δik − δ jk) − 3
+
+Gm jδbc
+
+∂2 ˙vi,a
+
+∂r j,b∂rk,c
+
+Gm j δab
+
+= −3
+
+
+
+r5
+i j
+−3 Gm j δab
++3 Gm j δab
+0
+
+r5
+i j
+
+r5
+i j
+
+=
+
+r5
+i j
+
+ri j,c(δik − δ jk) − 3
+ri j,c − 3 Gm jδac
+ri j,c + 3 Gm jδac
+
+r5
+i j
+
+r5
+i j
+
+ri j,b − 3 Gm jδbc
+ri j,b + 3 Gm jδbc
+
+r5
+i j
+
+r5
+i j
+
+ri j,a + 15 Gm jri j,a ri j,b
+ri j,a − 15 Gm jri j,a ri j,b
+
+r7
+i j
+
+r7
+i j
+
+r5
+i j
+ri j,c
+ri j,c
+
+ri j,a(δik − δ jk) + 15
+
+Gm jri j,a ri j,b
+
+r7
+i j
+
+ri j,c(δik − δ jk)
+
+if i = k
+if i (cid:44) k and j = k
+otherwise
+
+We also need the derivatives with respect to the particles’ masses. Luckily, if we diﬀerentiate the force twice with respect to mass, we get
+zero:
+
+= 0.
+
+∂2 ˙vi,a
+∂m j∂mk
+However, other second derivatives involving the mass are not zero:
+
+=
+
+∂mk
+
+(cid:32) ∂˙vi,a
+(cid:33)
+−G ri j,a
+
+r3
+i j
+
+r3
+i j
+
+∂
+∂rk,b
+
+− G ri j,a
+ = − G
+
+0
+
+r3
+i j
+
+∂2 ˙vi,a
+∂rk,b∂m j
+
+=
+
+∂
+∂rk,b
+
+∂2 ˙vi,a
+∂rk,b∂m j
+
+=
+
+∂
+∂rk,b
+
+Restricting ourselves to the j (cid:44) i case,
+
+if j (cid:44) i
+if j = i.
+
+δab(δik − δ jk) + 3
+
++ G
+
+r3
+i j
+− G
+r3
+i j
+
+δabδ jk − 3 G ri j,a
+r5
+i j
+δab + 3 G ri j,a
+ri j,b
+r5
+i j
+
+ri j,bδ jk
+
+if k (cid:44) i
+if k = i,
+
+ri j,b(δik − δ jk) =
+
+G ri j,a
+
+r5
+i j
+
+6
+
+Hanno Rein, Daniel Tamayo
+
+such that after putting all cases together we arrive at
+if j (cid:44) i and k = j
+if j (cid:44) i and k = i
+otherwise.
+
+δab − 3 G ri j,a
+r5
+i j
+δab + 3 G ri j,a
+r5
+i j
+
+∂2 ˙vi,a
+∂rk,b∂m j
+
++ G
+r3
+i j
+− G
+r3
+i j
+0
+
+ri j,b
+ri j,b
+
+=
+
+
+
+(36)
+
+With the above expressions of the second order force derivatives, we can now construct the second-order variational equations. At this point
+we introduce two more indices that describe the variation under consideration, ξ and η. They run over all the variations that we want to
+consider. In vector notation Eq. 9 can be expressed as
+
+(cid:88)
+(cid:88)
+
+j
+
+(cid:88)
+(cid:88)
+
+b
+
+˙v
+
+(2)
+i,a,ηξ
+
+=
+
++
+
+(cid:88)
+
+(cid:88)
+
+(cid:88)
+
+j
+
+k
+
+b
+
+(1)
+k,b,ξ
+
+r
+
+m
+
+(1)
+j,η
+
++
+
+(cid:88)
+(cid:88)
+
+c
+
+∂˙vi,a
+∂r j,b
+
+(cid:88)
+
+(2)
+j,b,ηξ
+
+r
+
++
+
+∂2 ˙vi,a
+∂rk,b∂m j
+
+j
+
+k
+
+b
+
+j
+
+k
+
+b
+
+(1)
+j,b,ξ
+
+r
+
+(1)
+k,c,η
+
+r
+
+∂2 ˙vi,a
+
+∂r j,b∂rk,c
+
+(cid:88)
+
+(cid:88)
+
+∂2 ˙vi,a
+∂mk∂r j,b
+
+m
+
+(1)
+k,ξ
+
+(1)
+j,b,η
+
+r
+
++
+
+(cid:88)
+
+j
+
+∂˙vi,a
+∂m j
+
+m
+
+(2)
+j,ηξ
+
++
+
+(cid:88)
+(cid:88)
+(cid:124)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:123)(cid:122)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:32)(cid:125)
+
+∂2 ˙vi,a
+∂mk∂m j
+
+(1)
+k,ξ
+
+(1)
+j,η
+
+m
+
+m
+
+k
+
+j
+
+=0
+
+.
+
+(37)
+
+We replace the derivatives with what we calculated above. The result is a rather long expression with 7 diﬀerent (summation) indices:
+
+(cid:33)
+
+Gmlril,a ril,bril,c
+
+r7
+il
+
+(1)
+i,b,ξ
+
+r
+
+r
+
+(1)
+i,c,η
+
+(cid:33)
+ r
+ r
+
+Gmkrik,a rik,brik,c
+
++ 15
+
+(1)
+i,b,ξ
+
+(1)
+k,c,η
+
+r
+
+r
+
+r7
+ik
+
+ri j,a + 15
+
+ri j,a − 15
+
+Gm jri j,a ri j,b
+
+r7
+i j
+
+ri j,c
+
+Gm jri j,a ri j,b
+
+(1)
+j,b,ξ
+
+(1)
+i,c,η
+
+r
+
+(1)
+j,c,η
+
+r
+
+ri j,c
+
+(1)
+j,b,ξ
+
+r7
+i j
+G ri j,a
+
+r5
+i j
+
+δab − 3
+
+G
+r3
+i j
+
+ r
+
+˙v
+
+(2)
+i,a,ξη
+
+=
+
+˙vvv
+
+(2)
+i,ξη
+
+=
+
+c
+
+c
+
+c
+
+b
+
+b
+
+b
+
++
+
++
+
++
+
++
+
+3
+
+j, j(cid:44)i
+
+l, l(cid:44)i
+
+r3
+i j
+
+j, j(cid:44)i
+
+k, k(cid:44)i
+
+(2)
+i j,a,ξη
+
+−Gm j r
+(cid:88)
+(cid:32)
+(cid:88)
+(cid:88)
+(cid:88)
+(cid:32)
+(cid:88)
+(cid:88)
+(cid:88)
+−3
+−3
+(cid:88)
+(cid:88)
+(cid:88)
++3
+(cid:88)
+(cid:88)
+(cid:88)
++
+(cid:88)
+(cid:88)
+−Gm j rrr
+(cid:88)
+3
+(cid:88)
+− G
+(cid:88)
+
+Gm jrrr
+r5
+i j
+
+G
+r3
+i j
+
+(2)
+i j,ξη
+
+(1)
+i j,ξ
+
+(1)
+i j,ξ
+
+(cid:16)
+
+j, j(cid:44)i
+
+j, j(cid:44)i
+
+j, j(cid:44)i
+
+r3
+i j
+
+j, j(cid:44)i
+
++
+
++
+
++
+
+m
+
+b
+
+b
+
+rrr
+
+c
+
+r3
+i j
+
+j, j(cid:44)i
+
+(cid:17) − G ri j,a
+
+r3
+i j
+
+(2)
+i j,b,ξη
+
+m
+
+(2)
+j,ξη
+
+
+
+(cid:88)
+
+(cid:16)
+ri j,b · r
+
+b
+Gmlδacril,b
+
++ 3
+
+r5
+il
+Gmkδacrik,b
+
+Gmlδbcril,a
+
+− 15
+
+r5
+il
+Gmkδbcrik,a
+
+− 3
+
+Gm jri j,a
+
++ 3
+
+r5
+i j
+Gml δabril,c
+
++ 3
+
+r5
+il
+
+Gmk δabrik,c
+
+− 3
+
+r5
+ik
+Gm j δab
+
+r5
+i j
+
+Gm j δab
+
+r5
+i j
+G ri j,a
+δab − 3
+
+r5
+i j
+
+r5
+ik
+Gm jδac
+
+ri j,c − 3
+
+ri j,b − 3
+
+Gm jδac
+
+ri j,c + 3
+
+r5
+i j
+
+r5
+i j
+
+ r
+
+ri j,b
+
+(1)
+ji,b,ξ
+
+m
+
+(1)
+j,η
+
++
+
+r5
+ik
+Gm jδbc
+
+r5
+i j
+
+Gm jδbc
+
++
+
+ri j,b + 3
+
+(cid:88)
+
+r5
+i j
+
+(cid:88)
+
+b
+
+j, j(cid:44)i
+
+(cid:16)
+rrri j · rrr
+
+(2)
+i j,ξη
+
++ 3
+
+Gm jrrr
+(cid:16)
+r5
+i j
+rrri j · rrr
+
+(1)
+i j,ξ
+
+(2)
+j,ξη
+
+m
+
+(cid:17) − G rrri j
+(cid:16)
+ +
+
+(cid:17)
+r3
+i j
+i j,ξ · rrri j
+(cid:88)
+
+(cid:17)
+
+(1)
+j,η
+
+(1)
+
+m
+
+rrr
+
+(1)
+i j,η
+
+j, j(cid:44)i
+
+
+− G
+
+r3
+i j
+
+Gm jrrri j
+
++ 3
+
+r5
+i j
+
++ 3
+
+Gm jrrri j
+
+(cid:17)
+
+r5
+i j
+i j,η · rrri j
+
+(1)
+
+rrr
+
+(1)
+j,η
+
++ 3
+
+G rrri j
+r5
+i j
+
+Note that the ﬁrst line has the same form as for the ﬁrst-order variational equations. This is the linear part of the second-order variational
+equation. The other lines correspond to the non-linear part that couples to the ﬁrst-order diﬀerential equations of the variations ξ and η. We
+can simplify the above expression slightly and convert it to a somewhat more readable vector notation, arriving at
+
+ri j,b
+
+(1)
+ji,b,η
+
+m
+
+(1)
+j,ξ .
+
+(38)
+
+(cid:16)
+
+(1)
+
+i j,ξ · rrr
+
+(1)
+i j,η
+
+rrr
+
+(cid:16)
+
+Gm jrrri j
+
+(cid:17) − 15
+(cid:16)
+r7
+i j
+rrri j · rrr
+
+(cid:17)
+
+(1)
+i j,η
+
+m
+
+(1)
+j,ξ
+
+ .
+
+(1)
+
+i j,ξ · rrri j
+
+rrr
+
+G rrri j
+r5
+i j
+
+(1)
+i j,η
+
+rrr
+
+m
+
+(1)
+j,ξ
+
++ 3
+
+(cid:17)(cid:16)
+
+(1)
+
+i j,η · rrri j
+
+rrr
+
+(cid:17)
+
+(39)
+
+We can use this equation to read oﬀ the matrix elements of X(1) and X(2) by comparing the above with Eqs. 6 and 9.
+
+4
+
+IMPLEMENTATION
+
+We have implemented ﬁrst and second-order variational equations
+into the N-body code REBOUND (Rein & Liu 2012). REBOUND is
+very modular and allows the user to choose from diﬀerent numer-
+ical integrators. What we describe here has been tested for the
+high-accuracy integrator IAS15, which is based on a 15th-order
+Gauß-Radau quadrature (Rein & Spiegel 2015). First-order vari-
+ational equations have also been implemented for the symplectic
+
+WHFast integrator (Rein & Tamayo 2015) as a symplectic tangent
+map (Mikkola & Innanen 1999). In principle, higher-order varia-
+tional equations could also be implemented as a symplectic tangent
+map. However, the complexity of such a higher-order tangent map
+goes beyond what we expect to be useful in practice. We therefore
+exclusively focus on the general-purpose IAS15 integrator for the
+remainder of this paper.
+
+We implement the variational equations in terms of varia-
+tional particles. This provides an elegant implementation where
+c(cid:13) 0000 RAS, MNRAS 000, 000–000
+
+Second-order variational equations for N-body simulations
+
+7
+
+variational particles follow a structurally similar (though concep-
+tually diﬀerent) set of diﬀerential equations to the real particles
+(cf. Eqs. 27 and 39). For each ﬁrst and second order variation that
+we consider we add N such variational particles to the simulation.
+The Cartesian components of a variational particle are then the
+derivatives of the corresponding real particle’s components with re-
+spect to the parameter we are varying. This implies that the units
+for diﬀerent variations will vary (compare with Eq. 3).
+
+4.1
+
+Initialization routines
+
+In addition to the variational equations themselves, we have imple-
+mented convenience methods for initializing the variational parti-
+cles. If one is interested in varying one of the cartesian coordinates
+of a particle, initializing variational particles is as easy as setting
+all of the coordinates to 0 except one which is set to 1, see Eq. 13.
+However, as shown above, varying parameters that are non-linear
+functions of the cartesian coordinates involves calculating ﬁrst and
+second derivatives and can quickly become cumbersome. We are
+particularly interested in applications involving planetary systems.
+We therefore provide routines that allow the initialization of vari-
+ational particles with respect to changing a particle’s mass m, as
+well as its orbit’s semi-major axis a, eccentricity e, inclination i,
+longitude of the ascending node Ω, argument of pericenter ω and
+true anomaly f .
+Since we are doing this to second order for 7 orbital elements2,
+we thus have 7 + 7 · (7 + 1)/2 = 35 diﬀerent functions. In principle
+one could also initialize variational particles by calculating ﬁnite
+diﬀerences, i.e. creating a second particle with one orbital parame-
+ter shifted by a small amount α, subtracting each component from
+the un-shifted particle and then dividing by α. The problem is that
+this procedure easily leads to numerical issues as the shift α needs
+to be small enough to be in the linear (quadratic) regime, but large
+enough to avoid any rounding error due to limited ﬂoating point
+precision. Our functions that calculate the derivatives analytically
+avoid this issue. Our current implementation does not support Ja-
+cobi coordinates and assumes that all parameters are given with
+respect to a ﬁxed central object (heliocentric frame).
+
+We have also implemented a routine that moves the entire sys-
+tem to the centre of mass frame and corrects the variational parti-
+cles’ positions and velocity coordinates consistently.
+
+It is worth pointing out that automatic diﬀerentiation (AD)
+would be well suited to automate this task for even more compli-
+cated initialization routines (Neidinger 2010).
+
+4.2 Test particles
+
+We call a particle in an N-body simulation a test particle if it does
+not aﬀect other particles in the simulation because it has no mass,
+mi = 0. If one is interested in the eﬀect of varying the initial condi-
+tions of test particles, then the variational equations simplify sig-
+niﬁcantly. Because variations of a test particle do not aﬀect the
+variations of other particles, one can reduce the dimensionality of
+the ﬁrst-order variational diﬀerential equation, Eq. 6, from 6N to
+6. This speeds up the calculation signiﬁcantly and we have im-
+plemented this as an optional ﬂag that can be set when a set of
+variational equations is initialized. This might become particularly
+
+2 This includes the mass of the particle.
+c(cid:13) 0000 RAS, MNRAS 000, 000–000
+
+useful if an approximation of the derivatives is suﬃcient for a given
+application.
+
+4.3 Syntax
+
+Here, we brieﬂy demonstrate how to initialize and run a simulation
+using the python interface to REBOUND. We do this because the layer
+of abstraction that we came up with to hide the complicated expres-
+sions for second order variational equations is essential in making
+this tool useable in a real world scenario. We provide the full doc-
+umentation for how to use variational equations within REBOUND
+online at http://rebound.readthedocs.org.
+
+A simulation of one planet orbiting a central star can be setup
+
+with the following code in python:
+
+import rebound
+sim = rebound . Simulation ()
+sim . add (m =1.)
+sim . add (m =0.001 , a =1.)
+
+By default REBOUND uses units in which G = 1. One set of ﬁrst-
+order variational particles can be set up with a single command:
+
+var_i = sim . add_variation ()
+
+The var i object contains all the information of this set of varia-
+tional particles, e.g. the order, the location of variational particles,
+etc. By default, the variational particles’ position, velocity and mass
+coordinates are initialized to zero. For this example, let us assume
+that we want to vary the planet’s semi-major axis. We initialise the
+planet’s variational particle using the following command:
+
+var_i . vary (1 ,"a")
+
+In the background, this command ﬁrst calculates the orbital param-
+eters of the particle with index 1 (the planet) in heliocentric coordi-
+nates. Then, the variational particle is initialized using the analytic
+derivative with respect to the semi-major axis, see Eq.15. We can
+now integrate the system forward in time for, say, 100 time units:
+
+sim . integrate (100.)
+
+The planet’s x-position after the integration can be accessed via
+sim.particles[1].x. Let us use the result of our integration to
+estimate the planet’s x-position assuming its initial semi-major axis
+was shifted by ∆a = 0.01. This can be achieved with the following
+code
+
+Delta_a = 0.01
+print sim . particles [1]. x
+
++ Delta_a * var_i . particles [+1]. x
+
+which should be compared with Eq. 2. To go beyond ﬁrst order and
+include second-order variational equations, we setup the second or-
+der variational equations (before the integration) with
+
+var_ii = sim . add_variation ( order =2,
+
+first_order = var_i )
+
+Note that we need to specify the the corresponding ﬁrst-order vari-
+ational particles. This is because second-order variational particles
+depend on the ﬁrst-order variational particles and in principle there
+can be many diﬀerent ﬁrst oder variational particles for diﬀerent
+parameters. The initialization of the particle is identical to before
+
+var_ii . vary (1 ,"a")
+
+8
+
+Hanno Rein, Daniel Tamayo
+
+Figure 1. A 10 year integration of a two planet system. The black curve
+shows the the position of the inner planet at the end of the simulation for
+diﬀerent initial semi-major axes a of the outer planet. Variational equations
+are integrated for the initial semi-major axis indicated by the red dot. Their
+results are used to approximate the ﬁnal position of the inner planet as a
+function of the outer planet’s initial semi-major axis a. The green dashed
+line uses the ﬁrst-order variational equations. The blue dotted line uses both
+ﬁrst and second-order variational equations.
+
+The ﬁnal position can then be estimated by applying Eq. 2 as be-
+fore, but now accurate to second order,
+
+print sim . particles [1]. x
+
++ Delta_a * var_i . particles [1]. x
++ 0.5* Delta_a * Delta_a * var_ii . particles [1]. x
+
+More complicated and realistic examples are available in the docu-
+mentation at http://rebound.readthedocs.org.
+
+5 TESTS
+
+In this section we present various tests of our implementation.
+These show not only that the implementation is working correctly,
+but also what second-order variational equations can be used for.
+We plan to follow up on several of these ideas in much more detail
+in future work.
+
+5.1 Varying one orbital parameter
+
+As a ﬁrst test, we study a two-planet system and vary the initial
+semi-major axis of the outer planet. We use the ﬁrst and second-
+order variational equations to approximate the x-position of the in-
+ner planet after 10 orbits using Eq. 18. The inner planet’s position
+changes with time because of the planet-star as well as the planet-
+planet interactions.
+
+We plot the results in Fig. 1. The bold black line corresponds
+to the ﬁnal x-position of the inner planet using a direct N-body
+integration. The results for both the ﬁrst and second-order varia-
+tional equations are shown as a green dashed and blue dotted line,
+respectively. To arrive at these approximations, only one N-body
+simulation with variational equations was run. Note that this is in
+contrast to 400 individual N-body simulations which were carried
+out to generate the black curve. The red dot indicates the initial
+semi-major axis used for the single run with variational equations.
+As the plot clearly shows, we can use the results from second-
+order variational equations to accurately predict the ﬁnal position of
+
+Figure 2. We use ﬁrst and second-order variational equations in conjunction
+with Newton’s method to solve an optimization problem in a two planet sys-
+tem. The vertical axis shows the relative position oﬀset from the optimum.
+Machine precision is reached after four iterations.
+
+the inner planet to within a few percent for initial conditions that are
+not too far from the original simulation. Also note that as expected,
+the second-order variational equations give a signiﬁcantly better
+estimate than the ﬁrst-order equations alone.
+
+5.2 Optimization problem with one one orbital parameter
+
+We continue to work with the above two-planet system. We now
+attempt to ﬁnd the initial semi-major axis a0 of the outer planet
+that minimizes the x coordinate of the inner planet at the end of the
+simulation. This test therefore represents a simple case of a wide
+range of optimization problems. Instead of minimizing the x coor-
+dinate of the planet, we could also minimize the distance to another
+planet, or maximize the velocity. Furthermore, one could replace
+one of the planets with a spacecraft and then search for an optimal
+spacecraft trajectory that uses a minimal amount of fuel to reach a
+ﬁnal point, and so on.
+
+We use the standard Newton’s method to ﬁnd the optimal
+value, xmin. For that we need the ﬁrst and second derivatives of the
+planet’s x position (we are looking for the root of the ﬁrst deriva-
+tive). We calculate these using the variational equations. As a start-
+ing point in Newton’s method, we use the red dot in Fig. 1.
+We plot the results in Fig. 2. The vertical axis shows the rel-
+ative position oﬀset ¯x = |(x − xmin)/xmin| as a function of the iter-
+ation. After four iterations, the method has converged to machine
+precision. With any derivative free method such as the bisection
+method we would need more iterations to achieve machine preci-
+sion.
+
+5.3 Fitting a radial velocity curve
+
+We now present a more complicated example in which we attempt
+to ﬁt the reﬂex motion of a star in a two-planet system to a synthetic
+radial velocity data set. In Fig. 3 we show the synthetic radial veloc-
+ity curve of the star as a function of time (the units are irrelevant for
+this discussion). The red dots show where an observation is taken.
+For simplicity we only vary two orbital parameters, the semi-major
+axis a and the eccentricity e of the inner planet. All other param-
+eters are the same as in the reference simulation. Our goal is to
+c(cid:13) 0000 RAS, MNRAS 000, 000–000
+
+1.401.451.501.551.601.651.70initial semi-major axis of outer planet0.880.900.920.940.960.981.00x position of inner planet after 10 orbits02468101214iterations10-1610-1510-1410-1310-1210-1110-1010-910-810-710-610-510-410-310-2relative errorSecond-order variational equations for N-body simulations
+
+9
+
+used to calculate the derivatives involving vi. We can then use the
+standard Newton’s method to iterate and ﬁnd the extremum in χ2:
+
+(cid:33)
+
+(cid:32)an+1
+
+en+1
+
+=
+
+(cid:33)
+
+(cid:32)an
+
+en
+
+−
+
+ ∂2χ2
+
+∂a2
+∂2χ2
+∂a∂e
+
+−1
+
+ .
+
+ ∂χ2
+
+∂a
+∂χ2
+∂e
+
+·
+
+∂2χ2
+∂a∂e
+∂2χ2
+∂e2
+
+(43)
+
+The matrix in the above equation is the inverse of the Hessian of χ2,
+H−1. Newton’s method will only converge where χ2 is convex, or in
+other words where the matrix H is positive deﬁnite. To increase the
+convergence region we use a trick to ensure that H is positive deﬁ-
+nite everywhere by using the softabs metric of the Hessian (cid:111)H(cid:111), in-
+stead of H itself (Betancourt 2013). The modiﬁed Newton’s method
+becomes
+
+(44)
+
+(cid:33)
+
+(cid:32)an+1
+
+en+1
+
+(cid:33)
+
+(cid:32)an
+
+en
+
+=
+
+− (cid:111)H(cid:111)−1 ·
+
+ .
+
+ ∂χ2
+
+∂a
+∂χ2
+∂e
+
+In Fig. 4 we plot the relevant part of the parameter space. The
+colours and contours correspond to the logarithm of χ2. We start
+the iteration at (a0, e0) = (0.96, 0.2) and converge to the true mini-
+mum within machine precision in less than ten iterations. Newton’s
+method converges to the global minimum for most nearby starting
+values (those near the centre in Fig. 4). If the initial conditions are
+far from the global optimum, then, as expected, the method might
+not converge to the global minimum. We note that this problem of
+non-convergence is a feature of the adopted optimization algorithm
+(Newton’s method), and not of the variational equations. In partic-
+ular, even in cases where Newton’s method does not converge, the
+derivatives are calculated exactly (to machine precision).
+
+For the above reasons, the method presented in this example
+is not well suited for ﬁnding the global minimum within a com-
+plex parameter space. Other methods such as simulated annealing
+or parallel tempering are most likely faster and more reliable. How-
+ever, as we discuss below, a combination of methods is a promis-
+ing future area of research if one can make use the second-order
+variational equations to converge to a local optimum within almost
+constant time (or O(1) iterations)3.
+
+5.4 Comparison to a ﬁnite diﬀerence approach
+
+In the above optimization problem, we use variational equations to
+calculate the ﬁrst and second derivatives of χ2. One can also use a
+ﬁnite diﬀerence approach to estimate the derivatives. As we show
+in this section, this is not viable in most scenarios as two separate
+competing constraints require ﬁne tuning of the ﬁnite diﬀerence
+parameters.
+
+Let us try to calculate all the ﬁrst and second order derivatives
+that we need in the radial velocity ﬁt problem from Sec. 5.5: ∂χ2/∂a,
+∂χ2/∂e, ∂2χ2/∂a2, ∂2χ2/∂e2 and the cross term ∂2χ2/∂a∂e. To use the ﬁnite
+diﬀerence method, we need to choose a ﬁnite initial diﬀerences δa
+and δe. These are then used to initialize the orbits of shadow parti-
+cles which are integrated using the normal equations of motion.
+
+The actual value of δa and δe is crucial. It has to be
+small enough to ensure the simulation remains in a linear regime
+(quadratic for second order). However, making the ﬁnite diﬀer-
+ences too small results in loss of accuracy due to ﬁnite ﬂoating
+
+3 Newton’s method converges quadratically, i.e. the number of signiﬁcant
+digits roughly doubles after every iteration. Thus, if we are close to a local
+minimum and we work in double ﬂoating point precision with 16 signiﬁcant
+digits, we need ∼ 4 iterations to converge to machine precision.
+
+Figure 3. A synthetic radial velocity curve of a two planet system. The red
+dots indicate where datapoints were taken.
+
+Figure 4. Minimizing χ2 to ﬁt the radial velocity curve in Fig. 3. Second-
+order variational equations, Newton’s method and the softabs metric are
+used to descend to the minimum.
+
+match these synthetic observations and thus to ﬁnd the true param-
+eters (a, e), starting from an arbitrary initial guess of semi-major
+axis and eccentricity, (a0, e0).
+
+We label the synthetic observation at time ti with oi and the
+radial velocity in our simulation with vi. The problem can be ex-
+pressed again as an optimization problem by deﬁning a goodness
+of ﬁt, e.g.,
+
+χ2 =
+
+(vi − oi)2 ,
+
+(40)
+
+(cid:88)
+
+i
+
+which we try to minimize. Note that vi are functions of the initial
+a and e. More complicated and realistic χ2 functions that take into
+account observational uncertainties can be easily constructed, but
+we here work with the simplest case. The chain rule yields
+
+∂
+
+(cid:32)
+
+(41)
+
+(vi − oi) ∂vi
+∂a
+
+(cid:33)2
+
+(vi − oi) ∂2vi
+
+∂a χ2 = 2
+∂2
+∂a2 χ2 = 2
+and similar expressions for the derivatives with respect to e and
+the cross-term ∂2χ2/∂a∂e. The second-order variational equations are
+c(cid:13) 0000 RAS, MNRAS 000, 000–000
+
+∂vi
+∂a
+
+(42)
+
+∂a2
+
++
+
+i
+
+(cid:88)
+(cid:88)
+
+i
+
+05101520time2.01.51.00.50.00.51.01.52.0radial velocity of star0.940.960.981.001.021.041.06semi-major axis a0.000.050.100.150.200.250.300.350.40eccentricity e8.48.07.67.26.86.46.05.65.2log(χ2)10
+
+Hanno Rein, Daniel Tamayo
+
+Figure 5. Relative error in calculating derivatives using the ﬁnite diﬀerence approach in the optimization problem described in Sec. 5.5. The plots show the
+relative error of ﬁrst and second derivatives of χ2 as a function the initial ﬁnite diﬀerence δa and δe. Using variational equations, this problem does not exist
+and derivatives are exact up to machine precision.
+
+point precision. Thus there is an optimum between these two com-
+peting eﬀects. The precise value is problem speciﬁc. For the radial
+velocity test case we ﬁnd an optimum around δa ∼ 10−8 for ﬁrst-
+order derivatives and δa ∼ 10−6 for second-order derivatives.
+
+This problem is illustrated in Fig. 5. We plot the relative error
+of the ﬁrst and second-order derivative as a function of the initial
+ﬁnite diﬀerences δa and δe. One can see that the best possible es-
+timate of the ﬁrst derivative is only accurate to within 10−7. Worse
+yet, the best estimate of the second derivative is only accurate to
+within 10−4. Using the ﬁnite diﬀerence approach we cannot obtain
+a better estimate.
+
+The problem gets even worse if one is interested in the cross-
+term in the Jacobian, e.g. ∂2χ2/∂a∂e. The relative error of this quan-
+tity is plotted in the right panel of Fig. 5. The cross term depends
+on both ﬁnite diﬀerences δa and δe. There is only a small area in
+the δa/δe space that gives reasonably accurate results. Finding the
+best combination of the initial ﬁnite diﬀerences is diﬃcult, requires
+problem-speciﬁc ﬁne tuning and becomes quickly infeasible, espe-
+cially for applications where a wide range of the physical parameter
+space is explored.
+
+None of these problems exist using the variational equation
+approach that we present in this paper. Note that we also do not use
+ﬁnite diﬀerence for the initialization of variational particles. The
+entire framework does not contain any small parameters that could
+lead to numerical problems (cf. δa, δe).
+
+It is worth pointing out that the IAS15 integrator that we use
+for the normal N-body integration as well as for the variational
+equations is accurate to machine precision (Rein & Spiegel 2015).
+Furthermore, the energy error in long-term simulations grows sub-
+linearly and follows Brouwer’s Law (Newcomb 1899; Brouwer
+1937). IAS15 is therefore as exact as any integrator can possibly
+be4, using only double precision arithmatic. This statement also ap-
+plies to the variational equations and therefor to the derivatives we
+calculate with their help. All derivatives are exact up to machine
+precision. They can not be calculated more accurately without go-
+ing to extended precision.
+
+Figure 6. Runtime of a simulation with variational equations of ﬁrst and
+second order relative to a simulation without variational equations.
+
+5.5 Runtime
+
+One thing to keep in mind for optimization problems is the com-
+putational complexity of a simulation with ﬁrst and second-order
+variational equations. If there are N particles and Npar free parame-
+ters, then the computation time for a simulation with second-order
+variational equations scales as N2(1 + Npar + 1
+
+2 Npar(Npar + 1).
+
+We tested this scaling in a simulation of two planets in which
+we vary all 14 planet parameters (all orbital parameters and the
+masses). The results are plotted in Fig. 6 and agree with our esti-
+mate.
+
+If every parameter of every particle is varied, one ends up
+with a runtime that scales approximately as 1
+2 N4. This indicates
+that using variational equations might only be competitive when
+combined with other methods. However, if another method brings
+us close to a local minimum (using, e.g., simulated annealing, par-
+allel tempering), then an approach based on variational equations
+can converge to the local optimum within just a few iterations, in
+(almost) constant time.
+
+4 To within a constant factor of a few.
+
+c(cid:13) 0000 RAS, MNRAS 000, 000–000
+
+10-1610-1410-1210-1010-810-610-410-2δa10-1110-1010-910-810-710-610-510-410-310-210-1100101relative errorfirst derivative, χ2/asecond derivative, 2χ2/a2first derivative, χ2/asecond derivative, 2χ2/a210-1610-1410-1210-1010-810-610-410-2δe10-1110-1010-910-810-710-610-510-410-310-210-1100101relative errorfirst derivative, χ2/esecond derivative, 2χ2/e2first derivative, χ2/esecond derivative, 2χ2/e210-1610-1410-1210-1010-810-610-410-2δa10-1610-1410-1210-1010-810-610-410-2δe10-510-410-310-210-1100relative error of second derivative (cross term), 2χ2/ea02468101214number of variations, Npar100101102runtime relative to no variationsno variations1st order variations1st and 2nd order variationsno variations1st order variations1st and 2nd order variationsSecond-order variational equations for N-body simulations
+
+11
+
+6 CONCLUSIONS
+
+In this paper we presented the theoretical framework for using
+second-order variational equations in N-body simulations to esti-
+mate how particle trajectories vary with respect to their initial con-
+ditions. We described a ﬂexible implementation of these equations
+within the REBOUND integrator package.
+
+A major motivation for developing ﬁrst-order variational
+equations was to overcome the numerical inaccuracies associated
+with ﬁnite-diﬀerence methods that use shadow particles (e.g., Tan-
+credi et al. 2001). We showed in Sec. 5.4 that this problem is
+exacerbated at second order, requiring careful problem-dependent
+ﬁne tuning. Additionally, the number of shadow particles required
+by the ﬁnite-diﬀerence approach is always the same as the corre-
+sponding number of variational equations to follow. The variational
+approach is therefore much more robust and eﬀectively equal in
+speed.
+
+An important application for second-order variational equa-
+tions is in solving optimization problems. First derivatives furnish
+only the right direction to move in a parameter landscape toward
+a minimum; second derivatives provide a scale for how far one
+must jump to reach that minimum. If near a minimum, the ﬁrst
+and second derivatives furnished by the variational equations can
+converge to within machine precision of the minimum in just a few
+iterations. We illustrated this behaviour in both a simple two-planet
+case (Sec. 5.2) and in the ﬁtting of a radial velocity curve (Sec. 5.5).
+Variational equations might also be applied to spacecraft trajectory
+optimization or asteroid deﬂection.
+
+The optimization problem presented in this paper uses second
+order variational equations in connection with the classical opti-
+mization algorithm of Newton. One can also use the second-order
+variational equations in connection with a Markov Chain Monte
+Carlo (MCMC) method. Speciﬁcally, for both Riemann Manifold
+Langevin and Hamiltonian Monte Carlo methods, higher order
+derivatives, and therefore higher order variational equations, are es-
+sential (Girolami & Calderhead 2011). A full discussion of these
+MCMC methods and their application goes beyond the scope of
+this paper but we note that our initial tests of these methods show
+great promise. In particular, we observe very short auto-correlation
+times when using a Riemann Manifold Langevin MCMC to sample
+the posterior of radial velocity curves.
+
+For a long time, ﬁrst-order variational equations have been
+widely used to calculate Lyapunov exponents and the Mean Expo-
+nential Growth of Nearby Orbits (MEGNO, Cincotta et al. 2003)
+in the astrophysics community (Tancredi et al. 2001; Hinse et al.
+2010). We speculate that higher-order variational equations may be
+able to improve such chaos indicators. Since only one set of varia-
+tional equations is needed for the calculation of the Lyapunov ex-
+ponent, including second-order variational equations will keep the
+numerical scaling O(N2) and only increase the computational cost
+by 50%.
+
+The latest version of REBOUND includes the second-order vari-
+ational equations and can be downloaded at https://github/
+
+com/hannorein/rebound. The package is free to use under
+an open source license. We provide also a git repository
+with jupiter notebooks to reproduce the ﬁgures in this paper
+at https://github.com/hannorein/variations. The note-
+books can be run interactively in the web browser without the need
+to install any software locally.
+ACKNOWLEDGMENTS
+
+We thank Eric Ford, Benjamin Nelson and Scott Tremaine for
+many helpful discussions and Gottfried Wilhelm Leibniz for the
+chain rule. This research has been supported by the NSERC Dis-
+covery Grant RGPIN-2014-04553. D.T. is grateful for support
+from the Jeﬀrey L. Bishop Fellowship. This research made use of
+iPython (P´erez & Granger 2007), SciPy (Jones et al. 2001–) and
+matplotlib (Hunter 2007).
+
+REFERENCES
+
+Benettin, G., Galgani, L., & Strelcyn, J.-M. 1976, Phys. Rev. A,
+14, 2338
+Betancourt, M. 2013, in Lecture Notes in Computer Science, Vol.
+8085, Geometric Science of Information, ed. F. Nielsen & F. Bar-
+baresco (Springer Berlin Heidelberg), 327–334
+Brouwer, D. 1937, AJ, 46, 149
+Cincotta, P., Giordano, C., & Sim´o, C. 2003, Physica D: Nonlinear
+Phenomena, 182, 151
+Girolami, M. & Calderhead, B. 2011, Journal of the Royal Statis-
+tical Society: Series B (Statistical Methodology), 73, 123
+Hinse, T. C., Christou, A. A., Alvarellos, J. L. A., & Go´zdziewski,
+K. 2010, MNRAS, 404, 837
+Hunter, J. D. 2007, Computing In Science & Engineering, 9, 90
+Jones, E., Oliphant, T., Peterson, P., et al. 2001–, SciPy: Open
+source scientiﬁc tools for Python, [Online; accessed 2016-02-12]
+Laskar, J. & Gastineau, M. 2009, Nat, 459, 817
+Mikkola, S. & Innanen, K. 1999, Celestial Mechanics and Dy-
+namical Astronomy, 74, 59
+Morales-Ruiz, J. J., Ramis, J.-P., & Simo, C. 2007, in Annales
+scientiﬁques de l’Ecole normale superieure, Vol. 40/6, 845–884
+Murray, C. D. & Dermott, S. F. 2000, Solar System Dynamics
+(Cambridge University Press)
+Neidinger, R. D. 2010, SIAM Review, 52, 545
+Newcomb, S. 1899, Astronomische Nachrichten, 148, 321
+P´erez, F. & Granger, B. E. 2007, Computing in Science and Engi-
+neering, 9, 21
+Rein, H. & Liu, S.-F. 2012, A&A, 537, A128
+Rein, H. & Spiegel, D. S. 2015, MNRAS, 446, 1424
+Rein, H. & Tamayo, D. 2015, MNRAS, 452, 376
+Roy, A. E., Walker, I. W., MacDonald, A. J., Williams, I. P., &
+Fox, K. 1988, Vistas in Astronomy, 32, 95
+Sussman, G. J. & Wisdom, J. 1988, Science, 241, 433
+Tancredi, G., S´anchez, A., & Roig, F. 2001, AJ, 121, 1171
+Wisdom, J. & Holman, M. 1991, AJ, 102, 1528
+
+c(cid:13) 0000 RAS, MNRAS 000, 000–000
+
+

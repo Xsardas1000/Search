@@ -1,0 +1,2562 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+4
+
+ 
+
+ 
+ 
+]
+h
+p
+-
+t
+n
+a
+u
+q
+[
+ 
+ 
+
+1
+v
+5
+3
+6
+1
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Veriﬁed compilation of space-eﬃcient reversible circuits
+
+Institute for Quantum Computing and David R. Cheriton School of Computer Science,
+
+University of Waterloo, Waterloo, ON, Canada
+
+Matthew Amy
+
+Martin Roetteler and Krysta Svore
+
+Microsoft Research, Redmond, WA, USA
+
+The generation of reversible circuits from high-level code is in important problem in several ap-
+plication domains, including low-power electronics and quantum computing. Existing tools compile
+and optimize reversible circuits for various metrics, such as the overall circuit size or the total
+amount of space required to implement a given function reversibly. However, little eﬀort has been
+spent on verifying the correctness of the results, an issue of particular importance in quantum
+computing. There, compilation allows not only mapping to hardware, but also the estimation of
+resources required to implement a given quantum algorithm. This resource determination is crucial
+for identifying which algorithms will outperform their classical counterparts. We present a reversible
+circuit compiler called ReVer, which has been formally veriﬁed in F* and compiles circuits that
+operate correctly with respect to the input program. Our compiler compiles the Revs language
+[1] to combinational reversible circuits with as few ancillary bits as possible, and provably cleans
+temporary values.
+
+I.
+
+INTRODUCTION
+
+The ability to evaluate classical functions coherently and in superposition as part of a larger quantum
+computation is essential for many quantum algorithms. For example, Shor’s quantum algorithm [2] uses
+classical modular arithmetic and Grover’s quantum algorithm [3] uses classical predicates to implicitly deﬁne
+the underlying search problem. There is a resulting need for tools to help a programmer translate classical,
+irreversible programs into a form which a quantum computer can understand and carry out, namely into
+reversible circuits which are a special case of quantum transformations [4]. Other applications of reversible
+computing include low-power design of classical circuits, see [5] for background and a critical discussion.
+
+Several tools have been developed for synthesizing reversible circuits, ranging from low-level methods for
+small circuits such as [6–10] (see also [11] for a survey) to high-level programming languages and compilers
+[1, 12–16]. In this paper we are interested in the latter class—i.e., methods for compiling high-level code
+to reversible circuits. Such compilers commonly perform optimization, as the number of bits quickly grows
+with the standard techniques for achieving reversibility (see, e.g., [17]). The crucial question, as with general
+purpose compilers, is whether or not we can trust these optimizations.
+
+In most cases, extensive testing of compiled programs is suﬃcient to establish the correctness of both the
+source program and its translation to a target architecture by the compiler. Formal methods are typically
+reserved for safety- (or mission-) critical applications. For instance, formal veriﬁcation is an essential step
+in modern computer-aided circuit design due largely to the high cost of a recall. Reversible – speciﬁcally,
+quantum – circuits occupy a diﬀerent design space in that 1) they are typically “software circuits,” i.e., they
+are not intended to be implemented directly in hardware, and 2) there exists few examples of hardware to
+actually run such circuits. Given that there are no large-scale universal quantum computers currently in
+existence, one of the goals of writing a quantum circuit compiler at all is to accurately gauge the amount of
+physical resources needed to perform a given algorithm, a process called resource estimation. Such resource
+estimates can be used to identify the “crossover point” when a problem becomes more eﬃcient to solve on
+a quantum computer, and are invaluable both in guiding the development of quantum computers and in
+assessing their potential impact. However, diﬀerent compilers give wildly diﬀerent resource estimates for the
+same algorithms, making it diﬃcult to trust that the reported numbers are correct. For this reason compiled
+circuits need to have some level of formal guarantees as to their correctness for resource estimation to be
+eﬀective.
+
+In this paper we present ReVer, a lightly optimizing compiler for the Revs language [1] which has been
+written and proven correct in the dependently typed language F(cid:63) [18]. Circuits compiled with ReVer are
+
+veriﬁed to preserve the semantics of the source Revs program, which we have for the ﬁrst time formalized,
+and to reset or clean all ancillary (temporary) bits used so that they may be used later in other computations.
+In addition to formal veriﬁcation of the compiler, ReVer provides an assertion checker which can be used
+to formally verify the source program itself, allowing eﬀective end-to-end veriﬁcation of reversible circuits.
+We also develop a type inference algorithm for Revs mixing subtyping and record concatenation, a known
+hard problem [19]. Following is a summary of the contributions of our paper:
+
+• We create a formal semantic model of Revs which respects the original compiler.
+
+• We present a compiler for Revs called ReVer, written in F(cid:63). The compiler currently has two modes:
+
+direct to circuit and Boolean expression compilation, the latter of which is space eﬃcient.
+
+• We provide a type inference algorithm for Revs, used to infer and allocate circuit inputs. Our algorithm
+
+generates and then solves a set of type constraints using bound maps [20].
+
+• Finally, we verify correctness of ReVer with machine-checked proofs that the compiled reversible
+circuits faithfully implement the input program’s semantics, and that all ancillas used are returned to
+their initial state.
+
+a. Related work Due to the reversibility requirement of quantum computing, quantum programming
+languages and compilers typically have a methods for generating reversible circuits. Quantum programming
+languages typically allow compilation of classical, irreversible code in order to minimize the eﬀort of porting
+existing code into the quantum domain.
+In QCL [21], “pseudo-classical” operators – classical functions
+meant to be run on a quantum computer – are written in an imperative style and compiled with automatic
+ancilla management. As in Revs, such code manipulates registers of bits, splitting oﬀ sub-registers and
+concatenating them together. The more recent Quipper [15] automatically generates reversible circuits from
+classical code by a process called lifting: using Haskell metaprogramming, Quipper lifts the classical code to
+the reversible domain with automated ancilla management. However, little space optimization is performed
+[17].
+
+Other approaches to high-level synthesis of reversible circuits are based on writing code in reversible pro-
+gramming languages – that is, the programs themselves are written in a reversible way. Perhaps most notable
+in this line of research is Janus [12] and its various extensions [13, 14, 16]. These languages typically feature
+a reversible update and some bi-directional control operators, such as if statements with exit assertions. Due
+to the presence of dynamic control in the source language, such languages typical target reversible instruction
+set architectures like Pendulum [22], as opposed to the combinational circuits that ReVer and in general,
+quantum compilers target.
+
+Veriﬁcation of reversible circuits has been previously considered from the viewpoint of checking equivalence
+against a benchmark circuit or speciﬁcation [23, 24]. This can double as both program veriﬁcation and
+translation validation, but every compiled circuit needs to be veriﬁed separately. Moreover, a program that
+is easy to formally verify may be translated into a circuit with hundreds of bits, and is thus very diﬃcult to
+verify. To the authors’ knowledge, no veriﬁcation of a reversible circuit compiler has yet been carried out. By
+contrast, many compilers for general purpose programming languages have been formally veriﬁed in recent
+years – most famously, the CompCert optimizing C compiler [25, 26], written and veriﬁed in Coq. Since then,
+many other compilers have been developed and veriﬁed in a range of languages and logics including Coq,
+HOL, F(cid:63), etc., with features such as shared memory [27], functional programming [28–30] and modularity
+[31, 32].
+
+b. Outline The rest of our paper is organized as follows: in the following section we provide an overview
+of reversible computing and the original Revs compiler. Section III formalizes Revs and introduces a
+semantic model, as well as our internal and target languages. Section IV describes our compilation methods
+and Section V details our type system and inference algorithm. Section VI gives our machine-checked
+correctness proofs for ReVer. Finally, Section VII compares our compiled circuits to those of Revs, and
+Section VIII concludes the paper.
+
+2
+
+FIG. 1. A Toﬀoli network computing the NOR function f (a, b) = a ∨ b. When read from left to right and numbering
+the qubits from top to bottom as 0, 1, 2, 3, the applied gates are Toﬀoli 0 1 2, CNOT 2 0, CNOT 1 0, CNOT 0 3,
+CNOT 1 0, CNOT 2 0, Toﬀoli 0 1 2, and NOT 3. Bit 2 is initialized in the zero state and returned clean, i.e., in the
+zero state whereas bit 3 is used to store the result f (a, b).
+
+II. REVERSIBLE COMPUTING
+
+Reversible functions are Boolean functions f : {0, 1}n → {0, 1}n which can be inverted on all outputs,
+i.e., precisely those functions which correspond to permutations of a set of cardinality 2n, for some n ∈ N.
+As with classical circuits, reversible functions can be constructed from universal gate sets – for instance, it
+is known that the Toﬀoli gate which maps (x, y, z) (cid:55)→ (x, y, z ⊕ (x ∧ y)), together with the controlled-NOT
+gate (CNOT) which maps (x, y) (cid:55)→ (x, x ⊕ y) and the NOT gate which maps x (cid:55)→ x ⊕ 1, is universal for
+reversible computation [4]. In particular, any given target function, when considered as a permutation πf
+can be implemented over this gate set at the expense of at most 1 additional bit.
+
+The number of Toﬀoli gates used in the implementation of a given permutation πf is the basic measure
+of complexity. Indeed, it is known from the theory of fault-tolerant quantum computing [4] that the Toﬀoli
+gate has a substantial cost, whereas the cost of so-called Cliﬀord gates, such as CNOT and NOT, can usually
+be neglected. Another important metric that is associated to a reversible circuit is the amount of scratch
+space required to implement a given target function, i.e., temporary bits which store intermediate results of
+a computation. In quantum computing such bits are commonly denoted as ancilla bits. A very important
+diﬀerence to classical computing is that scratch bits cannot just be overwritten when they are no longer
+needed: any ancilla that is used as scratch space during a reversible computation must be returned to its
+initial value—commonly assumed to be 0—computationally. Moreover, if an ancilla bit is not “cleaned” in
+this way, in a quantum computation it may remain entangled with the computational registers which in turn
+can destroy the desired interferences that are crucial for many quantum algorithms.
+Figure 1 shows a reversible circuit over NOT, CNOT, and Toﬀoli gates computing the NOR function.
+NOT gates are denoted by an ⊕, while CNOT and Toﬀoli gates are written with an ⊕ on the target bit
+(the bit whose value changes) connected by a vertical line to, respectively, either one or two control bits
+identiﬁed by solid dots. Two ancilla qubits are used which both initially are 0; one of these ultimately holds
+the (otherwise irreversible) function value, the other is returned to zero. For larger circuits, it becomes a
+non-trivial problem to assert a) that indeed the correct target function f is implemented and b) that indeed
+all ancillas that are not outputs are returned to 0.
+
+c. Revs From Bennett’s work on reversible Turing machines follows that any function can be imple-
+if an n-bit function x (cid:55)→ f (x) can be implemented with K
+mented by a suitable reversible circuit [33]:
+gates over {NOT, AND}, then the reversible function (x, y) (cid:55)→ (x, y ⊕ f (x)) can be implemented with at
+most 2K + n gates over the Toﬀoli gate set. The basic idea behind Bennett’s method is to replace all AND
+gates with Toﬀoli gates, then perform the computation, copy out the result, and undo the computation.
+This strategy is illustrated in Figure 2, where the box labelled Uf corresponds to f with all AND gates
+substituted with Toﬀoli gates and the inverse box is simply obtained by reversing the order of all gates in
+Uf . Bennett’s method has been implemented in the Haskell-based quantum programming language Quipper
+[15, 34] via a monad that allows lifting of classical functions to Toﬀoli networks with the Bennett method.
+One potential disadvantage of Bennett’s method is the large number of ancillas it requires as the required
+memory scales proportional to the circuit size of the initial, irreversible function f . In a recent work, an
+attempt was made with the Revs compiler (and programming language of the same name) [1] to improve
+on the space-complexity of Bennett’s strategy by generating circuits that are space-eﬃcient – that is, Revs
+is an optimizing compiler with respect to the number of bits used. We build on their work in this paper,
+
+3
+
+FIG. 2. A reversible circuit computing f (x1, . . . , xm) using the Bennett trick.
+
+Var x
+Nat i, j ∈ N
+Loc l ∈ N
+Val v ::= unit | l | register l1 . . . ln | λx.t
+
+Term t ::= let x = t1 in t2 | λx.t | (t1 t2) | t1; t2 | x | t1 ← t2
+
+| true | false | t1 ⊕ t2 | t1 ∧ t2 | clean t | assert t
+| register t1 . . . tn| t.[i] | t.[i..j] | append t1 t2| rotate i t
+
+FIG. 3. Syntax of Revs.
+
+formalizing Revs and developing a veriﬁed compiler without too much loss in eﬃciency.
+
+In this section we give a formal deﬁnition of Revs, as well as the intermediate and target languages of the
+
+compiler.
+
+III. LANGUAGES
+
+A. The Source
+
+The abstract syntax of Revs is presented in Figure 3. The core of the language is a simple imperative
+language over Boolean and array (register) types. The language is further extended with ML-style functional
+features, namely ﬁrst-class functions and let deﬁnitions, and a reversible domain-speciﬁc construct clean.
+
+In addition to the basic syntax of Figure 3 we add the following derived operations
+
+¬t ∆= true ⊕ t,
+
+t1 ∨ t2
+
+∆= (t1 ∧ t2) ⊕ (t1 ⊕ t2),
+
+∆= (t1 ∧ t2) ⊕ (¬t1 ∧ t3),
+if t1 then t2 else t3
+for x in i..j do t ∆= t[x (cid:55)→ i];··· ; t[x (cid:55)→ j].
+
+Note that Revs has no dynamic control. This is due to the restrictions of our target architecture (see
+below).
+
+The ReVer compiler uses F# as a meta-language to generate Revs code with particular register sizes
+and indices, possibly computed by some more complex program. Writing an F# program that generates
+Revs code is similar in eﬀect to writing in a hardware description language [35]. We use F#’s quotations
+mechanism to achieve this by writing Revs programs in quotations <@...@>. Note that unlike languages
+
+4
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+
+let s0 a =
+
+let a2 = rot 2 a
+let a13 = rot 13 a
+let a22 = rot 22 a
+let t =
+for i in 0 .. 31 do
+
+Array.zeroCreate 32
+
+t.[i] <- a2.[i] <> a13.[i] <> a22.[i]
+
+t
+
+let s1 a =
+
+let a6 = rot 6 a
+let a11 = rot 11 a
+let a25 = rot 25 a
+let mutable t =
+for i in 0 .. 31 do
+
+Array.zeroCreate 32
+
+t.[i] <- a6.[i] <> a11.[i] <> a25.[i]
+
+t
+
+let ma a b c =
+
+let t =
+for i in 0 .. 31 do
+
+Array.zeroCreate 32
+
+t.[i] <- (a.[i] && (b.[i] <> c.[i]))
+
+<> (b.[i] && c.[i])
+
+t
+
+23
+24
+25
+26
+27
+
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+
+let ch e f g =
+
+let t =
+for i in 0 .. 31 do
+
+Array.zeroCreate 32
+
+t.[i] <- e.[i] && f.[i] && g.[i]
+
+t
+
+fun k w x ->
+
+let hash x =
+
+let a = x.[0..31], b = x.[32..63]
+
+c = x.[64..95], d = x.[96..127],
+e = x.[128..159], f = x.[160..191],
+g = x.[192..223], h = x.[224..255]
+
+(%modAdd 32) (ch e f g) h
+(%modAdd 32) (s0 a) h
+(%modAdd 32) w h
+(%modAdd 32) k h
+(%modAdd 32) h d
+(%modAdd 32) (ma a b c) h
+(%modAdd 32) (s1 e) h
+
+for i in 0 .. n - 1 do
+
+hash (rot 32*i x)
+
+x
+
+FIG. 4. Implementation of the SHA-2 algorithm with n rounds, using a meta-function modAdd.
+
+such as Quipper, our strictly combinational target architecture doesn’t allow computations in the meta-
+language to depend on computations within Revs.
+
+Example 1. The 256-bit Secure Hash Algorithm 2 [36] is a cryptographic hash algorithm which performs a
+series of modular additions and functions on 32-bit chunks of a 256-bit hash value, before rotating the register
+and repeating for a number of rounds. In the Revs implementation, shown in Figure 4, this is achieved by
+a function hash which takes a length 256 register, then makes calls to modular adders with diﬀerent 32-bit
+slices. At the end of the round, the entire register is rotated 32 bits with the rotate command.
+
+d. Semantics We designed our semantic model of Revs with two goals in mind:
+
+1. keep the semantics as close to the original implementation, Revs, as possible, and
+
+2. simplify the task of formal veriﬁcation.
+
+The result is a somewhat non-standard semantics that is nonetheless intuitive for the programmer. Moreover,
+the particular semantic model naturally enforces a style of programming that results in eﬃcient circuits and
+allows common design patterns to be optimized.
+The operational semantics of Revs is presented in big-step style in Figure 5 as a relation ⇒⊂ Conﬁg ×
+Conﬁg on conﬁgurations – pairs of terms and Boolean-valued stores. A key feature of our semantic model is
+that Boolean, or bit values are always allocated on the store. Speciﬁcally, Boolean constants and expressions
+are modelled by allocating a new location on the store to hold its value – as a result all Boolean values,
+including constants, are mutable. All other values are immutable.
+
+The allocation of Boolean values on the store serves two main purposes: to give the programmer ﬁne-
+grain control over how many bits are allocated, and to provide a simple and eﬃcient model of registers –
+arrays of bits. In studying pseudo-code for low-level bitwise operations, e.g., arithmetic and cryptographic
+functions, we observed that most algorithms were naturally speciﬁed by a combination of array-type accesses
+– modifying individual elements of bit arrays – and list-type manipulations – splitting and merging bit arrays.
+While these patterns could be implemented with arrays, most algorithms would require either complex index
+book-keeping by the programmer or extraneous copying of arrays;
+in the latter case, circuits could be
+optimized to do away with unnecessary copies, but this complicates the process of formal veriﬁcation. In
+particular, we want to compile eﬃcient circuits with as little extrinsic optimization as possible.
+
+5
+
+Store σ : N (cid:42) B
+Conﬁg c ::= (cid:104)t, σ(cid:105)
+
+[refl]
+
+(cid:104)v, σ(cid:105) ⇒ (cid:104)v, σ(cid:105)
+(cid:104)t2, σ(cid:48)(cid:105) ⇒ (cid:104)v2, σ(cid:48)(cid:48)(cid:105)
+
+(cid:104)t1, σ(cid:105) ⇒ (cid:104)λx.t(cid:48)
+
+1, σ(cid:48)(cid:105)
+1[x (cid:55)→ v2], σ(cid:48)(cid:48)(cid:105) ⇒ (cid:104)v, σ(cid:48)(cid:48)(cid:48)(cid:105)
+(cid:104)t(cid:48)
+(cid:104)(t1 t2), σ(cid:105) ⇒ (cid:104)v, σ(cid:48)(cid:48)(cid:48)(cid:105)
+
+(cid:104)t1, σ(cid:105) ⇒ (cid:104)l1, σ(cid:48)(cid:105)
+
+(cid:104)t2, σ(cid:48)(cid:105) ⇒ (cid:104)l2, σ(cid:48)(cid:48)(cid:105)
+(cid:104)t1 ← t2, σ(cid:105) ⇒ (cid:104)unit, σ(cid:48)(cid:48)[l1 (cid:55)→ σ(cid:48)(cid:48)(l2)](cid:105)
+l /∈ dom(σ)
+
+[true]
+
+(cid:104)true, σ(cid:105) ⇒ (cid:104)l, σ(cid:48)(cid:48)[l (cid:55)→ 1](cid:105)
+
+[app]
+
+[assn]
+
+[let]
+
+[bexp]
+
+(cid:104)t1, σ(cid:105) ⇒ (cid:104)v1, σ(cid:48)(cid:105)
+
+(cid:104)t2[x (cid:55)→ v1], σ(cid:48)(cid:105) ⇒ (cid:104)v2, σ(cid:48)(cid:48)(cid:105)
+
+(cid:104)let x = t1 in t2, σ(cid:105) ⇒ (cid:104)v2, σ(cid:48)(cid:48)(cid:105)
+
+(cid:104)t1, σ(cid:105) ⇒ (cid:104)unit, σ(cid:48)(cid:105)
+
+(cid:104)t2, σ(cid:48)(cid:105) ⇒ (cid:104)v, σ(cid:48)(cid:48)(cid:105)
+
+[seq]
+
+(cid:104)t1; t2, σ(cid:105) ⇒ (cid:104)v, σ(cid:48)(cid:48)(cid:105)
+(cid:104)t2, σ(cid:48)(cid:105) ⇒ (cid:104)l2, σ(cid:48)(cid:48)(cid:105)
+
+l3 /∈ dom(σ(cid:48)(cid:48))
+
+(cid:104)t1, σ(cid:105) ⇒ (cid:104)l1, σ(cid:48)(cid:105)
+
+(cid:104)t1 (cid:63) t2, σ(cid:105) ⇒ (cid:104)l3, σ(cid:48)(cid:48)[l3 (cid:55)→ σ(cid:48)(cid:48)(l1) (cid:63) σ(cid:48)(cid:48)(l2)](cid:105)
+
+(cid:104)t1, σ(cid:105) ⇒ (cid:104)register l1 . . . lm, σ(cid:48)(cid:105)
+
+[append]
+
+l /∈ dom(σ)
+
+[false]
+
+(cid:104)false, σ(cid:105) ⇒ (cid:104)l, σ(cid:48)(cid:48)[l (cid:55)→ 0](cid:105)
+(cid:104)t2, σ(cid:48)(cid:105) ⇒ (cid:104)register lm+1 . . . ln, σ(cid:48)(cid:48)(cid:105)
+
+(cid:104)append t1 t2, σ(cid:105) ⇒ (cid:104)register l1 . . . ln, σ(cid:48)(cid:48)(cid:105)
+1 ≤ i ≤ n
+
+(cid:104)t1, σ(cid:105) ⇒ (cid:104)l1, σ1(cid:105)
+(cid:104)t2, σ(cid:105) ⇒ (cid:104)l2, σ2(cid:105)
+
+[index]
+
+(cid:104)t, σ(cid:105) ⇒ (cid:104)register l1 . . . ln, σ(cid:48)(cid:105)
+
+(cid:104)t.[i], σ(cid:105) ⇒ (cid:104)li, σ(cid:48)(cid:105)
+
+[slice]
+
+(cid:104)t, σ(cid:105) ⇒ (cid:104)register l1 . . . ln, σ(cid:48)(cid:105)
+
+1 ≤ i ≤ j ≤ n
+
+(cid:104)t.[i..j], σ(cid:105) ⇒ (cid:104)register li . . . lj, σ(cid:48)(cid:105)
+
+[reg]
+
+...
+
+(cid:104)tn, σ(cid:105) ⇒ (cid:104)ln, σn(cid:105)
+
+(cid:104)register t1 . . . tn, σ(cid:105) ⇒ (cid:104)register l1 . . . ln, σn(cid:105)
+
+[rotate]
+
+(cid:104)t, σ(cid:105) ⇒ (cid:104)register l1 . . . ln, σ(cid:48)(cid:105)
+
+1 < i < n
+(cid:104)rotate t i, σ(cid:105) ⇒ (cid:104)register li . . . li−1, σ(cid:48)(cid:105)
+
+[clean]
+
+(cid:104)t, σ(cid:105) ⇒ (cid:104)l, σ(cid:48)(cid:105)
+
+(cid:104)clean t, σ(cid:105) ⇒ (cid:104)unit, σ(cid:48)(cid:12)(cid:12)dom(σ(cid:48))\{l}(cid:105)
+
+σ(cid:48)(l) = false
+
+[assert]
+
+(cid:104)t, σ(cid:105) ⇒ (cid:104)l, σ(cid:48)(cid:105)
+
+σ(cid:48)(l) = true
+
+(cid:104)assert t, σ(cid:105) ⇒ (cid:104)unit, σ(cid:48)(cid:105)
+
+FIG. 5. Operational semantics of Revs.
+
+The semantics of ⊕ and ∧ are also notable in that they ﬁrst reduce both arguments to locations, then
+retrieve their value. This allows programmers to write statements whose value may not be immediately
+apparent – e.g., x ⊕ (x ← y; y), which under these semantics will always evaluate to 0. The beneﬁt of this
+deﬁnition is that it allows the compiler to perform important optimizations without a signiﬁcant burden on
+the programmer (see Section IV).
+
+Semantically, the clean and assert commands have no eﬀect, other than to evaluate their argument. In
+the case of the assert statement, while an assertion could be modelled with reversible circuits, it is unlikely
+that any circuit design would ever have a use for such a construct; instead, assertions are used strictly for
+program veriﬁcation by the compiler. Clean statements have a similar interpretation – rather than having
+the compiler generate circuit code cleaning a particular bit, they are viewed as compiler directives asserting
+that a particular bit is in the zero state. The location is then freed for use by the rest of the program, making
+the statement analogous to free in other languages. Practically speaking this statement is only useful in
+the form clean x for some identiﬁer x.
+
+B. Boolean expressions
+
+Our compiler uses XOR-AND Boolean expressions – single output classical circuits over XOR and AND
+gates – as an intermediate language. Compilation from Boolean expressions into reversible circuits forms
+the main “code generation” step of our compiler. We brieﬂy describe its syntax and semantics.
+A Boolean expression is deﬁned as an expression over Boolean constants, variable indices, and logical ⊕
+
+6
+
+and ∧ operators. Explicitly, we deﬁne
+
+BExp B ::= 0 | 1 | i ∈ N | B1 ⊕ B2 | B1 ∧ B2.
+
+Note that we use the symbols 0, 1,⊕ and ∧ interchangeably with their interpretation in the Boolean ﬁeld
+F2. We use vars(B) to refer to the set of variables used in B.
+
+We interpret a Boolean expression as a function from (total) Boolean-valued states to Booleans.
+
+particular, we deﬁne State = N → B and denote the semantics of a Boolean expression by(cid:74)B(cid:75) : State → B.
+The formal deﬁnition of(cid:74)B(cid:75) is obvious, but we include it below for completeness:
+
+In
+
+(cid:74)1(cid:75)s = 1
+
+(cid:74)0(cid:75)s = 0
+(cid:74)i(cid:75)s = s(i)
+(cid:74)B1 ⊕ B2(cid:75)s =(cid:74)B1(cid:75)s ⊕(cid:74)B2(cid:75)s
+(cid:74)B1 ∧ B2(cid:75)s =(cid:74)B1(cid:75)s ∧(cid:74)B2(cid:75)s
+
+C. Target architecture
+
+ReVer compiles to combinational, reversible circuits over NOT, controlled-NOT and Toﬀoli gates. By
+combinational circuits we mean a series of logic gates applied to bits with no external means of control or
+memory – eﬀectively pure logical functions. We chose this model as it is suitable for implementing classical
+functions and oracles within quantum computations [4].
+
+Formally, we deﬁne
+
+Circ C ::= − | NOT i | CNOT i j | Toﬀoli i j k | C1 :: C2,
+
+i.e., Circ is the free monoid over NOT, CNOT, and Toﬀoli gates with unit − and the append operator ::.
+All but the last bit in each gate is called a control, whereas the ﬁnal bit is denoted as the target. Only the
+target is modiﬁed by a gate. We use use(C), mod(C) and control(C) to denote the set of bit indices that
+are used in, modiﬁed by, or used as a control in the circuit C, respectively. A circuit is well-formed if no
+gate contains more than one reference to a bit – i.e., the bits used in each Controlled-Not or Toﬀoli gate are
+distinct.
+
+Similar to Boolean expressions, a circuit is interpreted as a function from states (maps from indices to
+Boolean values) to states, given by applying each gate which updates the previous state in order. The formal
+
+deﬁnition of the semantics of a reversible circuit C, given by(cid:74)C(cid:75) : State → State, is straightforward:
+
+(cid:74)NOT i(cid:75)s = s[i (cid:55)→ ¬s(i)]
+(cid:74)CNOT i j(cid:75)s = s[j (cid:55)→ s(i) ⊕ s(j)]
+(cid:74)Toﬀoli i j k(cid:75)s = s[k (cid:55)→ (s(i) ∧ s(j)) ⊕ s(k)]
+(cid:74)−(cid:75)s = s
+(cid:74)C1 :: C2(cid:75)s = ((cid:74)C2(cid:75) ◦(cid:74)C1(cid:75))s
+
+We use s[x (cid:55)→ y] to denote that function that maps x to y, and all other inputs z to s(z); by an abuse of
+notation we use [x (cid:55)→ y] to denote other substitutions as well.
+
+IV. COMPILATION
+
+In this section we discuss the implementation of ReVer. The compiler consists of 4381 lines of non-blank
+code in a common subset of F(cid:63) and F#, with a front-end to evaluate and translate F# quotations into Revs
+expressions. The core of the compiler – i.e., compilation from the abstract syntax of Revs into reversible
+circuits – was proven correct with F(cid:63).
+
+7
+
+A. Boolean expression compilation
+
+The core of ReVer’s code generation is a compiler from Boolean expressions into reversible circuits. We
+
+eﬀectively use the method employed in Revs [1], with the addition of an eager cleanup option.
+
+As a Boolean expression is already in the form of an irreversible classical circuit, the main job of the
+compiler is to allocate ancillas to store sub-expressions whenever necessary. ReVer does this by maintaining
+a global ancilla heap ξ which keeps track of the currently available (zero-valued) ancillary bits. Cleaned
+ancillas (ancillas returned to the zero state) may be pushed back onto the heap, and allocations have been
+formally veriﬁed to return previously used ancillas if any are available, hence not using any extra space.
+The function compile-BExp, shown in pseudo-code in Algorithm 1, takes a Boolean expression B and a
+target bit i then generates a reversible circuit computing i⊕ B. Note that ancillas are only allocated to store
+sub-expressions of ∧ expressions, since ⊕ is associative (i.e., i ⊕ (B1 ⊕ B2) = (i ⊕ B1) ⊕ B2).
+
+Algorithm 1 Boolean expression compiler.
+
+function compile-BExp(B, i) // Global ancilla heap ξ
+
+if B = 0 then −
+else if B = 1 then NOT i
+else if B = j then CNOT j i
+else if B = B1 ⊕ B2 then
+else // B = B1 ∧ B2
+
+compile-BExp(B1, i) :: compile-BExp(B2, i)
+a1 ← pop(ξ), C1 ← compile-BExp(B1, a1)
+a2 ← pop(ξ), C2 ← compile-BExp(B2, a2)
+C1 :: C2 :: Toﬀoli a1 a2 i
+
+end if
+
+end function
+
+e. Cleanup The deﬁnition of compile-BExp above is adequate to generate a reversible circuit com-
+puting the Boolean expression, but it leaves many garbage bits that take up space and need to be cleaned
+before they can be re-used. Revs provides two main modes of cleanup for Boolean expressions: eager and
+lazy. The former performs cleanup after each recursive call, while the latter performs one cleanup after the
+entire Boolean expression is computed. The key diﬀerence is that the eager strategy uses fewer bits, but
+requires more gates as sub-expressions may need to be re-computed. While we only implement these two
+strategies, the problem of ﬁnding a good tradeoﬀ between bits used and number of gates can be formalized
+as pebble games [37].
+To facilitate the cleanup – or uncomputing – of a circuit, we deﬁne the restricted inverse uncompute(C, A)
+of C with respect to a set of bits A ⊂ N by reversing the gates of C, and removing any gates with a target
+in A. For instance:
+
+(cid:40) −
+
+if j ∈ A
+otherwise
+
+CNOT i j
+
+uncompute(CNOT i j, A) =
+
+The other cases are deﬁned similarly.
+
+out aﬀecting any of the target bits.
+
+In particular,
+
+uncompute(C,{i}) maps a state s to s[i (cid:55)→ (cid:74)B(cid:75)s ⊕ s(i)].
+
+The restricted inverse allows the temporary values of a reversible computation to be uncomputed with-
+if C = compile-BExp(B, i), then the circuit C ::
+Intuitively, since no bits contained in A are
+modiﬁed, the restricted inverse preserves their values; that the restricted inverse uncomputes the values of
+the remaining bits is more diﬃcult to see, but it can be observed that if the computation doesn’t depend
+on the value of a bit in A, the computation will be inverted. We formalize and prove this statement in
+Section VI. The eager and lazy cleanup strategies are deﬁned respectively by applying this cleanup at every
+recursive call to compile-BExp or to just the outer-most call. In order to re-use ancilla bits that have been
+cleaned, they are pushed back onto the heap.
+
+8
+
+B. Revs compilation
+
+In studying the Revs compiler, we observed that most of what the compiler was doing was evaluating the
+non-Boolean parts of the program – eﬀectively bookkeeping for registers – only generating circuits for a small
+kernel of cases. As a result, transformations to diﬀerent Boolean representations (e.g., circuits, dependence
+graphs [1]) as well as the interpreter itself reused signiﬁcant portions of this bookkeeping code. To make
+use of this redundancy to simplify both writing and verifying the compiler, we designed ReVer as a partial
+evaluator parameterized by an abstract machine. As a side eﬀect, we arrive at a unique and intuitive model
+for circuit compilation similar to staged computation (see, e.g., [38]).
+
+Our compiler works by evaluating the program with an abstract machine providing mechanisms for initial-
+izing and assigning locations on the store to Boolean expressions. In particular, an interpretation I consists
+of a domain D and 2 operations:
+
+assign : D × N × BExp → D
+eval : D × N × State → B.
+
+Formally, a series of assignments in an interpretation builds a Boolean computation or circuit within a
+speciﬁc model (i.e., classical, reversible, diﬀerent gate sets) which may be simulated on an initial state with
+the eval function – eﬀectively an operational semantics of the model. Practically speaking, it abstracts the
+store in Figure 5 and allows delayed computation or additional processing of the Boolean expression stored
+in a cell, which may be mapped into reversible circuits immediately or after the entire program has been
+evaluated. We give some examples of interpretations below.
+Example 2. The standard interpretation Istandard has domain Store = N (cid:42) B, together with the opera-
+tions
+
+assignstandard(σ, l, B) = σ[l (cid:55)→(cid:74)B(cid:75)σ]
+
+evalstandard(σ, l, s) = σ(l).
+
+Partial evaluation over the standard interpretation coincides exactly with the operational semantics of Revs.
+Example 3. The Boolean expression interpretation IBExp has domain N (cid:42) BExp, together with the
+operations
+
+assignBExp(σ, l, B) = σ[l (cid:55)→ B[l(cid:48) ∈ B (cid:55)→ σ(l(cid:48))]]
+evalBExp(σ, l, s) =(cid:74)σ(l)(cid:75)s.
+
+The Boolean expression interpretation can be viewed as the standard interpretation with deferred evaluation
+– that is, it expands Boolean expressions over locations to Boolean expressions over a set of variables
+representing the program inputs, but defers evaluation until a set of initial values are supplied. Eﬀectively
+the result is the expression (or expressions) the program computes on a given input.
+Example 4. The reversible circuit interpretation Icircuit is somewhat more complex. It has domain (N (cid:42)
+N) × Circ, where the ﬁrst element maps program-level locations to circuit-level bits and the second is a
+reversible circuit. The 2 operations are deﬁned as follows – note that assign uses the global ancilla heap ξ:
+
+assigncircuit((ρ, C), l, B) = (ρ[l (cid:55)→ i], C :: C(cid:48))
+
+where i = pop(ξ),
+
+C(cid:48) = compile-BExp(B[l(cid:48) ∈ vars(B) (cid:55)→ ρ(l(cid:48))], i)
+
+evalcircuit((ρ, C), l, s)) = s(cid:48)(ρ(l)),
+
+where s(cid:48) =(cid:74)C(cid:75)s.
+
+This interpretation generates a reversible circuit directly from the program by maintaining a mapping from
+program locations to bits. When a location is overwritten, a new ancilla i is allocated and the expression
+B⊕ i is compiled into a circuit. Evaluation amounts to running the circuit on an initial state, then retrieving
+the value at a particular bit.
+
+9
+
+ReVer provides implementations of the interpretations above. It is also possible to deﬁne an interpretation
+that generates mutable dependence diagrams, which were used as an intermediate representation in [1] to
+compile space-eﬃcient reversible circuits.
+Given an interpretation I with domain D, we deﬁne the set of I -conﬁgurations as ConﬁgI = Term×D
+– that is, I -conﬁgurations are pairs of programs and elements of D which function as the heap. The relation
+
+⇒I ⊆ ConﬁgI × ConﬁgI
+
+gives the operational semantics of Revs over the interpretation I . We do not give a formal deﬁnition of
+⇒I , as it can be obtained trivially from the deﬁnition of ⇒ (Figure 5) by replacing all heap updates with
+assign. To compile a program term t, ReVer evaluates t over a particular interpretation I (for instance, the
+reversible circuit interpretation) and a suitable initial heap σ ∈ D according to the semantic relation ⇒I .
+In this way, evaluating a program and compiling a program to, for instance, a circuit look almost identical.
+As we will show later, this greatly simpliﬁes the problem of veriﬁcation.
+
+Our compiler currently supports two modes of compilation: a default mode, and a space-eﬃcient mode.
+The default mode evaluates the program using the circuit interpretation, and simply returns the circuit
+and output bit(s). The space-eﬃcient mode, on the other hand, evaluates the program to a list of Boolean
+expressions over the inputs, by partial evaluation with the Boolean expression interpretation. The Boolean
+expression compiler is then used to compile each Boolean expression into a circuit. This method eﬀectively
+erases the program structure, allowing the Boolean expression compiler to more eﬀectively manage the allo-
+cation of ancillas for sub-expressions and to apply optimizations, described below. However, the duplication
+of sub-expressions leads to an exponential blowup, making this compilation method not scalable.
+
+f.
+
+Input vs parameters Quipper [15] makes a distinction between function inputs and parameters, the
+latter of which are available at compile time. In this way the language provides a static, structural divide
+between run-time and compile-time computations. Partial evaluation on the other hand eﬀectively erases
+this distinction, any structural limitations owing to the limitations of the target architectures (for instance,
+unbounded for loops cannot be compiled to a combinational circuit). Practically speaking, this means the
+programmer can use the same code to perform more or less computation at the circuit level – for instance, an
+adder may be partially instantiated to compile a circuit performing addition by a constant, without making
+any changes to the code itself. The downside of this method is it can be more diﬃcult for the programmer
+to determine what the compiled circuit is actually computing. We intend to add more support for types and
+constructs which may be computed either at compile-time or run-time, such as integers and array indexing.
+
+C. Optimization passes
+
+Both methods of compilation described above suﬀer from the problem that more ancillas may be allocated
+than are actually needed, due to the program structure. Our implementation performs some optimizations,
+all of which have been veriﬁed to be correct, in order to reduce ancilla usage for some common patterns.
+
+g. XOR-equal
+
+In the circuit interpretation, a new ancilla is allocated by default whenever a location is
+updated, since updates are generally not reversible. However, in the case when an update can be rewritten
+as an XOR of the target bit, the update can be performed reversibly. Speciﬁcally, given a Boolean expression
+B and target bit i, we try to factor B as i⊕ B(cid:48) where i /∈ vars(B(cid:48)), a condition required for the correctness of
+compile-BExp (see Section VI). If such a factoring exists, rather than allocate an ancilla to store the result
+we compile the expression B(cid:48) with target i. In practice this signiﬁcantly reduces the number of ancillas used,
+as evidenced by the Revs code in Figure 4 which makes extensive use of the XOR-equal pattern.
+
+h. Boolean simpliﬁcations Before compiling a Boolean expression, we perform basic simpliﬁcations, e.g.,
+short circuiting AND’s and XOR’s whenever possible. We also distribute ANDs to rewrite the expression
+in positive-polarity ESOP (exclusive sum-of-products) form. The beneﬁt of this transformation is that
+it produces circuits with the minimal number of ancillas using compile-BExp without eager cleanup – in
+particular, the compiled circuit uses k − 2 ancilla bits where k is the highest degree of any product in the
+ESOP form.
+Its minimality with respect to compile-BExp can be observed by noting that the positive-
+polarity ESOP form of a Boolean function is unique, so any equivalent expression over AND and XOR must
+contain a product of length k and hence use at least k − 2 ancilla bits.
+
+10
+
+If cleanup is performed eagerly the number of bits used depends on the factoring of a given product into
+binary products. In particular, the product ((((a ∧ b) ∧ c) ∧ d) ∧ e) ∧ f would require 4 ancilla bits using the
+eager cleanup scheme, while the product ((a ∧ b) ∧ (c ∧ d)) ∧ (e ∧ f ) would use only 3 extra bits. In principal
+this can be implemented by representing products as sets of variables, but in practice we found this greatly
+complicated the task of veriﬁcation due to the more complicated data structure, while only saving at most
+log2(k) bits.
+
+i. Growing expressions One key diﬀerence between our partial evaluator and the semantics of Figure 5
+is that the compiler evaluates Boolean terms to Boolean expressions rather than locations directly. For
+instance, given a term t1 ∧ t2 the compiler reduces each sub-expression t1 and t2 to Boolean expressions
+rather than locations – in comparison, the formal semantic deﬁnition reduces both t1 and t2 to locations
+ﬁrst. While the equivalence of these two methods is not veriﬁed in our implementation, it is nonetheless
+easy to observe its correctness since all side-eﬀectual computation is carried out during the reduction of t1
+and t2 to Boolean expressions.
+
+This method of growing expressions allows larger Boolean expressions to be optimized and eﬃciently
+compiled to circuits. In particular, a straightforward implementation of the operational semantics would
+require every binary sub-expression to be computed using an ancilla. In reality, this is not necessary, as in
+the case of compiling t1 ⊕ t2 where no ancillas are allocated. While the Boolean expression interpretation
+goes farther and expands all locations within a Boolean expression, the expression size grows exponentially
+and quickly becomes unmanageable – we found this was a good compromise between the number of bits
+used and scalability of compilation.
+
+V. TYPE INFERENCE
+
+While the deﬁnition of ReVer as a partial evaluator streamlines both development and veriﬁcation, it
+leaves one issue: compiling functions. Semantically a function is a value, so the interpreter has nothing to
+do. In reality we wrap the evaluator with a procedure that allocates locations for the function parameters,
+then proceeds to evaluate the body; however, to do so, the compiler needs to know how many locations to
+allocate.
+
+Ideally, this would be handled by type annotations, but this proved to be unnatural and confusing as
+F# has no mechanism for syntax extensions or dependent types. Instead we took the approach of using
+type inference together with a type system based on ﬁxed-length registers. One of the practical beneﬁts of
+our inference algorithm is it functions as both optimization and veriﬁcation by only allocating bits that are
+actually used in the program. In particular, the inference algorithm exposed an oﬀ-by-one error in a Revs
+program by allocating fewer bits than were required by the algorithm.
+
+We note that many other solutions are possible: the original Revs compiler for instance had programmers
+allocate inputs manually rather than write functions. This led to a signiﬁcantly more complicated semantic
+model and somewhat unnatural looking programs. On the other hand, the problem could be avoided by
+delaying bit allocation until after the circuit is compiled. We opted for the type inference approach as it
+simpliﬁed veriﬁcation, removing named variables from our internal representations which complicate formal
+veriﬁcation [28].
+
+j. Type system Our type system includes three basic types – the unit type, Booleans, and ﬁxed-length
+registers – as well as the function type. As expected, indexing registers beyond their length causes a
+type error. To regain some polymorphism and ﬂexibility the type system allows (structural) subtyping, in
+particular so that registers with greater size may be used anywhere a register with lesser size is required.
+
+Type inference in systems with (structural) subtyping is generally considered a diﬃcult problem – see, for
+e.g., [19] which proves NP-completeness of the problem for a similar type system involving record concate-
+nation. While many attempts have been made ([20, 39–42]), they are typically not eﬀective in practice and
+to the authors’ knowledge no such algorithms are currently in common use. Given the simplicity of our type
+system (in particular, the lack of non-subtype polymorphism), we have found a relatively simple inference
+algorithm based on constraint generation and bound maps is eﬀective in practice.
+
+Figure 6 summarizes algorithmic rules of our type system, which specify a set of constraints that any valid
+typing most satisfy. Constraints are given over a language of type and integer expressions. Type expressions
+include the basic types of ReVer, as well variables representing types and registers over integer expressions.
+
+11
+
+IExp I ::= i ∈ N | x | I1 ± I2
+TExp T ::= X | Unit | Bool | Register I | T1 → T2
+Const c ::= I1 = I2 | I1 (cid:118) I2 | T1 = T2 | T1 (cid:118) T2
+
+[C-var]
+
+(x : T ) ∈ Γ
+Γ (cid:96) x : T ↓ ∅
+
+[C-let] Γ (cid:96) t1 : T1 ↓ C1
+
+Γ, x : T1 (cid:96) t2 : T2 ↓ C2
+
+Γ (cid:96) let x = t1 in t2 : T2 ↓ C1 ∪ C2
+
+[C-lambda] Γ, x : X (cid:96) t : T ↓ C
+
+Γ (cid:96) λx.t : X → T ↓ C
+
+X fresh
+
+[C-app]
+
+[C-bexp]
+
+Γ (cid:96) t1 : T1 ↓ C1
+
+Γ (cid:96) t2 : T2 ↓ C2
+
+C3 = {T1 = X1 → X2, X2 (cid:118) T2}
+
+X1, X2 fresh
+
+Γ (cid:96) (t1 t2) : X2 ↓ C1 ∪ C2 ∪ C3
+
+[C-seq]
+
+Γ (cid:96) t1 : T1 ↓ C1
+Γ (cid:96) t2 : T2 ↓ C2
+Γ (cid:96) t1; t2 : T2 ↓ C1 ∪ C2 ∪ {T1 = Unit }
+
+Γ (cid:96) t1 : T1 ↓ C1
+
+Γ (cid:96) t2 : T2 ↓ C2
+
+Γ (cid:96) t1 (cid:63) t2 : Bool ↓ C1 ∪ C2 ∪ {T1 = Bool , T2 = Bool }
+
+[C-true]
+
+[C-false]
+
+Γ (cid:96) true : Bool ↓ ∅
+
+Γ (cid:96) false : Bool ↓ ∅
+
+[C-assn]
+
+Γ (cid:96) t1 : T1 ↓ C1
+
+Γ (cid:96) t2 : T2 ↓ C2
+
+Γ (cid:96) t1 ← t2 : Unit ↓ C1 ∪ C2 ∪ {T1 = Bool , T2 = Bool }
+
+[C-append]
+
+C3 = {T1 = Register x1, T2 = Register x2, x3 = x1 + x2} x1, x2, x3 fresh
+
+Γ (cid:96) t1 : T1 ↓ C1
+
+Γ (cid:96) t2 : T2 ↓ C2
+
+Γ (cid:96) append t1 t2 : Register x3 ↓ C1 ∪ C2 ∪ C3}
+
+[C-index]
+
+[C-slice]
+
+Γ (cid:96) t : T ↓ C1
+
+Γ (cid:96) t : T ↓ C1
+
+C2 = {T = Register x, i (cid:118) x}
+
+Γ (cid:96) t.[i] : Bool ↓ C1 ∪ C2
+C2{T = Register x, i (cid:118) j, j (cid:118) x}
+Γ (cid:96) t.[i..j] : Register j − i + 1 ↓ C1 ∪ C2
+
+[C-rotate]
+
+Γ (cid:96) t : T ↓ C1
+C2{T = Register x, i (cid:118) x}
+x fresh
+Γ (cid:96) rotate t i : Register x ↓ C1 ∪ C2
+
+x fresh
+
+x fresh
+
+[C-reg]
+
+Γ (cid:96) t1 : T1 ↓ C1
+
+...
+Cn+1 = {Ti = Bool
+
+Γ (cid:96) tn : Tn ↓ Cn
+
+Γ (cid:96) register t1 . . . tn : Register n ↓(cid:83)n+1
+
+| ∀1 ≤ i ≤ n}
+
+i=1 Ci
+
+[C-clean]
+
+Γ (cid:96) t : T ↓ C
+
+Γ (cid:96) clean t : Unit ↓ C ∪ {T = Bool }
+
+[C-assert]
+
+Γ (cid:96) t : T ↓ C
+
+Γ (cid:96) assert t : Unit ↓ C ∪ {T = Bool }
+
+FIG. 6. Constraint typing rules
+
+Integer expressions are linear expressions over integer-valued variables and constants. Equality and order
+relations are deﬁned on type expressions as expected, while the integer expression ordering corresponds to the
+reverse order on integers (≥) – this deﬁnition is used so that the maximal solution to an integer constraint
+gives the smallest register size. Constraints may be equalities or order relations between expressions of the
+same kind.
+A type substitution Θ is a mapping from type variables to closed type expressions and integer variables to
+integers. By an abuse of notation we denote by Θ(T ) the type T with all variables replaced by their values
+in Θ. Additionally, we say that Θ satisﬁes the set of constraints C if every constraint is true after applying
+the substitutions. The relation Γ (cid:96) t : T ↓ C means t can be given type Θ(T ) for any type substitution
+satisfying C.
+k. Constraint solving We now give a brief sketch of our constraint solving algorithm, which ﬁnds a type
+substitution satisfying a set of constraints C. We use a combination of uniﬁcation (see, for e.g., [43]) and sets
+of upper and lower bounds for variables, similar to the method used in [20]. The function computeBounds,
+shown in pseudo-code in Algorithm 2, iterates through a set of constraints performing uniﬁcation and com-
+puting the closure of the constraints wherever possible. Bounds – both subtype and equality – on variables
+are translated to a range of type or integer expressions, possibly open at one end, and the algorithm main-
+tains a set of such bounds for each variable. To reduce complex linear arithmetic constraints to a variable
+bound we use a normalization procedure to write the constraint with a single positive polarity variable on
+one side.
+
+After all constraints have translated to bounds we iterate through the variables, simplifying and checking
+
+12
+
+the set of upper and lower bounds. Any variable with no unassigned variable in its upper and lower bound
+sets is assigned the maximum value in the intersection of all its bounds; this process repeats until no variables
+are left unassigned. It is easy to observe that this algorithm terminates as the syntax of Revs does not allow
+circular systems of constraints to be generated. This has been conﬁrmed in practice, as the constraint solver
+has terminated with the correct maximal bounds (or a type error) for every Revs program we tested.
+
+Algorithm 2 Computation of bound sets.
+
+function computeBounds(C, θ)
+
+C is a set of constraints
+θ a set of (possible open at one end) ranges for each variable
+while c ∈ C do
+
+if c is T1 = T2 or I1 = I2 then use uniﬁcation
+else if c is T (cid:118) T or I (cid:118) I then
+else if c is X (cid:118) Unit or Unit (cid:118) X then
+else if c is X (cid:118) Bool or Bool (cid:118) X then
+else if c is X (cid:118) Register I then
+
+computeBounds(S \ {c}, θ)
+computeBounds(S \ {c}, θ ∪ {X (cid:55)→ [Unit , Unit ]})
+computeBounds(S \ {c}, θ ∪ {X (cid:55)→ [Bool , Bool ]})
+computeBounds(S \ {c} ∪ {I (cid:118) x}, θ ∪ θ(cid:48))
+
+where θ(cid:48) = {X (cid:55)→ [Register x, Register x], x (cid:55)→ [I,∞]}
+
+else if c is Register I (cid:118) X then
+
+computeBounds(S \ {c} ∪ {x (cid:118) I, θ ∪ θ(cid:48))
+
+where θ(cid:48) = {X (cid:55)→ [Register x, Register x], x (cid:55)→ [0,I]}
+
+2 (cid:118) T2, θ ∪ θ(cid:48))
+1 ,T (cid:48)
+1 → T (cid:48)
+2 ]}
+
+2 , θ ∪ θ(cid:48))
+
+else if c is X (cid:118) T1 → T2 then
+
+computeBounds(S \ {c} ∪ {T1 (cid:118) T (cid:48)
+
+else if c is T1 → T2 (cid:118) X then
+
+where θ(cid:48) = {X (cid:55)→ [T (cid:48)
+
+1 → T (cid:48)
+computeBounds(S \ {c} ∪ {T (cid:48)
+1 → T (cid:48)
+
+2 ,T (cid:48)
+1 (cid:118) T1,T2 (cid:118) T (cid:48)
+2 ,T (cid:48)
+
+1 → T (cid:48)
+2 ]}
+
+where θ(cid:48) = {X (cid:55)→ [T (cid:48)
+else if c is X1 (cid:118) X2 then
+else if c is x (cid:118) I then
+else if c is I (cid:118) x then
+
+computeBounds(S \ {c}, θ ∪ {X1 (cid:55)→ [−, X2]})
+computeBounds(S \ {c}, θ ∪ {x (cid:55)→ [−,I]}
+computeBounds(S \ {c}, θ ∪ {x (cid:55)→ [I,−]}
+
+else Fail
+end if
+end while
+end function
+
+VI. VERIFICATION
+
+In this section we describe the veriﬁcation of ReVer and give the major theorems proven. All theorems
+given in this section have been formally speciﬁed and proven using the F(cid:63) compiler [18]. We ﬁrst give
+theorems about our Boolean expression compiler, then use these to prove properties about whole program
+compilation. The total veriﬁcation of ReVer comprises around 1500 lines of code.
+
+Rather than give our proof code, we translate our proofs to more natural mathematical language as we
+believe this is more enlightening. The original theorems and proofs are given in Appendix A for reference.
+
+A. Boolean expression compilation
+
+l. Correctness Below is the main theorem establishing the correctness of compile-BExp with respect to
+the semantics of reversible circuits and Boolean expressions. It states that if the variables of B, the bits on
+
+13
+
+the ancilla heap and the target are non-overlapping, then the circuit computes the function i ⊕ B.
+Theorem 1. Let B be a Boolean expression, ξ be the global ancilla heap, i ∈ N and s be a map from bits to
+Boolean values. Suppose vars(B), ξ and {i} are all disjoint and s(j) = 0 for all j ∈ ξ. Then
+
+s(cid:48)(i) = s(i) ⊕(cid:74)B(cid:75)s
+
+s(cid:48)(j) = s(j)
+
+14
+
+Proof. We use structural induction on B. We only sketch a recursive case, as the nonrecursive cases are
+trivial.
+Consider the case B = B1 ⊕ B2. Since vars(B1) is clearly disjoint with ξ and {i}, we see by induction
+
+where s(cid:48) =(cid:74)compile-BExp(B, i)(cid:75)s.
+that s1(i) = s(i) ⊕(cid:74)B1(cid:75)s where s1 = (cid:74)compile-BExp(B1, i)(cid:75)s. Next we want to use induction to show
+that s2(i) = s1(i) ⊕(cid:74)B2(cid:75)s1, where s2 =(cid:74)compile-BExp(B2, i)(cid:75)s1. To do so we observe that since no new
+s2 =(cid:74)compile-BExp(B2, i)(cid:75)s1 by induction.
+
+ancillas are added to ξ by compile-BExp(B1, i), vars(B2), ξ and {i} remain disjoint. Furthermore, since the
+circuit compile-BExp(B1, i) does not modify any bits still on the heap, s1(j) = 0 for all j ∈ ξ and hence
+Finally by the deﬁnition of compile-BExp(B1⊕ B2, i) and the semantics of reversible circuits, s2 = s(cid:48). The
+
+∧ case is slightly more involved, but mostly follows from the same argument.
+
+m. Cleanup As remarked earlier, a crucial part of reversible computing is cleaning ancillas both to
+reduce space usage, and in quantum computing to prevent entangled qubits from inﬂuencing the computation.
+Moreover, the correctness of our cleanup is actually necessary to prove correctness of the compiler, as the
+compiler re-uses cleaned ancillas on the heap, potentially interfering with the precondition of Theorem 1. We
+use the following theorem to establish the correctness of our cleanup method, stating that the uncompute
+transformation reverses all changes on bits not in the target set under the condition that no bits in the target
+set are used as controls.
+Theorem 2. Let C be a well-formed reversible circuit and A ⊂ N be some set of bits. If A ∩ control(C) = ∅
+
+then for all states s, s(cid:48) =(cid:74)C :: uncompute(C, A)(cid:75)s and any i /∈ A,
+
+s(i) = s(cid:48)(i)
+
+Theorem 2 largely relies on the below lemma, which can be veriﬁed by a simple inductive case analysis:
+Lemma 1. Let A ⊂ N and s, s(cid:48) be states such that for all i ∈ A, s(i) = s(cid:48)(i). If C is a reversible circuit
+
+where control(C) ⊆ A, then ((cid:74)C(cid:75)s)(i) = ((cid:74)C(cid:75)s(cid:48))(i) for all i ∈ A.
+
+Proof of Theorem 2. The proof proceeds by induction on the length of C. The base case is trivial, so we
+consider C = C1 :: C2. Without loss of generality, we assume C1 is a single gate. If C1 doesn’t use any bit in
+B, then uncompute(C, A) = uncompute(C2, A) :: C1, so we use the inductive hypothesis on C2 and the fact
+that C1 is self-inverse.
+On the other hand, if C1 uses some i ∈ A, then i must be the target of C1. Then uncompute(C, A) =
+
+uncompute(C2, A), so we need to show that s(i) = s(cid:48)(i) where s(cid:48) =(cid:74)C1 :: C2 :: uncompute(C2, A)(cid:75)s for all
+i /∈ A. We observe s(i) = s(cid:48)(i) where s(cid:48) =(cid:74)C1(cid:75)s for all i /∈ A, so by Lemma 1 we have
+(cid:74)C1 :: C2 :: uncompute(C2, A)(cid:75)s(i) =(cid:74)C2 :: uncompute(C2, A)(cid:75)s(i)
+for all i /∈ A. Thus by the inductive hypothesis we see that s(i) = s(cid:48)(i) where s(cid:48) = (cid:74)C1 :: C2 ::
+uncompute(C2, A)(cid:75)s for all i /∈ A, as required.
+
+Theorem 2, together with the fact that compile-BExp produces a well-formed circuit under disjointness
+constraints, gives us the corollary below that Boolean expression compilation with cleanup correctly reverses
+the changes to every bit except the target.
+Corollary 1. Let B be a Boolean expression, ξ be a the global ancilla heap and i ∈ N such that vars(B),
+ξ and {i} are all disjoint. Suppose compile-BExp(B, i, ) = C. Then for all j (cid:54)= i and states s, s(cid:48) =
+
+(cid:74)C ◦ uncompute(C,{i})(cid:75)s we have
+
+n. Optimizations Due to lack of space we omit the correctness proofs of our optimization passes, but
+note that we prove correctness of our Boolean expression simpliﬁcations, expansion to ESOP form, and
+factoring of B as i ⊕ B(cid:48).
+
+B. Revs compilation
+
+It was noted in Section IV that the design of ReVer as a partial evaluator simpliﬁes proving correctness.
+We expand on that point now, and in particular show that if a relation between the states of two interpre-
+tations is preserved by assignment, then the evaluator also preserves the relation. We state this formally in
+the theorem below.
+Theorem 3. Let I1, I2 be interpretations and suppose whenever (σ1, σ2) ∈ R for some relation R ⊆
+I1 × I2, (assign1(σ1, l, B), assign2(σ2, l, B)) ∈ R for any l, B. Then for any term t, if (cid:104)t, σ1(cid:105) ⇒I1 (cid:104)v, σ(cid:48)
+1(cid:105)
+and (cid:104)t, σ2(cid:105) ⇒I2 (cid:104)v, σ(cid:48)
+
+2(cid:105), then (σ(cid:48)
+
+1, σ(cid:48)
+
+2) ∈ R.
+
+Theorem 3 lifts properties about interpretations to properties of evaluation over those abstract machines –
+in particular, we only need to establish that assignment is correct for an interpretation to establish correctness
+of the corresponding evaluator/compiler. In practice this signiﬁcantly reduces boilerplate proof code, which
+is useful as F(cid:63) currently has limited support for automated induction.
+Given two interpretations I , I (cid:48), we say states σ and σ(cid:48) of I and I (cid:48) are observationally equivalent with
+respect to a set of initial values s ∈ State if for all i ∈ N, evalI (σ, i, s) = evalI (cid:48)(σ(cid:48), i, s). We say σ ∼s σ(cid:48)
+if σ and σ(cid:48) are observationally equivalent with respect to s. We establish the preservation of observational
+equivalence between the three interpretations implemented in ReVer, Istandard, IBExp and Icircuit, to
+prove the correctness of our compiler.
+Theorem 4. For all states σ, σ(cid:48) of Istandard and IBExp, respectively, and for all l ∈ N, B ∈ BExp, s ∈
+State, if σ ∼s σ(cid:48) then
+
+Proof. Follows directly from the compositionality of(cid:74)B(cid:75).
+
+assignstandard(σ, l, B) ∼s assignBExp(σ(cid:48), l, B)
+
+Theorem 5. For all states σ, σ(cid:48) of Istandard and Icircuit, respectively, and for all l ∈ N, B ∈ BExp, s ∈
+State, if σ ∼s σ(cid:48) and s(i) = 0 whenever i ∈ ξ, then
+
+assignstandard(σ, l, B) ∼s assigncircuit(σ(cid:48), l, B).
+
+Moreover, the ancilla heap remains 0-ﬁlled.
+
+Proof. The correctness of the circuit interpretation is more diﬃcult, since there is an extra level of abstraction
+where locations get mapped to bits within the circuit. Moreover, we have to add the extra condition that
+the ancilla heap is zero-ﬁlled, as observational equivalence alone is not strong enough to prove the theorem.
+As a result we need to establish three conditions to prove the theorem:
+
+• the ancilla heap remains zero-ﬁlled,
+• l is mapped to a bit containing the value of B, and
+• no other location is mapped to a modiﬁed bit.
+
+The ﬁrst condition follows from the fact that Boolean expression compilation cannot add any new bits to
+the heap, while the second condition follows from the fact that compiled circuits only modify the target and
+ancillas.
+
+The ﬁnal condition eﬀectively follows from a lemma stating that(cid:74)B(cid:75)s is equivalent to(cid:74)B[i ∈ vars(B) (cid:55)→
+ρ(i)](cid:75)((cid:74)C(cid:75)s) – i.e., evaluating the expression B gives the same result as running the circuit C then evaluating
+
+B by replacing every variable in B with the state of the corresponding bit. This can be proven by a
+straightforward induction on the structure of B.
+
+15
+
+Benchmark
+
+Revs
+
+carryRippleAdder 32
+carryRippleAdder 64
+mult 32
+mult 64
+carryLookahead 32
+carryLookahead 64
+modAdd 32
+modAdd 64
+cucarroAdder 32
+cucarroAdder 64
+ma4
+SHA-2 2 rounds
+SHA-2 4 rounds
+SHA-2 8 rounds
+SHA-2 16 rounds
+MD5 2 rounds
+
+bits
+127
+255
+130
+258
+169
+439
+65
+129
+129
+257
+17
+577
+833
+1345
+2594
+7841
+
+gates Toﬀolis
+90
+186
+4032
+16256
+112
+322
+62
+126
+32
+64
+8
+782
+1592
+3408
+7712
+
+bits
+128
+256
+128
+256
+169
+439
+65
+129
+65
+129
+17
+577
+833
+1345
+2594
+18240 4769
+
+187
+379
+6016
+24320
+399
+1116
+188
+380
+98
+194
+24
+2374
+4832
+7712
+10336
+53824
+
+ReVer
+
+gates Toﬀolis
+60
+124
+4032
+16256
+120
+336
+62
+126
+32
+64
+8
+782
+1592
+3408
+7712
+18240
+
+277
+565
+6111
+24511
+503
+1382
+189
+381
+99
+195
+24
+2388
+4860
+10392
+23472
+45440
+
+TABLE I. Bit & gate counts for both compilers in default mode. Instances where one compiler reports fewer bits or
+Toﬀoli gates are bolded.
+
+C. Assertion checking
+
+Along with the formal compiler veriﬁcation, ReVer provides additional program veriﬁcation tools in the
+form of a binary decision diagram (BDD) based assertion checker. BDD-based veriﬁcation of both classical
+and reversible circuits is a common technique and has been shown to be eﬀective even on some large circuits
+[23]. Our compiler provides the option to perform a veriﬁcation pass where the interpreter is run using BDDs
+to represent and store Boolean expressions. The interpreter checks that BDDs for asserted values are equal
+to true and cleaned variables have BDD false, or else an error is raised. ReVer also provides translation
+validation by generating the BDD(s) for an entire program and checking their equivalence to the BDD(s)
+for the circuit outputs.
+
+VII. EXPERIMENTS
+
+We ran experiments to compare the ancilla usage, gate and Toﬀoli counts of circuits compiled by ReVer
+to the original Revs compiler. We compiled circuits for various arithmetic and cryptographic functions
+written in Revs using both compiler’s regular and space-eﬃcient modes and reported the results in Tables I
+and II, respectively. Experiments were run in Linux using 8GB of RAM – for the space eﬃcient ReVer
+mode, most benchmarks ran out of memory, so we only report a few small examples.
+
+The results show that in their default modes, Revs and ReVer are more-or-less evenly matched in terms
+of bit counts. In fact, ReVer used fewer bits on average despite also being certiﬁably correct. Our type
+inference algorithm also found bits allocated but never used in some Revs programs, which may have led
+to a reduction of bits. While ReVer typically used more total gates than Revs, the number of Toﬀoli
+gates was only slightly worse for the carry lookahead adder, and signiﬁcantly better for the carry ripple
+adder. Since Toﬀoli gates are generally much more costly than Not and controlled-Not gates – at least 7
+times as typical implementations use 7 CNOT gates per Toﬀoli [4, 44], or up to hundreds of times in most
+fault-tolerant architectures [44] – we feel these gate counts are reasonable.
+
+For the space-eﬃcient compilation scheme, ReVer’s Boolean expression compilation consistently produced
+
+16
+
+Benchmark
+
+carryRippleAdder 2
+carryRippleAdder 4
+carryRippleAdder 8
+mult 2
+modAdd 2
+modAdd 4
+cucarroAdder 2
+cucarroAdder 4
+cucarroAdder 8
+ma4
+
+bits
+8
+14
+30
+9
+5
+9
+9
+17
+33
+17
+
+Revs
+
+gates Toﬀolis
+6
+12
+36
+12
+2
+6
+2
+4
+8
+8
+
+19
+25
+61
+16
+8
+20
+8
+14
+26
+24
+
+ReVer
+
+gates Toﬀolis
+5
+32
+9996
+473
+4
+510
+6
+66
+16386
+12
+
+9
+42
+10014
+529
+8
+533
+13
+78
+16406
+12
+
+bits
+6
+13
+29
+11
+3
+14
+6
+14
+30
+16
+
+TABLE II. Space-eﬃcient compilation results. Instances where one compiler reports fewer bits or Toﬀoli gates are
+bolded.
+
+circuits with fewer bits than Revs’ dependence graph based scheme, as seen in Table II. In the cases of mult
+and modAdd 4, ReVer used more bits as the programs were written in in-place style, while the space-eﬃcient
+mode of ReVer is strictly out-of-place. However, ReVer used signiﬁcantly more gates – almost 5000 times
+more in the most extreme case. This is due to the exponential increase in the expression size caused by
+expanding Boolean expressions to ESOP form, and hence the number of gates also grows exponentially.
+Moreover, because of the exponential size ESOP transformation, ReVer’s space-eﬃcient compilation is not
+scalable, whereas Revs’ method is.
+
+While the results show there is clearly room for optimization of gate counts, they appear consistent
+with other veriﬁed compilers (e.g., [25]) which take some performance hit when compared to unveriﬁed
+compilers. In particular, unveriﬁed compilers may use more aggressive optimizations due to the increased ease
+of implementation and the lack of a requirement to prove their correctness compared to certiﬁed compilers.
+In some cases, the optimizations are even known to not be correct in all possible cases, as in the case of
+fast arithmetic and some loop optimization passes in the GNU C Compiler [45]. We found instances where
+Revs’ optimizations appeared to violate correctness, resulting in a semantically diﬀerent circuit compared
+to the default compilation mode.
+
+VIII. CONCLUSION
+
+In this paper we described our veriﬁed compiler for the Revs language, ReVer. We formalized the
+semantics of Revs and introduced a type system together with an inference algorithm. Our method of
+compilation diﬀers from the original Revs compiler by using partial evaluation over an interpretation of
+the heap to compile programs, forgoing the need to re-implement and verify bookkeeping code for every
+internal translation. We described ReVer’s two current methods of compilation in this framework, the
+default direct-to-circuit method, and a space eﬃcient method that compiles ﬁrst to a Boolean expression(s),
+then to a circuit.
+
+While ReVer is veriﬁed in the sense that compiled circuits produce the same result as the program
+interpreter, as with any veriﬁed compiler project this is not the end of certiﬁcation. The implementation of the
+interpreter may have subtle bugs, which ideally would be veriﬁed against a more straightforward adaptation
+of the semantics using a relational deﬁnition. Moreover, our type inference algorithm and compilation
+“wrapper” have not yet been formally veriﬁed. We intend to address these issues in the future, and to
+extend ReVer to utilize dependence graphs as in [1]. A parallel line of research is to extend Revs with new
+features that would make writing functions over complex data types easier, such as those used in quantum
+walks [4].
+
+With a formally veriﬁed reversible circuit compiler, algorithm designers can assert with increased conﬁ-
+
+17
+
+dence the actual circuit-level cost of running their algorithm, allowing a better assessment of the value of
+quantum computers. Perhaps more importantly, they are aﬀorded the guarantee that data does not remain
+entangled with the garbage ancillas, allowing them to be safely reused later. Such guarantees are crucial to
+the operation of quantum computers and will become increasingly important as quantum computers continue
+to scale to larger sizes.
+
+[1] Alex Parent, Martin Roetteler, and Krysta M Svore, “Reversible circuit compilation with space constraints,”
+
+arXiv preprint arXiv:1510.00377 (2015).
+
+[2] P. W. Shor, “Polynomial-time algorithms for prime factorization and discrete logarithms on a quantum com-
+
+puter,” SIAM Journal on Computing 26, 1484–1509 (1997).
+
+[3] Lov K. Grover, “A fast quantum mechanical algorithm for database search,” in Proceedings of the Twenty-Eighth
+Annual ACM Symposium on the Theory of Computing (STOC 1996), edited by Gary L. Miller (ACM, 1996) pp.
+212–219.
+
+[4] M. A. Nielsen and I. L. Chuang, Quantum Computation and Quantum Information (Cambridge University Press,
+
+Cambridge, UK, 2000).
+
+[5] I. L. Markov, “Limits on fundamental limits to computation,” Nature 512, 147–154 (2014).
+[6] D. M. Miller, D. Maslov, and G. W. Dueck, “A transformation based algorithm for reversible logic synthesis,”
+
+in Proceedings of the 40th Design Automation Conference (DAC’03) (2003) pp. 318–323.
+
+[7] D. Maslov, D. M. Miller, and G. W. Dueck, “Techniques for the synthesis of reversible Toﬀoli networks,” ACM
+
+Transactions on Design Automation of Electronic Systems 12, 42 (2007).
+
+[8] R. Wille and R. Drechsler, Towards a Design Flow for Reversible Logic. (Springer, 2010).
+[9] A. Shafaei, M. Saeedi, and M. Pedram, “Reversible logic synthesis of k-input, m-output lookup tables,” in In:
+
+Proceedings of the Conference on Design, Automation and Test in Europe (DATE’13) (2013) pp. 1235–1240.
+
+[10] C.-C. Lin and N. K. Jha, “RMDDS: Reed-Muller decision diagram synthesis of reversible logic circuits,” ACM
+
+Journal on Emerging Technologies in Computing Systems 10, 14 (2014).
+
+[11] M. Saeedi and I. L. Markov, “Synthesis and optimization of reversible circuits - a survey,” ACM Comput. Surv.
+
+45, 21 (2013).
+
+[12] T. Yokoyama and R. Gl¨uck, “A reversible programming language and its invertible self-interpreter,” in Proceed-
+ings of the 2007 ACM SIGPLAN symposium on Partial evaluation and semantics-based program manipulation
+(ACM, 2007) pp. 144–153.
+
+[13] R. Wille, S. Oﬀermann, and R. Drechsler, “Syrec: A programming language for synthesis of reversible circuits,”
+
+in Speciﬁcation Design Languages (FDL 2010), 2010 Forum on (2010) pp. 1–6.
+
+[14] M. K. Thomsen, “A functional language for describing reversible logic,” in Proc. Forum on Speciﬁcation and
+
+Design Languages (FDL’12) (IEEE, 2012) pp. 135–142.
+
+[15] A. S. Green, P. LeFanu Lumsdaine, N. J. Ross, P. Selinger, and B. Valiron, “Quipper: a scalable quantum
+programming language,” in Proc. Conference on Programming Language Design and Implementation (PLDI’13)
+(ACM, 2013).
+
+[16] K. S. Perumalla, Introduction to Reversible Computing (CRC Press, 2014).
+[17] A. Scherer, B. Valiron, S.-C. Mau, S. Alexander, E. van den Berg, and T. E. Chapuran, “Resource analysis of
+the quantum linear system algorithm,” ArXiv e-prints, arXiv:1505.06552 (2015), arXiv:1505.06552 [quant-ph].
+[18] Nikhil Swamy, C˘at˘alin Hrit¸cu, Chantal Keller, Aseem Rastogi, Antoine Delignat-Lavaud, Simon Forest,
+Karthikeyan Bhargavan, C´edric Fournet, Pierre-Yves Strub, Markulf Kohlweiss, and Jean-Karim Zinzindohoue,
+“Dependent types and multi-monadic eﬀects in F*,” Draft (2015).
+
+[19] Jens Palsberg and Tian Zhao, “Type inference for record concatenation and subtyping,” Information and Com-
+
+putation 189, 54 – 86 (2004).
+
+[20] Valery Trifonov and Scott Smith, “Subtyping constrained types,” in Static Analysis, Lecture Notes in Computer
+Science, Vol. 1145, edited by Radhia Cousot and DavidA. Schmidt (Springer Berlin Heidelberg, 1996) pp. 349–
+365.
+
+[21] B. ¨Omer, Quantum programming in QCL, Master’s thesis, Technical University of Vienna (2000).
+[22] Carlin Vieri, “Pendulum: A reversible computer architecture,” Master’s thesis, MIT Artiﬁcial Intelligence Lab-
+
+oratory (1995).
+
+[23] R. Wille, D. Grosse, D.M. Miller, and R. Drechsler, “Equivalence checking of reversible circuits,” in Multiple-
+
+Valued Logic, 2009. ISMVL ’09. 39th International Symposium on (2009) pp. 324–330.
+
+[24] S. Yamashita and I.L. Markov, “Fast equivalence-checking for quantum circuits,” in Nanoscale Architectures
+
+(NANOARCH), 2010 IEEE/ACM International Symposium on (2010) pp. 23–28.
+
+18
+
+[25] Xavier Leroy, “Formal certiﬁcation of a compiler back-end or: Programming a compiler with a proof assistant,” in
+Conference Record of the 33rd ACM SIGPLAN-SIGACT Symposium on Principles of Programming Languages,
+POPL ’06 (ACM, New York, NY, USA, 2006) pp. 42–54.
+
+[26] Xavier Leroy, “Formal veriﬁcation of a realistic compiler,” Commun. ACM 52, 107–115 (2009).
+[27] Lennart Beringer, Gordon Stewart, Robert Dockins, and AndrewW. Appel, “Veriﬁed compilation for shared-
+memory c,” in Programming Languages and Systems, Lecture Notes in Computer Science, Vol. 8410, edited by
+Zhong Shao (Springer Berlin Heidelberg, 2014) pp. 107–127.
+
+[28] Adam Chlipala, “A veriﬁed compiler for an impure functional language,” in Proceedings of the 37th Annual
+ACM SIGPLAN-SIGACT Symposium on Principles of Programming Languages, POPL ’10 (ACM, New York,
+NY, USA, 2010) pp. 93–106.
+
+[29] C´edric Fournet, Nikhil Swamy, Juan Chen, Pierre-Evariste Dagand, Pierre-Yves Strub, and Benjamin Livshits,
+“Fully abstract compilation to JavaScript,” in 40th ACM SIGPLAN-SIGACT Symposium on Principles of Pro-
+gramming Languages (2013).
+
+[30] Ramana Kumar, Magnus O. Myreen, Michael Norrish, and Scott Owens, “Cakeml: A veriﬁed implementation of
+ml,” in Proceedings of the 41st ACM SIGPLAN-SIGACT Symposium on Principles of Programming Languages,
+POPL ’14 (ACM, New York, NY, USA, 2014) pp. 179–191.
+
+[31] JamesT. Perconti and Amal Ahmed, “Verifying an open compiler using multi-language semantics,” in Program-
+ming Languages and Systems, Lecture Notes in Computer Science, Vol. 8410, edited by Zhong Shao (Springer
+Berlin Heidelberg, 2014) pp. 128–148.
+
+[32] Georg Neis, Chung-Kil Hur, Jan-Oliver Kaiser, Craig McLaughlin, Derek Dreyer, and Viktor Vafeiadis, “Pilsner:
+A compositionally veriﬁed compiler for a higher-order imperative language,” in Proceedings of the 20th ACM
+SIGPLAN International Conference on Functional Programming, ICFP 2015 (ACM, New York, NY, USA, 2015)
+pp. 166–178.
+
+[33] C. H. Bennett, “Logical reversibility of computation,” IBM Journal of Research and Development 17, 525–532
+
+(1973).
+
+[34] A. S. Green, P. LeFanu Lumsdaine, N. J. Ross, P. Selinger, and B. Valiron, “An introduction to quantum
+
+programming in Quipper,” in Proc. Reversible Computation (RC’13) (ACM, 2013).
+
+[35] Koen Claessen, Embedded Languages for Describing and Verifying Hardware, Phd thesis, Chalmers University of
+
+Technology and G¨oteborg University (2001).
+
+[36] NIST, “Federal information processing standards publication 180-2,”
+
+(2002), see also the Wikipedia entry
+
+http://en.wikipedia.org/wiki/SHA-2.
+
+[37] C. H. Bennett, “Time/space trade-oﬀs for reversible computation,” SIAM Journal on Computing 18, 766–776
+
+(1989).
+
+[38] Neil D. Jones, Carsten K. Gomard, and Peter Sestoft, Partial Evaluation and Automatic Program Generation
+
+(Prentice-Hall, Inc., Upper Saddle River, NJ, USA, 1993).
+
+[39] John C. Mitchell, “Type inference with simple subtypes,” Journal of Functional Programming 1, 245–285 (1991).
+[40] Jonathan Eifrig, Scott Smith, and Valery Trifonov, “Sound polymorphic type inference for objects,” in Proceed-
+ings of the Tenth Annual Conference on Object-oriented Programming Systems, Languages, and Applications,
+OOPSLA ’95 (ACM, New York, NY, USA, 1995) pp. 169–184.
+
+[41] Fran¸cois Pottier, “Simplifying subtyping constraints,” in Proceedings of the First ACM SIGPLAN International
+
+Conference on Functional Programming, ICFP ’96 (ACM, New York, NY, USA, 1996) pp. 122–133.
+
+[42] Martin Odersky, Martin Sulzmann, and Martin Wehr, “Type inference with constrained types,” Theory and
+
+Practice of Object Systems 5, 35–55 (1999).
+
+[43] Luis Damas and Robin Milner, “Principal type-schemes for functional programs,” in Proceedings of the 9th ACM
+SIGPLAN-SIGACT Symposium on Principles of Programming Languages, POPL ’82 (ACM, New York, NY,
+USA, 1982) pp. 207–212.
+
+[44] M. Amy, D. Maslov, M. Mosca, and M. Roetteler, “A meet-in-the-middle algorithm for fast synthesis of depth-
+optimal quantum circuits,” Computer-Aided Design of Integrated Circuits and Systems, IEEE Transactions on
+32, 818–830 (2013).
+
+[45] “Using the GNU Compiler Collection,” Free Software Foundation, Inc. (2016).
+
+19
+
+Appendix A: Proof listings
+
+In this appendix we give the F(cid:63) source code listings for the theorems and proofs given in Section VI. As we
+do not include auxiliary deﬁnitions and theorems, the code is included for reference against the less formal
+mathematical statements given in the main text.
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+
+(* Theorem 1 *)
+val compile_bexp_correct : ah:AncHeap -> targ:int -> exp:BExp -> st:state ->
+
+Lemma (requires (zeroHeap st ah /\ disjoint (elts ah) (vars exp) /\
+
+not (Util.mem targ (elts ah)) /\
+not (Util.mem targ (vars exp))))
+
+(ensures
+
+(compileBExpEval ah targ exp st = st targ <> evalBExp exp st))
+
+(decreases %[exp;0])
+
+val compile_bexp_correct_oop : ah:AncHeap -> exp:BExp -> st:state ->
+Lemma (requires (zeroHeap st ah /\ disjoint (elts ah) (vars exp)))
+(compileBExpEval_oop ah exp st = evalBExp exp st))
+
+(ensures
+
+(decreases %[exp;1])
+
+let rec compile_bexp_correct ah targ exp st = match exp with
+
+| BFalse -> ()
+| BVar x -> ()
+| BNot x ->
+
+let (ah’, xres, xanc, xgate) = compileBExp ah targ x in
+let ind_hyp_x = compile_bexp_correct ah targ x st in
+
+evalCirc_append xgate [RNOT xres] st
+
+| BXor (x, y) ->
+
+let (ah’, xres, xanc, xgate) = compileBExp ah targ x in
+let (ah’’, yres, yanc, ygate) = compileBExp ah’ targ y in
+let st’ = evalCirc xgate st in
+let ind_hyp_x = compile_bexp_correct ah targ x st in
+let ind_hyp_y =
+
+compile_decreases_heap ah targ x;
+disjoint_subset (elts ah’) (elts ah) (vars y);
+compile_partition ah targ x;
+zeroHeap_subset st ah ah’;
+zeroHeap_st_impl st ah’ xgate;
+compile_bexp_correct ah’ targ y st’
+
+in
+let lem1 = (* (eval (xgate@ygate)) targ = (eval ygate st’) targ *)
+
+evalCirc_append xgate ygate st
+
+in
+let lem2 = (* eval y st = eval y st’ *)
+
+compile_mods ah targ x;
+eval_mod st xgate;
+eval_state_swap y st st’
+
+in ()
+
+| BAnd (x, y) ->
+
+let (ah’, xres, xanc, xgate) = compileBExp_oop ah x in
+let (ah’’, yres, yanc, ygate) = compileBExp_oop ah’ y in
+let st’ = evalCirc xgate st in
+let ind_hyp_x = compile_bexp_correct_oop ah x st in
+let ind_hyp_y =
+
+compile_decreases_heap_oop ah x;
+disjoint_subset (elts ah’) (elts ah) (vars y);
+compile_partition_oop ah x;
+zeroHeap_subset st ah ah’;
+zeroHeap_st_impl st ah’ xgate;
+compile_bexp_correct_oop ah’ y st’
+
+in
+let lem1 = (* st’ xres = (evalCirc ygate st’) xres *)
+
+compile_mods_oop ah’ y;
+eval_mod st’ ygate
+
+in
+let lem2 = (* eval y st = eval y st’ *)
+
+compile_mods_oop ah x;
+
+20
+
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+
+75
+76
+77
+78
+79
+80
+81
+82
+83
+
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+
+118
+119
+120
+121
+122
+123
+
+eval_mod st xgate;
+eval_state_swap y st st’
+
+in
+let lem3 = () (* st targ = (evalCirc ygate st’) targ *)
+in
+
+evalCirc_append xgate ygate st;
+evalCirc_append (xgate@ygate) [RTOFF (xres, yres, targ)] st
+
+and compile_bexp_correct_oop ah exp st = match exp with
+
+| BVar v -> ()
+| _ ->
+
+let (ah’, targ) = popMin ah in
+let (ah’’, _, _, gates) = compileBExp ah’ targ exp in
+
+pop_proper_subset ah;
+pop_elt ah;
+compile_bexp_correct ah’ targ exp st
+
+(* Lemma 1 *)
+val evalCirc_state_lem : circ:list Gate -> st:state -> st’:state -> dom:set int ->
+
+Lemma (requires (subset (ctrls circ) dom /\ agree_on st st’ dom))
+
+(ensures
+
+(agree_on (evalCirc circ st) (evalCirc circ st’) dom))
+
+let rec evalCirc_state_lem circ st st’ dom = match circ with
+
+| [] -> ()
+| x::xs ->
+
+applyGate_state_lem x st st’ dom;
+evalCirc_state_lem xs (applyGate st x) (applyGate st’ x) dom
+
+val uncompute_agree : circ:list Gate -> dom:set int -> st:state ->
+
+Lemma (requires (wfCirc circ /\ disjoint (ctrls circ) dom))
+
+(ensures
+
+(agree_on (evalCirc circ st)
+
+let rec uncompute_agree circ dom st = match circ with
+
+(evalCirc (uncompute circ dom) st)
+(complement dom)))
+
+| [] -> ()
+| x::xs ->
+
+if (contains_lst dom (vars [x]))
+then
+
+(evalCirc_state_lem xs (applyGate st x) st (complement dom);
+
+uncompute_agree xs targ st;
+agree_on_trans (evalCirc xs (applyGate st x))
+
+(evalCirc xs st)
+(evalCirc (uncompute xs dom) st)
+(complement dom))
+
+else uncompute_agree xs dom (applyGate st x)
+
+(* Theorem 2 *)
+val uncompute_correct : circ:list Gate -> dom:set int -> st:state ->
+
+Lemma (requires (wfCirc circ /\ disjoint (ctrls circ) dom))
+
+(ensures
+
+(agree_on st (evalCirc (List.rev (uncompute circ dom))
+
+(evalCirc circ st))
+
+(complement dom)))
+
+let uncompute_correct circ dom st =
+
+uncompute_agree circ dom st;
+uncompute_ctrls_subset circ dom;
+evalCirc_state_lem (List.rev (uncompute circ dom))
+
+(evalCirc circ st)
+(evalCirc (uncompute circ dom) st)
+(complement dom);
+
+rev_inverse (uncompute circ dom) st
+
+(* Corollary 1 *)
+val compile_with_cleanup : ah:AncHeap -> targ:int -> exp:BExp -> st:state ->
+
+Lemma (requires (zeroHeap st ah /\ disjoint (elts ah) (vars exp) /\
+
+not (Util.mem targ (elts ah)) /\
+not (Util.mem targ (vars exp))))
+
+(ensures
+
+(clean_heap_cond ah targ exp st /\
+
+21
+
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+
+173
+174
+175
+176
+177
+178
+179
+180
+181
+182
+183
+
+185
+186
+187
+188
+
+let compile_with_cleanup ah targ exp st =
+
+clean_corr_cond ah targ exp st))
+
+let (ah’, res, anc, circ) = compileBExp ah targ exp in
+let cleanup = uncompute circ (singleton res) in
+let ah’’ = List.fold_leftT insert ah’ anc in
+let st’ = evalCirc circ st in
+let st’’ = evalCirc (circ@(List.rev cleanup)) st in
+let heap_cond =
+
+let lem1 = (* zeroHeap st’ ah’ *)
+
+compile_decreases_heap ah targ exp;
+compile_partition ah targ exp;
+zeroHeap_subset st ah ah’;
+zeroHeap_st_impl st ah’ circ
+
+in
+let lem1 = (* zeroHeap st’’ ah’ *)
+
+compileBExp_wf ah targ exp;
+uncompute_uses_subset circ (singleton res);
+zeroHeap_st_impl st’ ah’ (List.rev cleanup)
+
+in
+
+compile_ctrls ah targ exp;
+uncompute_correct circ (singleton res) st;
+compile_anc ah targ exp;
+zeroHeap_insert_list st’’ ah’ anc
+
+in
+let corr_cond =
+
+uncompute_targ circ res;
+eval_mod st’ (List.rev cleanup)
+
+in ()
+
+val compile_with_cleanup_oop : ah:AncHeap -> exp:BExp -> st:state ->
+Lemma (requires (zeroHeap st ah /\ disjoint (elts ah) (vars exp)))
+
+(ensures
+
+(zeroHeap (compileBExpCleanEvalSt_oop ah exp st)
+
+(first (compileBExpClean_oop ah exp)) /\
+
+compileBExpCleanEval_oop ah exp st =
+
+compileBExpEval_oop ah exp st))
+
+let compile_with_cleanup_oop ah exp st =
+
+let (ah’, targ) = popMin ah in
+
+compile_with_cleanup ah’ targ exp st
+
+(* Optimization theorems *)
+val simplify_preserves_semantics : exp:BExp ->
+
+Lemma (forall (st:state). (evalBExp exp st) = (evalBExp (simplify exp) st))
+
+let rec simplify_preserves_semantics exp = match exp with
+
+| BFalse -> ()
+| BVar x -> ()
+| BAnd (x, y) | BXor (x, y) ->
+
+simplify_preserves_semantics x;
+simplify_preserves_semantics y
+
+| BNot x -> simplify_preserves_semantics x
+
+val factorAs_correct : exp:BExp -> targ:int -> st:state ->
+
+Lemma (forall exp’. factorAs exp targ = Some exp’ ==>
+
+not (occursInBExp targ exp’) /\ evalBExp exp st = st targ <> evalBExp exp’ st)
+
+let rec factorAs_correct exp targ st = match exp with
+
+| BFalse -> ()
+| BVar x -> ()
+| BNot x -> factorAs_correct x targ st
+| BAnd (x, y) -> ()
+| BXor (x, y) ->
+
+factorAs_correct x targ st;
+factorAs_correct y targ st
+
+val dist_preserves_semantics : exp:BExp ->
+
+Lemma (forall (st:state). (evalBExp exp st) = (evalBExp (distributeAnds exp) st))
+
+let rec dist_preserves_semantics exp = match exp with
+
+| BFalse -> ()
+
+22
+
+189
+190
+191
+192
+193
+194
+195
+196
+197
+198
+199
+200
+201
+202
+203
+204
+205
+206
+207
+208
+209
+210
+211
+212
+213
+
+215
+216
+217
+
+219
+220
+221
+222
+223
+224
+225
+226
+227
+228
+229
+
+231
+232
+233
+234
+
+236
+237
+238
+239
+240
+
+242
+243
+244
+245
+246
+247
+248
+249
+250
+251
+252
+253
+
+| BVar x -> ()
+| BNot x -> dist_preserves_semantics x
+| BXor (x, y) -> dist_preserves_semantics x; dist_preserves_semantics y
+| BAnd (x, y) ->
+
+dist_preserves_semantics x;
+dist_preserves_semantics y;
+begin match (distributeAnds x, distributeAnds y) with
+
+| (BXor (a, b), BXor (c, d)) ->
+
+distributivityAndXor (BXor (a, b)) c d;
+commutativityAnd (BXor (a, b)) c;
+commutativityAnd (BXor (a, b)) d;
+distributivityAndXor c a b;
+distributivityAndXor d a b;
+commutativityAnd c a;
+commutativityAnd c b;
+commutativityAnd d a;
+commutativityAnd d b
+
+| (x’, BXor (c, d)) -> distributivityAndXor x’ c d
+| (BXor (a, b), y’) ->
+
+commutativityAnd (BXor (a, b)) y’;
+distributivityAndXor y’ a b;
+commutativityAnd y’ a;
+commutativityAnd y’ b
+
+| (x’, y’) -> ()
+
+end
+
+(* Theorem 4 and related lemma *)
+type state_equiv (st:boolState) (st’:BExpState) (init:state) =
+
+forall i. boolEval st init i = bexpEval st’ init i
+
+val eval_bexp_swap : st:boolState -> st’:BExpState -> bexp:BExp -> init:state ->
+
+Lemma (requires (state_equiv st st’ init))
+
+(ensures
+
+(evalBExp (substBExp bexp (snd st’)) init =
+
+let rec eval_bexp_swap st st’ bexp init = match bexp with
+
+evalBExp bexp (snd st)))
+
+| BFalse -> ()
+| BVar i -> ()
+| BNot x -> eval_bexp_swap st st’ x init
+| BXor (x, y) | BAnd (x, y) ->
+
+eval_bexp_swap st st’ x init;
+eval_bexp_swap st st’ y init
+
+val state_equiv_assign : st:boolState -> st’:BExpState -> init:state -> l:int -> bexp:BExp ->
+
+Lemma (requires (state_equiv st st’ init))
+
+(ensures
+
+(state_equiv (boolAssign st l bexp) (bexpAssign st’ l bexp) init))
+
+let state_equiv_assign st st’ init l bexp = eval_bexp_swap st st’ bexp init
+
+(* Theorem 5 and related lemmas *)
+type circ_equiv (st:boolState) (cs:circState) (init:state) =
+
+zeroHeap (evalCirc cs.gates init) cs.ah /\
+(forall i. not (mem (lookup cs.subs i) cs.ah)) /\
+(forall i. boolEval st init i = circEval cs init i)
+
+val eval_commutes_subst_circ : st:boolState -> cs:circState -> bexp:BExp ->
+
+bexp’:BExp -> init:state -> targ:int -> targ’:int ->
+Lemma (requires (circ_equiv st cs init /\
+
+bexp’ = substVar bexp cs.subs /\
+targ’ = lookup cs.subs targ /\
+not (Util.mem targ’ (vars bexp’)) /\
+not (Util.mem targ’ (elts cs.ah)) /\
+disjoint (elts cs.ah) (vars bexp’)))
+
+(ensures
+
+((evalCirc (last (compileBExp cs.ah targ’ bexp’))
+
+(evalCirc cs.gates init)) targ’ =
+
+lookup (snd st) targ <> evalBExp bexp (snd st)))
+
+let eval_commutes_subst_circ st cs bexp bexp’ init targ targ’ =
+
+23
+
+254
+255
+256
+
+258
+259
+260
+261
+262
+263
+264
+265
+266
+267
+268
+269
+270
+
+272
+273
+274
+275
+276
+277
+278
+279
+280
+281
+282
+283
+284
+285
+286
+287
+288
+289
+290
+291
+292
+293
+294
+295
+296
+297
+298
+299
+300
+301
+302
+303
+304
+305
+306
+307
+308
+309
+310
+311
+312
+313
+314
+315
+
+let init’ = evalCirc cs.gates init in
+
+compile_bexp_correct cs.ah targ’ bexp’ init’;
+eval_bexp_swap st cs bexp bexp’ init
+
+val eval_commutes_subst_circ_oop : st:boolState -> cs:circState ->
+
+bexp:BExp -> bexp’:BExp -> init:state ->
+Lemma (requires (circ_equiv st cs init /\
+
+bexp’ = substVar bexp cs.subs /\
+disjoint (elts cs.ah) (vars bexp’)))
+
+(ensures
+
+((evalCirc (last (compileBExp_oop cs.ah bexp’))
+
+(evalCirc cs.gates init))
+
+(second (compileBExp_oop cs.ah bexp’)) =
+evalBExp bexp (snd st)))
+
+let eval_commutes_subst_circ_oop st cs bexp bexp’ init =
+
+let init’ = evalCirc cs.gates init in
+
+compile_bexp_correct_oop cs.ah bexp’ init’;
+eval_bexp_swap st cs bexp bexp’ init
+
+val circ_equiv_assign : st:boolState -> cs:circState -> init:state -> l:int -> bexp:BExp ->
+
+Lemma (requires (circ_equiv st cs init))
+
+(ensures
+
+(circ_equiv (boolAssign st l bexp) (circAssign cs l bexp) init))
+
+let circ_equiv_assign st cs init l bexp =
+
+let l’ = lookup cs.subs l in
+let bexp’ = substVar bexp cs.subs in
+let init’ = evalCirc cs.gates init in
+let st’ = boolAssign st l bexp in
+let cs’ = circAssign cs l bexp in
+match factorAs bexp’ l’ with
+
+| None ->
+
+let (ah’, res, ancs, circ’) = compileBExp_oop cs.ah bexp’ in
+let zeroHeap_lem =
+
+compile_decreases_heap_oop cs.ah bexp’;
+compile_partition_oop cs.ah bexp’;
+zeroHeap_subset init’ cs.ah cs’.ah;
+zeroHeap_st_impl init’ cs’.ah circ’
+
+in
+let preservation =
+
+compile_mods_oop cs.ah bexp’;
+eval_mod init’ circ’
+
+in
+let correctness =
+
+eval_commutes_subst_circ_oop st cs bexp bexp’ init
+
+in ()
+
+| Some bexp’’ ->
+
+let (ah’, res, ancs, circ’) = compileBExp cs.ah l’ bexp’’ in
+let zeroHeap_lem =
+
+factorAs_correct bexp’ l’ init’;
+factorAs_vars bexp’ l’;
+compile_decreases_heap cs.ah l’ bexp’’;
+compile_partition cs.ah l’ bexp’’;
+zeroHeap_subset init’ cs.ah cs’.ah;
+zeroHeap_st_impl init’ cs’.ah circ’
+
+in
+let preservation =
+
+compile_mods cs.ah l’ bexp’’;
+eval_mod init’ circ’
+
+in
+let correctness =
+
+admitP(b2t(lookup (snd st’) l = (evalCirc circ’ init’) (lookup cs’.subs l)));
+factorAs_correct bexp’ l’ init’;
+eval_commutes_subst_circ st cs bexp bexp’ init l l’
+
+in ()
+
+24
+
+

@@ -1,0 +1,1417 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+2
+2
+
+ 
+ 
+]
+
+M
+
+I
+.
+
+h
+p
+-
+o
+r
+t
+s
+a
+[
+ 
+ 
+
+2
+v
+3
+2
+2
+1
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Draft version March 23, 2016
+Preprint typeset using LATEX style openjournal v. 09/06/15
+
+SPAMCART: A CODE FOR SMOOTHED PARTICLE MONTE CARLO RADIATIVE TRANSFER
+
+O. Lomax and A. P. Whitworth
+
+School of Physics and Astronomy, Cardiﬀ University, Cardiﬀ CF24 3AA, UK
+
+Draft version March 23, 2016
+
+ABSTRACT
+
+We present a code for generating synthetic SEDs and intensity maps from Smoothed Particle Hydro-
+dynamics simulation snapshots. The code is based on the Lucy (1999) Monte Carlo Radiative Transfer
+method, i.e. it follows discrete luminosity packets, emitted from external and/or embedded sources,
+as they propagate through a density ﬁeld, and then uses their trajectories to compute the radiative
+equilibrium temperature of the ambient dust. The density is not mapped onto a grid, and there-
+fore the calculation is performed at exactly the same resolution as the hydrodynamics. We present
+two example calculations using this method. First, we demonstrate that the code strictly adheres to
+Kirchhoﬀ’s law of radiation. Second, we present synthetic intensity maps and spectra of an embedded
+protostellar multiple system. The algorithm uses data structures that are already constructed for
+other purposes in modern particle codes. It is therefore relatively simple to implement.
+Subject headings: radiative transfer – hydrodynamics – methods: numerical – ISM: dust
+
+1.
+
+INTRODUCTION
+
+Monte Carlo Radiative Transfer (MCRT) is a stochas-
+tic method for simulating radiative transfer through a
+medium.
+Individual MCRT calculations are accurate
+but slow. Fortunately, they are trivial to parallelise and
+therefore well suited to modern multi-threaded CPUs.
+MCRT is often used to post-process simulation snap-
+shots and can be adapted to solve a variety of radiative
+processes. For example, codes such as hyperion (Ro-
+bitaille 2011) and radmc-3d (Dullemond 2012) calculate
+the dust and molecular line emissivities. These data can
+then be used to generate realistic synthetic observations.
+Other MCRT codes include mocassin (Ercolano et al.
+2003), which models photoionisation fronts, and torus
+(Harries 2011), which models time-dependent radiative
+transfer.
+
+Smoothed particle hydrodynamics (SPH) (Lucy 1977;
+Gingold & Monaghan 1977) is a mesh-free method of
+solving the equations of ﬂuid dynamics. A discrete set
+of particles are used to model the density distribution.
+These particles are smoothed over one another using a
+kernel function with smoothing length h. By letting h
+vary with density, the particles can model a ﬁeld span-
+ning many orders of magnitude in density. This prop-
+erty makes SPH an attractive scheme for modelling as-
+trophysical systems such as star forming clouds (e.g. Bate
+2009; Lomax et al. 2014, 2015), galactic discs (e.g. Dobbs
+et al. 2006, 2011) and the cosmic web (e.g. Springel
+& Hernquist 2003). Open-source SPH codes include
+gadget-2 (Springel 2005) and gandalf (Hubber &
+Rosotti 2013).
+
+Performing MCRT calculations on density ﬁelds from
+SPH simulations usually involves mapping the particles
+onto an adaptive-mesh (e.g. Stamatellos & Whitworth
+2005; Robitaille 2011; Rundle et al. 2010). This funda-
+mentally changes the structure of the density ﬁeld by
+adding noise and/or merging several particles into a sin-
+gle cell. Another option is to use the particle positions to
+construct a Voronoi tessellation (e.g. Hubber et al. 2016).
+
+oliver.lomax@astro.cf.ac.uk
+
+This is less noisy than an adaptive mesh, although the
+implementation is more complicated. Nevertheless, both
+methods alter the SPH density structure by replacing
+smoothed particles with uniform density cells.
+
+In this paper we present the new code spamcart (short
+for Smoothed PArticle Monte CArlo Radiative Transfer).
+The code performs MCRT calculations using the proper-
+ties of the particles’ smoothing kernels. Therefore, post-
+processing calculations are performed at exactly the same
+resolution as the SPH simulation. The algorithm is simi-
+lar to other ray-tracing and Monte Carlo methods used in
+SPH, (e.g. Altay et al. 2008; Forgan & Rice 2010). How-
+ever, this is the ﬁrst time such an algorithm has been used
+to perform full MCRT calculations. The method utilises
+the pre-existing neighbour-ﬁnding/gravity tree found in
+modern SPH codes, and is therefore relatively simple to
+implement.
+
+In §2 we describe the general Monte Carlo method we
+use for radiative transfer.
+In §3 we explain how this
+method can be applied to smoothed particles. In §4 we
+present the some example calculations, including a phys-
+ical benchmark. In §5 we list some future implementa-
+tions and in §6 we present the summary.
+
+2. MONTE CARLO RADIATIVE TRANSFER
+
+The method presented here is an adaptation of the
+Lucy (1999) algorithm, modiﬁed to operate on smoothed
+particles rather than a grid of uniform density cells. Most
+of the operations involve drawing a random variate U[a, b]
+from the Uniform distribution in the interval (a, b).
+
+2.1. Luminosity packet trajectories
+
+A radiation source with luminosity L emits Nγ lumi-
+nosity packets. Each packet is emitted from an origin
+o in direction n.
+If the radiator is an isotropic point
+source, n is given by polar angles
+
+φ = U[−π, π] ,
+cos θiso = U[−1, 1] .
+
+(1)
+
+2
+
+O. Lomax & A. P. Whitworth
+
+If there is an external isotropic radiation ﬁeld, o is a
+random point on a closed surface and n is given by polar
+angles
+
+where gλ is the mean scattering cosine. Hence, relative
+to the pre-scattering direction,
+
+(cid:112)
+
+cos θsur =
+
+φ = U[−π, π] ,
+U[0, 1] ,
+
+φ = U[−π, π] ,
+
+(cid:40)
+1 + g2 −
+
+(cid:18)
+
+cos θsct =
+
+1
+2 g
+
+(cid:19)2(cid:41)
+
+(10)
+
+.
+
+1 − g2
+
+1 + g U[−1, 1]
+
+The process of absorption then re-emission and/or scat-
+tering is repeated until the packet exits the system.
+
+2.2. Emissivity distribution
+
+For a medium in radiative equilibrium, the energy
+emission rate is equal to the energy absorption rate ˙A,
+i.e.
+
+˙A = 4 κp σsb T 4 .
+
+(11)
+Here, σsb is the Stefan-Boltzmann constant, T is the lo-
+cal temperature and κp is the Planck mean absorption
+coeﬃcient:
+
+κλ Bλ(T ) dλ
+
+κp =
+
+.
+
+(12)
+
+Bλ(T ) dλ
+
+∞(cid:82)
+∞(cid:82)
+
+0
+
+0
+
+The average value of
+˙A within a volume V can be esti-
+mated by summing over the path lengths lj of luminosity
+packets which pass through V ,
+
+˙A ≈
+
+ε0
+∆t
+
+1
+V
+
+κλj lj .
+
+(13)
+
+(cid:88)
+
+j
+
+We can estimate T , and therefore the mass emissivity
+distribution, by calculating ˙A and solving Eqn. 11 for
+T . However, Eqn. 13 depends on the trajectories of
+the luminosity packets; the trajectories depend on the
+emissivity distribution. Therefore several iterations are
+required to reach an equilibrium solution.
+3. SPAMCART ALGORITHM
+
+The main algorithm of the spamcart code consists of
+two tasks: (i) we calculate the trajectories of luminosity
+packets through an ensemble of smoothed particles and
+(ii) we estimate ˙A for each particle. Here, we detail how
+these are achieved.
+
+3.1. Density
+
+For an ensemble of smoothed particles, each with po-
+sition xi, mass mi and smoothing length hi, the density
+at any point in space is given by
+
+ρ(x) =
+
+mi
+h3
+i
+
+w(si) ,
+
+si = (cid:107)x − xi(cid:107)
+
+,
+
+(14)
+
+hi
+
+(cid:88)
+
+i
+
+where w(s) is the kernel function. Most kernel functions
+have compact support, i.e. they are only ﬁnite within
+ξ smoothing lengths. We use the M4 cubic spline ker-
+nel (Monaghan & Lattanzio 1985) which has ξ = 2 (see
+Appendix A). The smoothing length of each particle is
+calculated so that
+
+(cid:19) 1
+
+3
+
+(cid:18) mi
+(cid:88)
+
+ρi
+mj
+h3
+i
+
+j
+
+hi = η
+
+ρi =
+
+,
+
+w(sij) ,
+
+sij = (cid:107)xj − xi(cid:107)
+
+hi
+
+.
+
+(15)
+
+(2)
+
+(4)
+
+(5)
+
+where θsur is the angle between n and the inward sur-
+face normal. Each packet has energy ε0 ≡ (L ∆t/Nγ)1
+and wavelength λ, drawn randomly from the spectral en-
+ergy distribution of the source. For the surface of a star,
+approximated as a blackbody, the equation
+
+Bλ(T ) dλ(cid:48)
+
+Bλ(T ) dλ(cid:48)
+
+= U[0, 1]
+
+(3)
+
+0
+
+is solved for λ, where T is the temperature of the source.
+
+An individual packet travels an optical depth
+
+This corresponds to a distance l, where
+
+τ = − ln(U[0, 1]) .
+
+λ(cid:82)
+∞(cid:82)
+
+0
+
+l(cid:90)
+
+τ =
+
+0
+
+(cid:48)
+
+ρ(l
+
+) χλ(l
+
+(cid:48)
+
+(cid:48)
+
+.
+
+) dl
+
+Here, ρ is the density of the medium and χλ is the mass
+extinction coeﬃcient. Solving Eqn. 5 for l is one of the
+more computationally demanding aspects of MCRT and
+is covered in the next section.
+
+Once a packet has travelled distance l, it is either ab-
+
+sorbed or scattered at position
+
+onew = x + l o .
+
+(6)
+
+A packet is absorbed if
+
+aλ < U[0, 1] ,
+
+(7)
+where aλ is the albedo of the medium. Otherwise the
+packet is scattered. An absorbed packet is immediately
+re-emitted with a new wavelength drawn from the emis-
+sivity distribution of the medium. This is achieved by
+solving the equation
+
+λ(cid:82)
+∞(cid:82)
+
+0
+
+0
+
+κλ Bλ(T ) dλ(cid:48)
+
+κλ Bλ(T ) dλ(cid:48)
+
+= U[0, 1]
+
+(8)
+
+for λ, where κλ ≡ (1− aλ) χλ is the monochromatic mass
+absorption coeﬃcient and T is the temperature of the
+medium at onew. If the packet is scattered, λ remains
+unchanged and nnew is scattered away from n by a ran-
+dom angle θsct. Here, θsct is drawn from the Henyey &
+Greenstein (1941) phase function:
+1 − g2
+
+Φ(θ) =
+
+(9)
+
+λ
+
+[1 + g2
+
+λ − 2 gλ cos(θ)]3/2 ,
+
+1 If we assume radiative equilibrium, then the value of ∆t is
+
+arbitrary and does not aﬀect the calculation.
+
+1
+4 π
+
+SPAMCART
+
+3
+
+Fig. 1.— A diagram of line with origin o, direction n and length
+l intersecting a particle at position xi with compact support s ≤ ξ.
+The other terms are deﬁned in §3.3 .
+
+These equations are solved by iteration and we normally
+adopt η = 1.2 (as suggested by Price & Monaghan 2004).
+
+3.2. Scatter Calculation
+
+The value of some arbitrary quantity Z(x) can be esti-
+mated by scattering the same quantity, from each particle
+to x, via the kernel function:
+
+(cid:88)
+
+i
+
+Z(x) =
+
+mi
+ρi
+
+Zi
+h3
+i
+
+w(si) .
+
+(16)
+
+The gradient ∇Z(x) may also be estimated from the gra-
+dient of the kernel function:
+
+(cid:88)
+
+i
+
+mi
+ρi
+x − xi
+(cid:107)x − xi(cid:107)
+
+∇Z(x) =
+
+∇w(si) =
+
+Zi
+i ∇w(si) ,
+h4
+d
+ds
+
+w(si) .
+
+(17)
+
+The gradient of the M4 kernel function is given in Ap-
+pendix A .
+
+3.3. Optical depth
+
+The set of all points along a ray is deﬁned by x(cid:48) =
+o + t n, where 0 ≤ t ≤ l. Here, o is the origin, n is the
+direction unit vector and l is the length of the ray. The
+optical depth at wavelength λ along the ray is given by
+
+(cid:48)
+
+τ
+
+(o, n, l) =
+
+χλi ςi ,
+
+(18)
+
+ray(cid:88)
+
+i
+
+Fig. 2.— A diagram of multiple particles which are intersected
+by a ray of length tmax. The optical depth along the ray may be
+calculated using Eqn. 18 . Note that tmax is greater than l. This
+is because l is calculated by iteration and the ﬁrst iterate must be
+an overestimate.
+
+where
+
+ςi =
+
+mi
+h2
+i
+
+ti = (xi − o) · n ,
+ci = min
+
+(cid:26)W (ci, s0i) + W (ci, sli),
+0 ≤ ti ≤ l;
+|W (ci, s0i) − W (ci, sli)|, otherwise ,
+(cid:19)
+(cid:18)
+(cid:18)
+(cid:18)
+
+hi
+(cid:107)o − xi(cid:107)
+
+(cid:107)(o + ti n) − xi(cid:107)
+
+(cid:19)
+
+(cid:19)
+
+hi
+
+, ξ
+
+,
+
+, ξ
+
+,
+
+(cid:107)o + ln − xi(cid:107)
+
+, ξ
+
+,
+
+s0i = min
+
+sli = min
+
+s(cid:90)
+
+c
+
+hi
+
+ds ,
+
+w(s) s
+
+√s2 − c2
+
+W (c, s) =
+
+(19)
+and χλi is the mass extinction coeﬃcient of particle i.
+A diagram of this system for a single particle is given in
+Fig. 1 . The analytical form of W (c, s) for the M4 kernel
+in given in Appendix A.
+
+In order to calculate Eqn. 18, we must ﬁrst identify
+all the particles which are intersected by the ray (see
+Fig. 2). This can be performed eﬃciently by walking a
+tree-structure (see Fig. 3) and opening cells which pass
+the slab test (e.g. Williams et al. 2005, see Appendix B).
+These trees are a standard element of SPH codes, used
+to optimise neighbour-ﬁnding and gravity calculations.
+
+3.4. Propagating luminosity packets
+
+We propagate a luminosity packet, starting at o, trav-
+elling in direction n. Initially, the ray has length l0. Here
+l0 is a modest overestimate of the intended value of l (see
+Eqn 5). A good choice of l0 is provided by a second order
+
+t = lt = tit = 0cislis0iξonxiW(ci,s0i)W(ci,sli)τ'(o,n,l)t = 0t = lt = tMAX4
+
+O. Lomax & A. P. Whitworth
+
+Fig. 3.— A schematic of the cells of a particle tree. Each cell
+has an axis-aligned bounding box (AABB) which encompasses the
+smoothing volume of all the particles in the cell (see Appendix B
+for more details).
+If the ray intersects the AABB of a cell with
+sub-cells, the sub-cells are recursively checked. If the cell has no
+sub-cells (shaded pink), all of its particles are added to the ray.
+
+Taylor expansion at l = 0, i.e.
+
+l0 =
+
+2 ζ τ
+
+γ (o) + √∆
+−1
+l
+
+,
+
+(20)
+
+∆ = max([l
+
+−1
+γ (o)]2 − 2 τ ∇l
+
+−1
+γ (o) · n, 0) .
+Here, the inverse mean-free-path l−1
+γ = χλ ρ is estimated
+via a scatter calculation and ζ is an overestimation factor
+which we set to 1.2 .
+We use a Newton-Raphson root-ﬁnding method to iter-
+atively solve τ(cid:48)
+− τ = 0 for l. We terminate the iterations
+− τ|/τ ≤ 0.01 . For some values of l0, τ(cid:48) is less
+when |τ(cid:48)
+than τ and no solution exists. Here, either the luminos-
+ity packet has left the ensemble of SPH particles or l0 is
+too short. In the ﬁrst case, the calculation for that lumi-
+nosity packet is complete. In the second case, a new ray
+is constructed with the same direction and new origin
+onew = o + l0 n. The calculation is then repeated with
+τnew = τ − τ(cid:48).
+
+3.5. Estimating the energy absorption rate
+
+The energy absorption rate for an individual particle
+is estimated by summing the column densities along all
+packet trajectories:
+
+˙A =
+
+ε0
+∆t
+
+1
+m
+
+κλj ςj .
+
+(21)
+
+(cid:88)
+
+j
+
+Here ςj is the column density along the path of luminos-
+ity packet j through the particle. Estimating ˙A requires
+almost no computational expense as the values of ςj have
+already been computed whilst propagating the luminos-
+ity packets.
+
+The absorption rate from the previous iteration is used
+when randomly generating a new emission wavelength.
+
+Fig. 4.— Schematic of a single pixel (small square) of an intensity
+map (large square). The ray passes through the centre of the pixel
+at an angle normal to the surface of the map.
+
+The value of
+˙A at any position can be found via a scat-
+ter calculation. The radiative equilibrium calculation is
+complete when the change in ˙Ai (or temperature Ti) be-
+tween iterations is less than a desired tolerance.
+
+3.6. Generating intensity maps
+
+We generate intensity maps of the dust emission via
+ray tracing. We construct a virtual rectangular screen
+facing the ensemble of particles. This screen is divided
+into Npix pixels. We construct Npix rays, each of which
+has inﬁnite length and passes through the centre of a
+pixel with direction normal to the screen. A schematic
+of a single pixel is show in Fig. 4 .
+
+Each ray intersects Nray particles. These are sorted
+into descending order of distance from the pixel. The
+intensity of the pixel is given by INray. This is calculated
+by iteration:
+Ii = Ii−1 exp(−χλi ςi) +
+[1 − exp(−χλi ςi)] ,
+(22)
+where i = 1, 2, . . . , Npart. In the case where i = 1, I0 is
+the background intensity.
+
+The intensity from point sources (e.g. stars) may also
+be added to the map. This is achieved by (i) locating
+the pixel in which the source lies, (ii) calculating the
+optical depth τ between the source and the pixel and
+(iii) adding the intensity of the source, scaled by a factor
+of (Asrc/Apix) exp(−τ ), to the pixel. Here Asrc is the
+unresolved cross-sectional area of the source and Apix is
+the area of the pixel.
+
+Bλ(Ti) κλi
+
+χλi
+
+4. EXAMPLE CALCULATIONS
+
+In the following calculations, we use the dust optical
+properties derived by (Li & Draine 2001). Here, the
+dust is a mixture of carbonaceous and amorphous sili-
+cate grains. The size distribution follows Weingartner &
+Draine (2001) with Rv = 5.5 and is normalised to give
+a dust-to-gas mass ratio of one percent. The code does
+not currently support imaging of scattered light (see §5),
+so we set the albedo to zero, i.e. κλ ≡ χλ.
+We present two examples. The ﬁrst is a benchmark
+which tests the ability of the algorithm to reach thermal
+
+SPAMCART
+
+5
+
+Fig. 5.— Intensity maps of a sphere of Npart = 3× 106 particles
+with M = 100 M(cid:12) and R = 2000 au. The radial density proﬁle fol-
+lows that of a critical Bonnor-Ebert sphere. The left column shows
+the intensity when the sphere is illuminated by a 60 K blackbody
+radiation ﬁeld. The right column shows the intensity when the
+sphere is illuminated by a 120 K blackbody radiation ﬁeld, diluted
+by a factor of 1/16. The top row gives the intensity at λ = 160 µm,
+the middle row gives the intensity at λ = 70 µm and the top row
+gives the intensity at λ = 30 µm. The colour scale gives the inten-
+sity, normalised by the background intensity.
+
+equilibrium with a radiation ﬁeld. In the second exam-
+ple, we use the outputs of an SPH simulation to generate
+spectra and intensity maps of an embedded multiple sys-
+tem.
+
+4.1. Blackbody radiation ﬁeld
+
+4.1.1. Undiluted blackbody radiation ﬁeld
+
+In an undiluted blackbody radiation ﬁeld, the intensity
+Iλ(x, n) is equal to the Planck function Bλ(Tbb). By con-
+struction, an absorbing/emitting object in this ﬁeld has
+a surface intensity equal to Bλ(Tbb). Following Kirch-
+hoﬀ’s law of radiation—a good absorber is an equally
+good emitter—the surface temperature must therefore be
+equal to Tbb. Furthermore, because the emission spec-
+trum is identical to the absorption spectrum, the object
+is invisible with respect to the background intensity.
+
+4.1.2. Set up
+
+We set up a sphere of Npart = 3 × 105 particles. The
+sphere has radius R = 2000 au and the density proﬁle
+of a critical Bonnor-Ebert sphere, truncated at dimen-
+sionless radius ξ = 6.451 . In the ﬁrst instance, we give
+the sphere mass M = 1 M(cid:12) (optically thin), in the sec-
+ond M = 100 M(cid:12) (optically thick). We place the sphere
+in an undiluted Tbb = 60K blackbody radiation ﬁeld.
+
+Fig. 6.— The spectral energy distribution (SED) through the
+centre of the sphere in Fig.
+5, with M = 1 M(cid:12) (top) and
+M = 100 M(cid:12) (bottom). In both cases, the sphere is illuminated
+by an undiluted 60 K blackbody. The left y-axis gives the inten-
+sity calculated by successive iterations of the algorithm. The bot-
+tom most red line shows the initial intensity, where each particle
+has a temperature of 10 K. The lines above show the SED con-
+verging towards a 60 K blackbody (black long-dashed line). The
+right y-axis give the optical depth through the centre of the sphere
+(short-dashed black line).
+
+This is simulated by constructing a virtual shell which
+encompasses all the particles and their smoothing ker-
+nels, i.e. Rfield (cid:38) 2000 au. The shell is given luminosity
+Lfield = 4 π R2field σsb T 4. This luminosity is divided into
+Nγ = 106 luminosity packets, which are directed inwards
+towards the particles. The wavelength of each packet
+is drawn randomly from the Planck function Bλ(Tbb).
+Each particle is given an initial temperature T = 10 K
+and spamcart is iterated until the mean change in tem-
+perature is less than 1 K.
+
+4.1.3. Results
+
+Fig. 6 shows the spectral energy distribution (SED)
+though the centre of the sphere.
+In the optically thin
+case, we see that the SED converges on a 60 K blackbody
+after about three iterations. In the optically thick case,
+the SED converges after about ﬁve iterations.
+
+4.1.4. Diluted blackbody radiation ﬁeld
+
+We repeat the optically thick simulation, this time with
+a 120 K blackbody, diluted by a factor of 1/16. In this
+instance, we expect the dust to reach local radiative equi-
+librium at some temperature T < 120 K. Here, when a
+luminosity packet is absorbed by the dust, it is usually
+re-emitted at a longer wavelength. The sphere should
+therefore appear to glow, relative to the background, at
+
+T=60K,D=1λ=160µmλ=70µmλ=30µmT=120K,D=1/160.51.52.53.5Iλ/Iλbg10−410−210010−310−1101103Iλ[ergs−1sr−1cm−2µm−1]τ10−410−210010110210310−310−1101103λ[µm]6
+
+O. Lomax & A. P. Whitworth
+
+Fig.
+
+long wavelengths and cast a silhouette at short wave-
+lengths.
+
+5 shows intensity maps of the optically thick
+sphere. The left column shows the results of the undi-
+luted blackbody ﬁeld, the right column shows the results
+for the diluted ﬁeld. The sphere in the undiluted ﬁeld
+is almost invisible relative to the background intensity
+at wavelengths between 30 and 160 µm. There is some
+visible noise at 30 µm, of order ten percent. Here, the op-
+tical depth through the sphere is very high (τ ∼ 100) and
+the intensity is very sensitive to temperature ﬂuctuations
+across the the sphere’s outer surface. The sphere in the
+diluted ﬁeld behaves as expected; it is brighter than the
+background at 160 µm and darker than the background
+at 30 µm.
+
+4.2. Embedded sextuple system
+
+We demonstrate a more realistic application of the al-
+gorithm by calculating the dust emission from a proto-
+stellar multiple system. High order multiple systems,
+i.e. N(cid:63) ≥ 3, are observed amongst mature ﬁeld stars
+(e.g. Tokovinin 2008; Eggleton & Tokovinin 2008). These
+systems are more common amongst pre-Main Sequence
+stars, embedded in star forming regions such as Taurus
+and Ophiuchus (e.g. Leinert et al. 1993; Ratzka et al.
+2005; Kraus et al. 2011). Furthermore, similar systems
+form routinely in simulations of molecular clouds and
+cores (e.g. Delgado-Donate et al. 2004; Bate 2009; Lo-
+max et al. 2014, 2015).
+
+4.2.1. Set up
+
+We take a snapshot from one of the SPH simulations
+presented by Lomax et al. (2014)2. Here, a 1.3 M(cid:12)
+core collapses and fragments into seven protostars (rep-
+resented by sink particles). One of these is ejected
+from the core and the remaining six form a stable sex-
+tuple system. At t = 105 years (after the initial col-
+lapse), the protostars in the sextuple have masses be-
+tween 0.08 M(cid:12) < M(cid:63) < 0.15 M(cid:12). The ejected protostar
+has mass M = 0.01 M(cid:12). The remainder of the initial
+mass (Mgas = 0.65 M(cid:12), Npart = 6.5× 104) is distributed
+between discs and and a diﬀuse envelope.
+We irradiate the system with an undiluted 2.73 K
+blackbody radiation ﬁeld and a 10000 K blackbody ﬁeld,
+diluted by a factor of 5 × 10−15. This represents contri-
+butions from the Cosmic Microwave Background (CMB)
+and the galactic stellar population. The protostars
+are treated as blackbody sources with R = 4 R(cid:12) and
+1100 K < T < 1500 K; these temperatures are estimated
+using the Stamatellos et al. (2011) episodic accretion
+model.
+
+4.2.2. Intensity maps and spectra
+
+Fig. 7 shows column density and intensity maps of
+the embedded system. The system is viewed both face-
+on and edge-on. In the face-on view, we see a balanced
+quadruple system (top right) in orbit with a binary sys-
+tem (bottom left), separated by S ∼ 400 au.
+2 These simulations use initial conditions drawn from distribu-
+tion functions that reproduce the observed properties of the cores
+in Ophiuchus. The simulation used here is No. 52, with episodic
+radiative feedback.
+
+In both face-on and edge-on views, the intensity at
+850 and 350 µm roughly traces the column density. At
+160 µm, face-on, only the the inner regions of the discs
+are visible. When viewed edge-on, the discs are opaque
+and signiﬁcant intensity is only seen above and below
+their midplanes.
+
+Fig. 8 shows the emission spectrum of the system.
+When viewed face on, we may deﬁne diﬀerent wave-
+bands, dominated by diﬀerent sources of radiation. Be-
+tween 103 µm < λ ≤ 104µm, the dust is optically thin
+and most of the radiation is from the CMB. Between
+10 µm < λ ≤ 103µm, most of the radiation is from
+dust emission. Starlight is largely unattenuated in these
+wavebands, but its fraction of the total emission is very
+low. At wavelengths less than 10 µm, the majority of
+the emission is attenuated starlight. Similar dust emis-
+sion is seen when the system is viewed edge on. How-
+ever, the starlight is almost completely extinguished at
+λ < 200 µm. We note that the level of extinction at
+λ < 10 µm is probably exaggerated as we have not cap-
+tured scattered light in these spectra. Nevertheless, in
+the face-on view, we still see the double peaked spectra
+typical of protostellar discs (e.g. Robitaille 2011; Whit-
+ney et al. 2013).
+
+5. FUTURE DEVELOPMENTS
+
+At present, we are able to generate intensity maps of
+the dust emission, plus attenuated light from background
+and point sources. However, it is desirable to also capture
+light scattered oﬀ of the dust. This can be achievable by
+modifying Eqn. 22. Here, the term Bλ(T )κλ represents
+the amount of dust emission per unit solid angle, per unit
+wavelength, per unit mass. We may add an extra term
+which accounts for scattered light:
+1
+m
+
+Bλ(T )κλ → Bλ(T )κλ +
+
+(cid:88)
+
+Φ(θj)σλj ςj .
+
+(23)
+Here, σλ ≡ aλ χλ is the mass scattering coeﬃcient and θj
+is the angle between luminosity packet j and the view-
+ing angle. The sum is only over luminosity packets with
+wavelengths in the interval (λ, λ + ∆λ). The scattering
+term must be calculated during the Monte Carlo itera-
+tion, so the viewing angle and wavelength interval must
+be known beforehand.
+
+Other future developments include use of the partial
+diﬀusion approximation and modiﬁed random walk for
+regions of high optical depth (Min et al. 2009). The
+spamcart code will shortly be made open-source and
+uploaded to the GitHub repository.
+
+1
+∆λ
+
+ε0
+∆t
+
+j,λ,∆λ
+
+6. SUMMARY
+
+We have developed a method for performing MCRT
+calculations directly on a distribution of SPH particles
+The algorithm operates diﬀerently from uniform density
+cell methods, but the two schemes are mathematically
+equivalent. This allows an MCRT calculation to be per-
+formed on an SPH snapshot with (i) no loss in density
+resolution and (ii) no introduction of noise from mapping
+particles to cells.
+
+We present a version of this algorithm that uses the
+Lucy (1999) method to compute (i) the propagation of
+luminosity packets through a medium and (ii) the ra-
+diative equilibrium temperature. The trajectories of the
+
+SPAMCART
+
+7
+
+Fig. 7.— Intensity maps of dust emission from a simulated protostellar sextuple system. The left column shows a face-on view, the right
+column shows shows an edge-on view. The top row shows the column density of the system. The following three rows show the intensity
+at λ = 850 µm, 350 µm and 160 µm. Each frame has area 670 au × 670 au. Note: the colour bar applies to the right column. Figures in the
+left column have been linearly scaled to ﬁt in the same range.
+
+Columndensityλ=850µmλ=350µmλ=160µm3.3×1011.0×1021.7×102Σ[gcm−2]1.7×10−55.0×10−58.3×10−5Iλ5.8×10−41.7×10−32.9×10−3Iλ[ergs−1sr−1cm−2µm−1]2.7×10−38.0×10−31.3×10−2Iλ8
+
+O. Lomax & A. P. Whitworth
+
+packets rely on the temperature of the medium so the
+calculation must be solved by iteration.
+
+We provide two example calculations using the
+smoothed particle MCRT method. First, we show than
+a cloud is invisible when it is bathed in an undiluted
+blackbody radiation ﬁeld. This holds for both optically
+thin and optically thick cases. Therefore the code obeys
+to Kirchhoﬀ’s law of thermal radiation. We note that
+this is a powerful test of any radiative transfer code and
+can be applied to any conﬁguration. Conversely, a cloud
+which has reached radiative equilibrium with a diluted
+blackbody ﬁeld glows at long wavelengths and casts a sil-
+houette at short wavelengths. Second, we generate inten-
+sity maps and spectra of protostellar and dust emission
+in an embedded sextuple system. Here, a double peaked
+disc spectrum is seen when the system is observed face
+on. When viewed edge on, the opacity of the disc blocks
+nearly all of the starlight.
+
+Future additions to the code include the addition of
+scattered light to synthetic observations and optimisa-
+tions for optically thick regions of dust. The code, writ-
+ten in Fortran 2003/08 with OpenMP parallelisation, will
+be made publicly available in the near future.
+
+Fig. 8.— Spectra of dust emission and starlight from the sextuple
+system. Values are integrated over the map area shown in Fig.
+7 . The top frame shows the spectrum from a face-on view. The
+bottom frame shows the spectrum from an edge-on view. The solid
+red lines show the total emission. The dashed red line shows the
+fraction of emission from protostars. The dashed black line shows
+the protostellar emission in the absence of dust extinction.
+
+ACKNOWLEDGEMENTS
+
+OL and APW gratefully acknowledge the support of a
+consolidated grant (ST/K00926/1) from the UK STFC.
+
+REFERENCES
+
+Altay, G., Croft, R. A. C., & Pelupessy, I. 2008, ACP08, 386,
+
+1931
+
+1663
+
+1318
+
+Barnes, J. & Hut, P. 1986, Nature, 324, 446
+Bate, M. R. 2009, MNRAS, 392, 590
+Delgado-Donate, E. J., Clarke, C. J., Bate, M. R., & Hodgkin,
+
+S. T. 2004, MNRAS, 351, 617
+
+Dobbs, C. L., Bonnell, I. A., & Pringle, J. E. 2006, MNRAS, 371,
+
+Dobbs, C. L., Burkert, A., & Pringle, J. E. 2011, MNRAS, 417,
+
+Dullemond, C. P. 2012, RADMC-3D: A multi-purpose radiative
+
+transfer tool, Astrophysics Source Code Library, record
+ascl:1202.015
+
+Eggleton, P. P. & Tokovinin, A. A. 2008, MNRAS, 389, 869
+Ercolano, B., Barlow, M. J., Storey, P. J., & Liu, X.-W. 2003,
+
+MNRAS, 340, 1136
+
+Forgan, D. & Rice, K. 2010, MNRAS, 406, 2549
+Gingold, R. A. & Monaghan, J. J. 1977, MNRAS, 181, 375
+Harries, T. J. 2011, MNRAS, 416, 1500
+Henyey, L. G. & Greenstein, J. L. 1941, ApJ, 93, 70
+Hubber, D. A., Ercolano, B., & Dale, J. 2016, MNRAS, 456, 756
+Hubber, D. A. & Rosotti, G. P. 2013, GANDALF (Graphical
+
+Astrophysics code for N-body Dynamics And Lagrangian
+Fluids), GitHub
+
+Kraus, A. L., Ireland, M. J., Martinache, F., & Hillenbrand, L. A.
+
+2011, ApJ, 731, 8
+
+Leinert, C., Zinnecker, H., Weitzel, N., Christou, J., Ridgway,
+
+S. T., Jameson, R., Haas, M., & Lenzen, R. 1993, A&A, 278,
+129
+
+Li, A. & Draine, B. T. 2001, ApJ, 554, 778
+Lomax, O., Whitworth, A. P., Hubber, D. A., Stamatellos, D., &
+
+Walch, S. 2014, MNRAS, 439, 3039
+
+—. 2015, MNRAS, 447, 1550
+Lucy, L. B. 1977, ApJ, 82, 1013
+—. 1999, A&A, 344, 282
+Min, M., Dullemond, C. P., Dominik, C., de Koter, A., &
+
+Hovenier, J. W. 2009, A&A, 497, 155
+
+Monaghan, J. J. & Lattanzio, J. C. 1985, A&A, 149, 135
+Price, D. J. & Monaghan, J. J. 2004, MNRAS, 348, 139
+Ratzka, T., Köhler, R., & Leinert, C. 2005, A&A, 437, 611
+Robitaille, T. P. 2011, A&A, 536, A79
+Rundle, D., Harries, T. J., Acreman, D. M., & Bate, M. R. 2010,
+
+MNRAS, 407, 986
+
+Springel, V. 2005, MNRAS, 364, 1105
+Springel, V. & Hernquist, L. 2003, MNRAS, 339, 312
+Stamatellos, D. & Whitworth, A. P. 2005, A&A, 439, 153
+Stamatellos, D., Whitworth, A. P., & Hubber, D. A. 2011, ApJ,
+
+730, 32
+
+Tokovinin, A. 2008, MNRAS, 389, 925
+Weingartner, J. C. & Draine, B. T. 2001, ApJ, 548, 296
+Whitney, B. A., Robitaille, T. P., Bjorkman, J. E., Dong, R.,
+
+Wolﬀ, M. J., Wood, K., & Honor, J. 2013, ApJS, 207, 30
+
+Williams, A., Barrus, S., Morley, R. K., & Shirley, P. 2005, J.
+
+Graphics Tools, 10, 49
+
+1024102710301033λIλA[ergs−1sr−1µm−1]1024102710301033100101102103104λ[µm]SPAMCART
+
+APPENDIX
+
+(cid:19)
+The M4 kernel has support s ≤ 2, where s = r/h. The density at s is given by
+max(2 − s, 0)3 − max(1 − s, 0)3
+
+w(s) =
+
+1
+π
+
+A. KERNEL FUNCTION
+
+and the density gradient is given by
+
+max(2 − s, 0)2 − 3 max(1 − s, 0)2
+The column density from dimensionless impact parameter c = b/h to s is given by
+
+w(s) = −
+
+4
+
+d
+ds
+
+(cid:18) 1
+(cid:18) 3
+
+4
+
+,
+
+(cid:19)
+
+.
+
+W (c, s) =
+
+1
+π
+
+where c ≤ s and
+
+1
+π
+
+
+(cid:18) 3
+
+9
+32
+
+(cid:18)
+
+−
+3
+32
+
+×
+
++
+
+−
+
+Winner(c, s),
+Winner(c, 1) + Wouter(c, s),
+Wouter(c, s),
+0,
+
+c ≤ 1, s ≤ 1,
+c ≤ 1, s > 1,
+c > 1, s > 1 ,
+c > 2 ,
+
+Winner(c, s) =
+
+s2 − c2
+s2 +
+
+(cid:112)
+(cid:32)
+s3 −
+(cid:112)
+
+1
+2
+
+16
+
+c4 log
+
+(cid:19)
+c2s − c2 − 1
+
+(cid:33)
+
+s + √s2 − c2
+
+,
+
+9
+32
+
+c
+
+3
+32
+
+(cid:32)
+
+Wouter(c, s) =
+1
+16
+
+×
+
+s2 − c2
+1
+s3 +
+2
+
+s2 −
+
+(c2 + 16) c2 log
+
+(cid:19)
+
+(c2 + 16) s + c2 + 2
+
+s + √s2 − c2
+
+c
+
+(cid:33)
+
+.
+
+9
+
+(A1)
+
+(A2)
+
+(A3)
+
+(A4)
+
+In practice, Eqn. A3 can either be computed on-the-ﬂy or stored in a triangular lookup table in the the range 0 ≤ c2 ≤ 4
+and c2 ≤ s2 ≤ 4 .
+
+B. K-D TREE
+
+We use a k-d tree (in three dimensions) to ﬁnd the particles intersected by a ray. We construct the tree by placing
+the entire ensemble of particles into a root cell. The root cell contains two branch cells. We select the dimension k
+across which the particle position x has the greatest variance. All particles with xk up to and including the median
+value are placed in the ﬁrst cell and the remaining particles are placed in the second cell. This process is repeated
+recursively until each cell contains 8 or fewer particles, in which case they are leaf cells. For each cell, we calculate
+the Axis-Aligned Bounding Box (AABB) that encompasses all of the particle smoothing volumes within the cell.
+
+We ﬁnd the particles intersected by a ray by using the slab method (e.g. Williams et al. 2005). Consider a ray with
+max. Along each
+and upper limit
+
+origin o, direction n and length l. Also, consider an AABB with lower limits b
+dimension k, we deﬁne a slab (a slab is a space between two parallel planes) with lower limit b
+max
+b
+k
+
+min
+k , within the slab can be calculated:
+
+min and upper limits b
+min
+k
+
+. The length of the ray segment, t
+
+max
+k
+
+-t
+
+The length of the ray through the AABB in all three dimensions, Tmax − Tmin, is given by
+
+min
+
+min
+t
+k = min(b
+max
+t
+k = max(b
+
+max
+
+min
+
+k − ok, b
+k − ok, b
+
+max
+
+k − ok)/nk ,
+k − ok)/nk .
+
+Tmin = max(t
+Tmax = min(t
+
+min
+1
+max
+1
+
+min
+, t
+2
+max
+, t
+2
+
+min
+) ,
+, t
+3
+max
+, t
+) .
+3
+
+The ray intersects the AABB if the following statements are true:
+
+Tmax > Tmin ,
+Tmin < l ,
+Tmax > 0 .
+
+(B1)
+
+(B2)
+
+(B3)
+
+10
+
+O. Lomax & A. P. Whitworth
+
+Starting at the root cell, we check for an AABB-ray intersection. If the result is true, we open the branch cells and
+recursively repeat the process until we encounter a leaf cell. If the leaf cell is intersected by the ray, the cell’s contents
+are added to a particle list. This method is not exclusive to k-d trees and may be used with any axis aligned tree,
+such as an octree (e.g. Barnes & Hut 1986).
+
+This paper was built using the Open Journal of Astrophysics LATEX template. The OJA is a journal which provides
+fast and easy peer review for new papers in the astro-ph section of the arXiv, making the reviewing process simpler
+for authors and referees alike. Learn more at http://beta.theoj.org.
+
+

@@ -1,0 +1,1764 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+2
+
+ 
+
+ 
+ 
+]
+
+.
+
+A
+N
+h
+t
+a
+m
+
+[
+ 
+ 
+
+1
+v
+9
+0
+8
+0
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+THE COMPUTATION OF DISCONNECTED BIFURCATION
+
+P. E. FARRELL∗, C. H. L. BEENTJES† , AND ´A. BIRKISSON‡
+
+DIAGRAMS
+
+Abstract. Arclength continuation and branch switching are enormously successful algorithms
+for the computation of bifurcation diagrams. Nevertheless, their combination suﬀers from three
+signiﬁcant disadvantages. The ﬁrst is that they attempt to compute only the part of the diagram
+that is continuously connected to the initial data; disconnected branches are overlooked. The second
+is that the subproblems required (typically determinant calculation and nullspace construction) are
+expensive and hard to scale to very large discretizations. The third is that they can miss connected
+branches associated with nonsimple bifurcations, such as when an eigenvalue of even multiplicity
+crosses the origin. Without expert knowledge or lucky guesses, these techniques alone can paint an
+incomplete picture of the dynamics of a system.
+
+In this paper we propose a new algorithm for computing bifurcation diagrams, called deﬂated
+continuation, that is capable of overcoming all three of these disadvantages. The algorithm combines
+classical continuation with a deﬂation technique that elegantly eliminates known branches from
+consideration, allowing the discovery of disconnected branches with Newton’s method. Deﬂated
+continuation does not rely on any device for detecting bifurcations and does not involve computing
+eigendecompositions; all subproblems required in deﬂated continuation can be solved eﬃciently if a
+good preconditioner is available for the underlying nonlinear problem. We prove suﬃcient conditions
+for the convergence of Newton’s method to multiple solutions from the same initial guess, providing
+insight into which unknown branches will be discovered. We illustrate the success of the method on
+several examples where standard techniques fail.
+
+Key words. continuation, bifurcation, deﬂation, branch switching, deﬂated continuation.
+
+AMS subject classiﬁcations. 65P30, 65L10, 65L20, 65H10.
+
+1. Introduction. We consider numerical methods for computing the solutions
+
+of
+
+f (u, λ) = 0,
+
+(1.1)
+where f : U × R → Y is the C 1 problem residual, U and Y are isomorphic Banach
+spaces, u ∈ U is referred to as the solution, and λ ∈ R is referred to as the parameter.
+In our applications, (1.1) typically represents the residual of a stationary ordinary or
+partial diﬀerential equation, along with boundary conditions. The associated bifur-
+cation diagram visualizes how the behaviour of a functional of the solutions changes
+as λ is varied over some interval of interest [λmin, λmax].
+
+Arclength continuation and branch switching [17, 10, 15, 8, 27] are central tech-
+niques in the computational analysis of (1.1) and are routinely used throughout science
+and engineering. Given an initial point (u0, λ0) on a branch, arclength continuation
+(or its popular variant, pseudo-arclength continuation) robustly traces out the re-
+mainder of that branch. It parameterizes the solution and parameter (u(s), λ(s)) as
+
+Simula Research Laboratory, Oslo, Norway (patrick.farrell@maths.ox.ac.uk).
+
+∗Mathematical Institute, University of Oxford, Oxford, UK. Center for Biomedical Computing,
+†Mathematical Institute, University of Oxford, Oxford, UK (beentjes@maths.ox.ac.uk).
+‡Mathematical Institute, University of Oxford, Oxford, UK (birkisson@maths.ox.ac.uk). This
+research is funded by EPSRC grants EP/K030930/1 and EP/M019721/1, by a Clarendon Fund
+Scholarship, by a New College Graduate Scholarship, by the European Research Council under the
+European Union’s Seventh Framework Programme (FP7/2007-2013)/ERC grant 291068, and by
+a Center of Excellence grant from the Research Council of Norway to the Center for Biomedical
+Computing at Simula Research Laboratory. The authors would like to thank L. N. Trefethen for
+useful discussions and G. N. Wells for furnishing the hyperelastic solver used in section 4.4.
+
+1
+
+2
+
+P. E. FARRELL ET AL.
+
+u
+
+u
+
+u
+
+λ
+
+λ
+
+λ
+
+(a) Detect bifurcation point
+
+(b) Switch branch
+
+(c) Continuation on branch
+
+Fig. 1.1: Sketch of switching continuation. Arclength (or pseudo-arclength) continu-
+ation is applied on a branch as in Figure 1.1a. When a bifurcation point is detected,
+the nullspace of the Fr´echet derivative there is computed and is used to switch branch,
+depicted in Figure 1.1b. Once a point on the emanating branch is known, continuation
+traces out the branch as in Figure 1.1c.
+
+a function of arclength along the curve s from the initial point, as this allows the
+method to continue through fold bifurcations. It applies a predictor computed from
+previous solutions to estimate the solution and parameter for s + ∆s, and corrects
+this guess with a solver such as Newton’s method.
+
+Branch switching algorithms attempt to detect bifurcation points along a branch
+and to construct initial solutions on the branches emanating from it, Figure 1.1. The
+detection step typically relies on the computation of the bifurcation test functional
+
+(cid:32)(cid:89)
+
+(cid:33)
+
+τ (u, λ) = sign(det J(u, λ)) = sign
+
+µi(u, λ)
+
+,
+
+(1.2)
+
+i
+
+where µi are the eigenvalues of the (discretized) Jacobian J, including multiplicities.
+This test functional is cheaply computable if an LU decomposition of J is already
+available from a continuation step [27], but is very diﬃcult to estimate if a Krylov
+method is used. Once a bifurcation point has been identiﬁed, initial guesses for
+solutions on the emanating branches are constructed from the nullspace of J there.
+Once one solution on each emanating branch is known, arclength continuation is used
+to complete the branch. Henceforth, this combination of arclength continuation and
+branch switching will be referred to as switching continuation.
+
+Switching continuation computes fragments of bifurcation diagrams: it attempts
+to compute the part of the bifurcation diagram that is continuously connected to the
+initial point (u0, λ0). However, it is often the case that the bifurcation diagram is
+not connected, with multiple branches that do not meet at bifurcation points. For
+example, pitchfork and transcritical bifurcations are not generic; they are destroyed
+under perturbation [15, Chapter IV], and subsequently the complete bifurcation di-
+agram cannot be computed in one pass with the approach described above. Other
+examples will be given in section 4. In these cases, the diagram returned by switching
+continuation along a single path is incomplete, giving an unsatisfactory picture of the
+solutions to (1.1).
+
+In this work we develop and analyze an alternative algorithm, deﬂated continua-
+tion, that is capable of discovering disconnected branches from known ones, without
+
+COMPUTING DISCONNECTED BIFURCATION DIAGRAMS
+
+3
+
+u
+
+u
+
+u
+
+λ
+
+λ
+
+λ
+
+(a) Initial continuation
+
+(b) Apply deﬂation
+
+(c) Continuation of branches
+
+Fig. 1.2: Sketch of deﬂated continuation, the algorithm proposed in this work. Con-
+tinuation is applied on a branch as in Figure 1.2a. Along the branch, we stop and
+ﬁx the parameter λ, then attempt a deﬂation step to ﬁnd multiple solutions for this
+parameter as in Figure 1.2b.
+If the deﬂation step is successful, we have points on
+multiple branches and can continue these branches as in Figure 1.2c.
+
+requiring that a bifurcation point connect the two, Figure 1.2. At the heart of the
+method is the deﬂation of known solutions [7, 14]. Deﬂation is a technique that sys-
+tematically modiﬁes a nonlinear problem to guarantee that Newton’s method will not
+converge to a known root, thus enabling unknown roots to be discovered from the
+same initial guess. Fix λ in (1.1) to yield the nonlinear problem
+
+F (u) = 0,
+
+(1.3)
+where F : U → Y . Suppose Newton’s method is applied to F from initial guess u0 to
+yield the solution u∗
+1) nonsingular. Suppose further
+that we suspect that (1.3) permits solutions other than u∗
+1, but no additional initial
+guesses are available. We thus construct a modiﬁed problem
+
+1, with the Fr´echet derivative F (cid:48)(u∗
+
+G(u) = M (u; u∗
+via the application of a deﬂation operator M (u; u∗
+1) to the residual F . By construction,
+this deﬂated residual satisﬁes two properties. The ﬁrst is the preservation of solutions
+of F , i.e. for u (cid:54)= u∗
+1, G(u) = 0 iﬀ F (u) = 0. The second is that Newton’s method
+applied to G will not discover u∗
+
+1)F (u),
+
+(1.4)
+
+1 again, as
+
+(cid:107)G(u)(cid:107) > 0,
+
+lim inf
+u→u∗
+1
+
+(1.5)
+
+i.e. along any sequence converging to the known root, the deﬂated residual does not
+converge to zero. Thus, if Newton’s method applied to G converges from u0, it will
+converge to a distinct solution u∗
+1. The process can then be repeated until no
+more solutions are found from u0 in a speciﬁed number of Newton iterations. In this
+work, we use the shifted deﬂation operator
+
+2 (cid:54)= u∗
+(cid:18)
+
+M (u; u∗
+
+1) =
+
+(cid:19)
+
+where I is the identity on Y , p is the power, and σ is the shift. All of the examples
+below use p = 2 and σ = 1. Importantly, it is possible to eﬃciently solve the Newton
+
+1
+
+(cid:107)u − u∗
+
+1(cid:107)p + σ
+
+I,
+
+(1.6)
+
+4
+
+P. E. FARRELL ET AL.
+
+step for G if a good preconditioner is available for the Newton step of F . For more
+details, see [1, 14, 13].
+
+We present the proposed bifurcation algorithm in section 2. To analyze its be-
+haviour, in section 3 we develop an initial theory of multiconvergence of Newton’s
+method. We derive novel suﬃcient conditions under which Newton’s method will
+converge to two diﬀerent solutions, starting from the same initial guess. In section 4,
+the method is applied to several problems on which switching continuation fails.
+
+Algorithm 2.1. Deﬂated continuation.
+Input: Initial parameter value λmin.
+Input: Final parameter value λmax > λmin.
+Input: Step size ∆λ > 0.
+Input: Nonlinear residual f (u, λ).
+Input: Deﬂation operator M (u; u∗).
+Input: Initial solutions S(λmin) to f (·, λmin).
+1: λ ← λmin
+2: while λ < λmax do
+F (·) ← f (·, λ + ∆λ)
+3:
+S(λ + ∆λ) ← ∅
+4:
+for u0 ∈ S(λ) do
+5:
+6:
+7:
+8:
+
+apply Newton’s method to F from initial guess u0.
+if solution u∗ found then
+S(λ + ∆λ) ← S(λ + ∆λ) ∪ {u∗}
+F (·) ← M (·; u∗)F (·)
+
+(cid:46) Fix the value of λ to solve for.
+
+(cid:46) Continue known branches.
+
+(cid:46) Record solution.
+(cid:46) Deﬂate solution.
+
+(cid:46) Seek new branches.
+
+9:
+
+10:
+11:
+12:
+13:
+14:
+
+for u0 ∈ S(λ) do
+success ← true
+while success do
+
+15:
+16:
+17:
+18:
+19:
+20: return S
+
+else
+λ ← λ + ∆λ
+
+apply Newton’s method to F from initial guess u0.
+if solution u∗ found then
+S(λ + ∆λ) ← S(λ + ∆λ) ∪ {u∗}
+F (·) ← M (·; u∗)F (·)
+success ← false
+
+(cid:46) New branch found.
+(cid:46) Record solution.
+(cid:46) Deﬂate solution.
+
+2. Deﬂated continuation. Let [λmin, λmax] be the interval of interest for the
+parameter λ, and let ∆λ be the continuation step size. For a given λ, let S(λ) ⊂ U
+denote the set of known solutions to (1.3). Given S(λ), Algorithm 2.1 constructs
+S(λ + ∆λ) as follows. In the ﬁrst pass (lines 5–9), known solutions are continued with
+standard classical continuation; each known solution u0 ∈ S(λ) is used as initial guess
+for f (·, λ+∆λ) in turn. If some solutions are not successfully continued, the algorithm
+proceeds with the other branches regardless. (This can happen at fold bifurcations, for
+example.) As each solution is continued, it is recorded and deﬂated. In the second pass
+(lines 10–18), each initial guess is again considered in turn. Deﬂation guarantees that
+Newton’s method will not return to the known branch, and hence if Newton’s method
+converges, it will converge to a previously unknown solution (line 14). Each initial
+
+COMPUTING DISCONNECTED BIFURCATION DIAGRAMS
+
+5
+
+guess is attempted repeatedly until no solution is found within a certain number of
+Newton iterations. (Recall that Newton’s method is undecidable, i.e. it is impossible
+to decide in general if Newton’s method will eventually converge for a given initial
+guess [6].) Once all initial guesses have been exhausted, the algorithm increments λ
+and continues until the end of the interval has been reached.
+
+2.1. Variants of the algorithm. Various modiﬁcations to the basic algorithm
+are possible. The analyst may decide to seek unknown branches with a step size
+larger than ∆λ, to reduce the eﬀort spent on unsuccessful Newton iterations. The
+continuation and discovery stages are independent and may be executed in parallel;
+one group of processors can continue known solutions forwards, while other groups
+follow behind, seeking new solutions to continue.
+
+If the system (1.1) has a ﬁnite symmetry group G such that for all g ∈ G,
+
+f (u, λ) = 0 ⇐⇒ f (gu, λ) = 0,
+
+(2.1)
+then when a solution u is discovered, its actions Gu should be recorded and deﬂated as
+well, assuming that it is possible to represent each gu exactly with the discretization
+employed. If the discretization does not respect this symmetry (e.g. a ﬁnite element
+discretization on an unstructured mesh), then the projection of gu should be used as
+initial guess for Newton’s method instead. Deﬂating inﬁnite symmetry groups will be
+studied in future research.
+
+If the system (1.1) has a trivial branch ¯u such that f (¯u, λ) = 0 for all λ, then
+this branch must be excluded from the set of initial guesses to use in deﬂation. This
+is because the initial residual of (1.4) will evaluate to 0/0. As such trivial branches
+are obvious from the equations, the simplest approach is just to deﬂate any trivial
+solutions away before beginning Algorithm 2.1.
+
+In the discovery stage, problem-speciﬁc guesses other than the previous solu-
+tions may be employed; for example, in nonlinear eigenproblems it may be useful to
+use the eigenmodes of an associated linear problem. It may be necessary to break
+if the system (1.1) has a Z2 symmetry R such that
+the symmetry of the guesses:
+f (Ru, λ) = Rf (u, λ), then if Newton’s method is initialized with a symmetric initial
+guess satisfying Ru0 = u0 then all subsequent iterates will also remain symmetric.
+This will cause nonconvergence to nonsymmetric solutions, such as those introduced
+at a symmetry-breaking bifurcation. In this regard it may be advantageous to de-
+liberately break the symmetry of the discretization, or if this is not possible (such
+as when using a spectral method), to deliberately break the symmetry of the initial
+guesses.
+
+It is straightforward in principle to employ other continuation approaches in Al-
+gorithm 2.1:
+if arclength continuation is used, then in the ﬁrst pass each branch is
+synchronized at λ + ∆λ, deﬂation is applied to seek new branches, and the process is
+repeated.
+
+3. Convergence analysis. The central question in the analysis of Algorithm
+2.1 is: under what circumstances will unknown branches be discovered, and under
+what circumstances will they be missed? Given an initial guess u0, we wish to derive
+1 and u∗
+suﬃcient conditions that guarantee convergence to at least two solutions u∗
+2
+with Newton’s method and deﬂation, Figure 3.1. In the context of Algorithm 2.1, u0
+1 is the solution on the same branch for f (·, λ+∆λ),
+is the known solution for f (·, λ), u∗
+and u∗
+
+2 is another solution to f (·, λ + ∆λ) on a diﬀerent branch.
+The best-known theorem of convergence for Newton’s method is the theorem of
+Kantorovich [16], who ﬁrst formulated and analyzed Newton’s method in Banach
+
+6
+
+P. E. FARRELL ET AL.
+
+u∗
+
+1
+
+ρ1
+
+u0
+
+u∗
+
+2
+
+ρ2
+
+D
+
+u∗
+
+1
+
+D
+
+u0
+
+ρ(cid:48)
+
+2
+
+u∗
+
+2
+
+(a) Convergence before deﬂation
+
+(b) Convergence after deﬂation
+
+Fig. 3.1: Sketch of the regions of convergence around solutions u∗
+after deﬂation. Before deﬂation, the initial guess u0 converges to u∗
+this solution, the region of convergence around u∗
+
+2 before and
+1; after deﬂating
+2 expands and u0 now lies within it.
+
+1 and u∗
+
+spaces. We state the theorem (and all subsequent results) in aﬃne-covariant form [9].
+Theorem 3.1 (Aﬃne-covariant Newton–Kantorovich [16]). Let F : D → Y be a
+continuously Fr´echet diﬀerentiable function on the open convex subset D ⊆ U . Given
+u0 ∈ D, assume that
+i) F (cid:48)(u0)−1 exists; let α = (cid:107)F (cid:48)(u0)−1F (u0)(cid:107);
+ii) (cid:107)F (cid:48)(u0)−1 (F (cid:48)(u) − F (cid:48)(v))(cid:107) ≤ ω0(cid:107)u − v(cid:107) for all u, v ∈ D;
+iii) h0 = αω0 ≤ 1
+2 ;
+iv) B = ¯B(u0, ρ0) ⊂ D for ρ0 = (1 − √
+1 − 2h0)/ω0, where B deﬁnes an open ball.
+Then the Newton sequence from u0 is well-deﬁned and remains within the ball B.
+A solution u∗ ∈ B with F (u∗) = 0 exists, and the Newton sequence converges to
+1 − 2h0)/ω0, then u∗ is unique within
+it. Furthermore, if we deﬁne ρ+ = (1 +
+D ∩ B(u0, ρ+).
+
+√
+
+One of the main features of this theorem is that all of its assumptions except for
+Lipschitz continuity are veriﬁed at the initial guess u0. Convergence can be assured
+a priori, without needing to assume the existence of a root beforehand.
+
+1) = F (u∗
+
+2) = 0 and u∗
+
+1 (cid:54)= u∗
+
+1 and u∗
+
+2 with F (u∗
+
+Nevertheless, this theorem is not a suitable foundation for the purpose at hand.
+Suppose there exist u∗
+2. Now consider an
+initial guess u0 that provably converges to u∗
+1 by the Newton–Kantorovich theorem.
+The result is a ρ+ such that u∗
+In
+order to prove convergence of the deﬂated function M (u; u∗
+1)F (u), we would need to
+2 ∈ B(u0, ρ(cid:48)+). However, this would imply that
+establish a ρ(cid:48)+ > ρ+ such that u∗
+1 ∈ B(u0, ρ(cid:48)+), Figure 3.2b. The assumptions of the Newton–Kantorovich theorem
+u∗
+imply that the Fr´echet derivative is invertible everywhere in the ball, but the Fr´echet
+derivative of the deﬂated function is not deﬁned at u∗
+1, and hence the assumptions
+
+2 /∈ B(u0, ρ+), Figure 3.2a.
+
+1 ∈ B(u0, ρ+) and u∗
+
+COMPUTING DISCONNECTED BIFURCATION DIAGRAMS
+
+7
+
+D
+
+D
+
+u∗
+
+1
+
+u0
+
+ρ+
+
+u∗
+
+2
+
+u∗
+
+1
+
+u0
+
+ρ(cid:48)+
+
+u∗
+
+2
+
+(a) Convergence before deﬂation
+
+(b) Convergence after deﬂation
+
+Fig. 3.2: Sketch of why suﬃcient conditions for multiconvergence cannot be based
+on the Newton–Kantorovich theorem. The Newton–Kantorovich theorem describes a
+ball of convergence centred at the initial guess u0. In order to show convergence to
+2 we need the convergence region to grow, i.e. ρ(cid:48)+ > ρ+.
+multiple solutions u∗
+This would imply that the deﬂated root lies within the new region of convergence,
+which poses regularity problems on the Fr´echet derivative of the deﬂated function in
+the convergence region.
+
+1 and u∗
+
+cannot hold after deﬂation. The same argument holds for the Newton–Mysovskikh
+theorem [22].
+
+We therefore seek to base our analysis on results whose conditions are veriﬁed at
+the roots themselves, instead of at the initial guess. The theorem we will build upon
+is the Rall–Rheinboldt theorem [24, 26], again stated in aﬃne-covariant form.
+Theorem 3.2 (Aﬃne-covariant Rall-Rheinboldt [24, 26]). Let F : D → Y be a
+continuously Fr´echet diﬀerentiable function on the open convex subset D ⊆ U . Sup-
+pose that there exists a u∗ ∈ D such that F (u∗) = 0, and suppose further that
+i) F (cid:48)(u∗)−1 exists;
+ii) (cid:107)F (cid:48)(u∗)−1 (F (cid:48)(u) − F (cid:48)(v))(cid:107) ≤ ω∗(cid:107)u − v(cid:107) for all u, v ∈ D.
+Then any ρ∗ ≤ 2/(3ω∗) such that B = B(u∗, ρ∗) ⊂ D has the property that starting
+at u0 ∈ B, the Newton sequence is well-deﬁned and remains within B. The Newton
+sequence converges to u∗ ∈ B. Furthermore, if we deﬁne ρ+ = 1/ω∗, then u∗ is unique
+within D ∩ B(u∗, ρ+).
+A crucial ingredient of this theorem is the aﬃne covariant Lipschitz continuity of
+the Fr´echet derivative F (cid:48). Before extending this theorem to the deﬂated case, we ﬁrst
+give a lemma regarding the product of Lipschitz continuous functions.
+
+Lemma 3.3 (Product of Lipschitz continuous functions). Let X, Y and Z be
+Banach spaces and let L(Y, Z) be the vector space of bounded linear operators from
+Y to Z with induced operator norm. Let F : X → Y and G : X → L(Y, Z) be
+Lipschitz continuous functions on the open subset D ⊆ X with Lipschitz constants
+ωF and ωG respectively. Assume further that F and G are bounded on D, i.e. there
+exist NF , NG ∈ R such that (cid:107)F (x)(cid:107) < NF and (cid:107)G(x)(cid:107) < NG for all x ∈ D. Then
+the product GF : X → Z is bounded and Lipschitz continuous on D with Lipschitz
+
+8
+
+P. E. FARRELL ET AL.
+
+constant (NF ωG + NGωF ).
+
+Proof. Let x, y ∈ D. As both F and G are bounded on D their product is bounded
+
+as well:
+
+Furthermore,
+
+(cid:107)G(x)F (x)(cid:107) ≤ (cid:107)G(x)(cid:107)(cid:107)F (x)(cid:107) ≤ NGNF < ∞.
+
+(3.1)
+
+(cid:107)G(x)F (x) − G(y)F (y)(cid:107) = (cid:107)G(x)F (x) − G(x)F (y) + G(x)F (y) − G(y)F (y(cid:107)
+
+≤ (cid:107)G(x)F (x) − G(x)F (y)(cid:107) + (cid:107)G(x)F (y) − G(y)F (y)(cid:107)
+≤ (cid:107)G(x)(cid:107)(cid:107)F (x) − F (y)(cid:107) + (cid:107)G(x) − G(y)(cid:107)(cid:107)F (y)(cid:107)
+≤ NG(cid:107)F (x) − F (y)(cid:107) + NF(cid:107)G(x) − G(y)(cid:107)
+≤ NGωF(cid:107)x − y(cid:107) + NF ωG(cid:107)x − y(cid:107)
+= (NF ωG + NGωF )(cid:107)x − y(cid:107),
+
+(3.2)
+
+which proves the claim.
+
+We now consider the situation where one solution u∗
+
+2 ∈ D such that F (u∗
+
+2, such that F (u∗
+
+1 (cid:54)= u∗
+1) : D \ {u∗
+
+1 is known and has been
+deﬂated. We state suﬃcient conditions on the original residual and deﬂation operator
+that guarantee convergence to another solution u∗
+2.
+Theorem 3.4. Let F : D → Y be a continuously Fr´echet diﬀerentiable function
+on the open convex subset D ⊆ U . Suppose there exists u∗
+2) = 0.
+1 ∈ D, u∗
+Further assume there exists u∗
+1) = 0. This solution is
+deﬂated with a deﬂation operator M (·; u∗
+1} → GL(Y, Y ). Suppose there ex-
+ists an open bounded convex subset E ⊆ D \ {u∗
+2 ∈ E such that the following
+conditions hold:
+i) F (cid:48)(u∗
+ii) (cid:107)F (cid:48)(u∗
+iii) M (u; u∗
+iv) (cid:107)M(cid:48)(u; u∗
+Then there exists a ρ > 0 such that the Newton sequence from u0 ∈ B = B(u∗
+on the deﬂated function M (u; u∗
+2 ∈ B.
+u∗
+
+2)−1 exists;
+2)−1 (F (cid:48)(u) − F (cid:48)(v))(cid:107) ≤ ω∗(cid:107)u − v(cid:107) for all u, v ∈ E;
+1) is continuously Fr´echet diﬀerentiable for all u ∈ E;
+1) − M(cid:48)(v; u∗
+
+2, ρ)
+1)F (u) is well-deﬁned, remains in B and converges to
+
+1)(cid:107) ≤ ωM(cid:48)(cid:107)u − v(cid:107) for all u, v ∈ E.
+
+1} with u∗
+
+If the norm on U is twice continuously diﬀerentiable on E, the deﬂation operator
+(1.6) satisﬁes these conditions. In this case, we can use the composition rule for diﬀer-
+entiable functions to show that the deﬂation operator is in turn twice diﬀerentiable on
+E. This implies that the deﬂation operator is Lipschitz continuous, as E is bounded.
+For 2 ≤ p < ∞, the Lp norm is at least twice continuously diﬀerentiable on any open
+subset not containing zero [28, Theorem 8]. More generally, if the Banach space U is
+isomorphic to a Hilbert space, then it can be equipped with twice diﬀerentiable norms
+[18, 11]. Thus, the conditions demanded are satisﬁed in typical cases of interest.
+
+Proof. As F (u) and M (u; u∗
+
+1) are continuously Fr´echet diﬀerentiable on E, they
+are Lipschitz continuous as well by boundedness of E. Lipschitz continuity implies
+1) and M(cid:48)(u; u∗
+that the operators are bounded on E and thus F (u), F (cid:48)(u), M (u; u∗
+1)
+are all bounded on E. As a result the Fr´echet derivative of the deﬂated operator
+
+(M (u; u∗
+
+1)F (u))
+
+(cid:48)
+
+= M (u; u∗
+
+1)F (cid:48)(u) + M(cid:48)(u; u∗
+
+1)F (u)
+
+(3.3)
+
+COMPUTING DISCONNECTED BIFURCATION DIAGRAMS
+
+9
+
+(cid:0)[M (u; u∗
+(cid:48)(cid:1)−1
+
+(cid:13)(cid:13)(cid:13)(cid:0)[M (u∗
+
+Since u∗
+2; u∗
+
+is Lipschitz continuous by use of the triangle inequality and Lemma 3.3.
+2 is a root of F , the Fr´echet derivative of the deﬂated residual there is
+1) ∈ GL(Y, Y ) and is
+M (u∗
+thus invertible. The Fr´echet derivative of the deﬂated residual is thus invertible at u∗
+with
+
+2). For any u ∈ D the deﬂation operator M (u; u∗
+
+1)F (cid:48)(u∗
+
+2
+
+1)F (u)]
+
+= F (cid:48)(u∗
+
+2)−1M (u∗
+
+2; u∗
+
+1)−1.
+
+(3.4)
+
+(cid:48)(cid:1)−1(cid:12)(cid:12)(cid:12)u∗
+
+2
+
+(cid:13)(cid:13)(cid:13) ≤ ˜ω2(cid:107)u − v(cid:107),
+
+Combining these facts, there exists an (aﬃne covariant) ˜ω2 > 0 such that
+
+2; u∗
+
+1)F (u∗
+2)]
+
+[(M (u; u∗
+
+1)F (u))(cid:48) − (M (v; u∗
+
+1)F (v))(cid:48)]
+
+(3.5)
+for all u, v ∈ E. Hence the conditions of Theorem 3.2 are satisﬁed for both F (u) and
+M (u; u∗
+
+1)F (u), and it can be applied to prove the claim.
+
+1, u∗
+
+2)−1 exist;
+
+1) = F (u∗
+
+2) = 0, u∗
+
+2} and u∗
+
+1) : D \{u∗
+
+2 ∈ D such that F (u∗
+
+We are now in a position to state suﬃcient conditions for convergence to two so-
+lutions with deﬂation and Newton’s method. The proof applies the previous theorem,
+Theorem 3.4, and the Rall–Rheinboldt theorem, Theorem 3.2.
+Theorem 3.5 (Deﬂated Rall-Rheinboldt [4]). Let F : D → Y be a contin-
+uously Fr´echet diﬀerentiable function on an open subset D ⊆ U . Suppose there
+1 (cid:54)= u∗
+exist u∗
+2. Let E1 be an open
+bounded convex subset such that E1 ⊂ D \ {u∗
+1 ∈ E1. Furthermore let
+1} and u∗
+E2 be an open bounded convex subset such that E2 ⊂ D \ {u∗
+2 ∈ E2. Let
+1} → GL(Y, Y ) be a deﬂation operator such that the following condi-
+M (·; u∗
+tions hold:
+i) F (cid:48)(u∗
+ii) (cid:107)F (cid:48)(u∗
+iii) (cid:107)F (cid:48)(u∗
+iv) M (u; u∗
+v) (cid:107)M(cid:48)(u; u∗
+Then there exists an ˜ω2 > 0 such that for all u, v ∈ E2 there holds
+
+1)−1 and F (cid:48)(u∗
+1)−1 (F (cid:48)(u) − F (cid:48)(v))(cid:107) ≤ ω∗
+2)−1 (F (cid:48)(u) − F (cid:48)(v))(cid:107) ≤ ω∗
+1) is continuously Fr´echet diﬀerentiable for all u ∈ E2;
+1) − M(cid:48)(v; u∗
+1)(cid:107) ≤ ωM(cid:48)(cid:107)u − v(cid:107) for all x, y ∈ E2.
+(cid:48)(cid:1)−1
+
+1(cid:107)u − v(cid:107) for all u, v ∈ E1;
+2(cid:107)u − v(cid:107) for all u, v ∈ E2;
+
+2; u∗
+2(cid:107) < ρ1 + ρ2 for some ρ1 ≤ 2/(3ω∗
+1, ρ1) ⊂ E1 and B2 = B(u∗
+
+(3.6)
+1) and ρ2 ≤ 2/(3˜ω2) such that we have
+1 − u∗
+If (cid:107)u∗
+2, ρ2) ⊂ E2, then the intersection B1 ∩ B2 is
+B1 = B(u∗
+nonempty. Starting from any u0 ∈ B1 ∩ B2, Newton’s method will ﬁrst converge to
+1 ∈ E1 and then after deﬂation with M (·; u∗
+u∗
+
+(cid:13)(cid:13)(cid:13) ≤ ˜ω2(cid:107)u − v(cid:107).
+
+(cid:13)(cid:13)(cid:13)(cid:0)[M (u∗
+
+1) will converge to u∗
+
+1)F (u))(cid:48) − (M (v; u∗
+
+1)F (v))(cid:48)]
+
+1)F (u∗
+2)]
+
+[(M (u; u∗
+
+2 ∈ E2.
+
+The argument of Theorems 3.4 and 3.5 can be applied again to derive suﬃcient
+
+conditions for a single initial guess to converge to three or more solutions.
+
+A natural question to ask is if Algorithm 2.1 will recover the behaviour of switching
+continuation, i.e. if it will always discover connected branches for suﬃciently small
+∆λ. This is discussed in the following corollary.
+Corollary 3.6 (Connected roots). Let f : D × R → Y and suppose there
+exists a λc ∈ R such that f (·, λ) : D → Y is a continuously Fr´echet diﬀerentiable
+
+P. E. FARRELL ET AL.
+
+10
+function on the open subset D ⊆ U for λ > λc. Furthermore assume that there
+exists u∗
+2(λ)
+for λ > λc and u∗
+2(λc). Assume that for ﬁxed λ > λc all conditions from
+Theorem 3.5 hold for the function f (·, λ) : D → Y so that ρ1(λ), ρ2(λ) ∈ R as in
+Theorem 3.5 are well deﬁned. If
+
+2(λ) ∈ D such that f (u∗
+
+2(λ), λ) = 0 and u∗
+
+1(λ), λ) = f (u∗
+
+1(λ), u∗
+
+1(λc) = u∗
+
+1(λ) (cid:54)= u∗
+
+2(λ)(cid:107)
+1(λ) − u∗
+(cid:107)u∗
+ρ1(λ) + ρ2(λ)
+
+lim
+λ↓λc
+
+< 1,
+
+(3.7)
+
+1(λ)− u∗
+
+By assumption, (cid:107)u∗
+
+1 and u∗
+2(λ)(cid:107) → 0 as λ ↓ λc. As ρ1(λ) < (cid:107)u∗
+
+then an initial guess u0 ∈ D exists which converges to both u∗
+2 using Newton’s
+method and deﬂation for λ suﬃciently close to λc.
+1(λ)− u∗
+2(λ)(cid:107) (and
+similarly for ρ2(λ)), ρ1(λ) + ρ2(λ) → 0 also. Thus, the evaluation of the left-hand side
+of (3.7) requires the application of L’Hˆopital’s rule.
+A similar formulation applies to the case of branches meeting as λ ↑ λc, and to
+more than two roots. Our practical experience does indeed suggest that Algorithm
+2.1 is always able to ﬁnd branches connected via a bifurcation point; we conjecture
+that (3.7) always holds for suﬃciently regular functions.
+
+Note that these results are nonconstructive, i.e. the Lipschitz constants arising
+and the resulting radii of convergence are not in general known. Thus, it could be
+the case that the region of multiconvergence is too small to be of practical use in
+bifurcation analysis. We therefore apply Algorithm 2.1 to several problems of interest
+in the literature to investigate the robustness and eﬃciency of deﬂated continuation.
+
+4. Examples.
+
+4.1. Roots of unity. We consider the complex roots of unity
+
+(4.1)
+as the exponent q is varied. For q ∈ N+, the solutions are exp(2πik/q) for k = 1, . . . , q;
+this example studies how these solutions bifurcate for non-integer exponents.
+
+zq − 1 = 0
+
+Algorithm 2.1 was applied to (4.1) from q = 2 to q = 9 with ∆q = 0.1. Deﬂation
+was applied with power p = 2 and shift σ = 1. The resulting bifurcation diagram is
+shown in Figure 4.1, where the quantity plotted is the argument of the solution. For
+q = 2, the solutions are z = ±1; the solution z = −1 bifurcates and the resulting
+solutions approach z = ±i as q → 4. At q = 4, z = −1 undergoes another bifurcation,
+and the process repeats. In general there is a bifurcation at z = −1 for q ∈ 2N+, and
+the resulting branches are mutually disconnected from each other.
+
+As the bifurcation diagram is disconnected, switching continuation would identify
+at most one branch from any given initial solution. By contrast, deﬂated continuation
+identiﬁes the new solutions at z = −1 immediately and correctly computes the entire
+diagram.
+
+4.2. Deformation of a slender beam. The deformation of a slender vertical
+
+beam under loading is governed by Euler’s elastica equation [19]
+
+θ(cid:48)(cid:48) + λ2 sin (θ) = µ,
+
+θ(0) = θ(1) = 0,
+
+(4.2)
+
+where s is the arclength along the beam, θ(s) is the angle relative to the vertical axis,
+λ is the longitudinal force and µ is the transversal force. This system has long served
+as a model problem in bifurcation analysis [25].
+
+COMPUTING DISCONNECTED BIFURCATION DIAGRAMS
+
+11
+
+Bifurcation diagram for the roots of unity
+
+360
+
+315
+
+270
+
+225
+
+180
+
+135
+
+90
+
+45
+
+)
+s
+e
+e
+r
+g
+e
+d
+(
+
+)
+z
+(
+g
+r
+a
+
+0
+
+1
+
+2
+
+3
+
+4
+
+6
+
+7
+
+8
+
+9
+
+5
+q
+
+Fig. 4.1: Bifurcation diagram for the roots of unity (4.1) as a function of exponent
+q. The trivial branch z = 1 is not shown. The bifurcation diagram is disconnected;
+switching continuation from q = 2, z = −1 would only identify the branch marked
+with red circles. Blue squares denote the discovery of disconnected branches with
+deﬂation.
+
+Algorithm 2.1 was applied to (4.2), from λ = 0 to λ = 4π, with continuation
+step ∆λ = 0.1. The equation was discretized with 104 piecewise linear ﬁnite elements
+using FEniCS [20] and PETSc [3].
+In the absence of a transversal force (µ = 0),
+the initially straight solution θ(s) = 0 forms a trivial branch and was thus deﬂated
+before beginning Algorithm 2.1. Newton’s method was terminated with failure if
+convergence did not occur within 102 iterations. Deﬂation was applied with power
+p = 2, shift σ = 1 and with distances measured in the H 1 norm. After the forward
+continuation pass, arclength continuation backwards in λ was performed (without
+deﬂation) to complete the small sections of the bifurcation diagram where branches
+were not immediately discovered (cf. Figure 1.2b). The functional used was the L2
+norm, signed by sign(θ(cid:48)(0)).
+A series of pitchfork bifurcations at λ = nπ for n ∈ N+ (corresponding to the
+eigenvalues of the associated linear problem) result in the buckled modes emanating
+from the trivial branch. As all branches meet at bifurcation points with the trivial
+branch, both switching continuation and deﬂated continuation compute the entire
+bifurcation diagram, Figure 4.2a. However, if a transversal force is applied (µ = 1/2),
+the reﬂective symmetry is destroyed and the symmetric pitchfork bifurcations degen-
+erate. In this case, the initial branch disconnects from all other branches, resulting
+
+12
+
+2
+(cid:107)
+θ
+(cid:107)
+)
+)
+0
+(
+
+(cid:48)
+
+θ
+(
+n
+g
+i
+s
+
+3
+
+2
+
+1
+
+0
+−1
+−2
+−3
+0
+
+P. E. FARRELL ET AL.
+
+Buckling of an Euler elastica, µ = 0
+
+Buckling of an Euler elastica, µ = 1/2
+
+2
+(cid:107)
+θ
+(cid:107)
+)
+)
+0
+(
+
+(cid:48)
+
+θ
+(
+n
+g
+i
+s
+
+3
+
+2
+
+1
+
+0
+−1
+−2
+−3
+0
+
+8
+
+10
+
+12
+
+2
+
+4
+
+6
+
+λ
+
+(a) µ = 0
+
+8
+
+10
+
+12
+
+2
+
+4
+
+6
+
+λ
+
+(b) µ = 1/2
+
+Fig. 4.2: Bifurcation diagrams for the Euler elastica equation (4.2) as a function of
+longitudinal loading λ, for µ = 0 and µ = 1/2. For µ = 0, the bifurcation diagram
+is continuous and both switching continuation and deﬂated continuation discover the
+entire diagram. For µ = 1/2, the bifurcation diagram is disconnected: switching
+continuation only discovers the part of the diagram labelled with red circles, whereas
+deﬂated continuation correctly computes the entire diagram. Blue squares denote the
+discovery of disconnected branches with deﬂation.
+
+in a disconnected bifurcation diagram, Figure 4.2b. All of these other branches are
+missed with switching continuation applied to this path, yielding an incomplete rep-
+resentation of the dynamics of the system1. Deﬂated continuation correctly computes
+the bifurcation diagram without continuation along multiple parameters.
+
+4.3. Nonlinear pendulum. In the previous example, an additional source term
+destroyed the symmetry of the bifurcation diagram. This example serves to demon-
+strate that the same eﬀect can be achieved by inhomogeneous boundary conditions.
+The angle of a pendulum to the vertical is described by the same equation,
+
+θ(cid:48)(cid:48) + sin θ = 0,
+
+(4.3)
+
+but here we impose inhomogeneous Dirichlet conditions θ(0) = θ(10) = 2. It is well
+known that with these boundary conditions this equation permits multiple solutions
+[5]. One possible way to compute these solutions is to attempt a homotopy from the
+linear equation θ(cid:48)(cid:48) = 0 via the addition of a parameter ε multiplying the nonlinear
+term:
+
+θ(cid:48)(cid:48) + ε sin θ = 0,
+
+θ(0) = θ(10) = 2.
+
+(4.4)
+
+For ε = 0, (4.4) reduces to a trivial linear problem; for ε = 1, the problem of interest
+is recovered. It is clear that homotopy methods based on switching continuation will
+
+1It is possible to identify all of these solutions with switching continuation as follows: set µ = 0
+and continue λ from 0 to 4π; set λ = 4π and continue µ from 0 to 1/2; set µ = 1/2 and continue
+λ from 4π to 0. However, this is laborious and requires expert knowledge of the system; the right
+continuation strategy may not be obvious in more complex cases.
+
+COMPUTING DISCONNECTED BIFURCATION DIAGRAMS
+
+13
+
+Solutions of the nonlinear pendulum via homotopy
+
+2
+(cid:107)
+
+(cid:48)
+
+y
++
+y
+(cid:107)
+)
+0
+(
+
+(cid:48)
+
+y
+
+15
+
+10
+
+5
+
+0
+
+−5
+
+−10
+
+0
+
+0.1
+
+0.2
+
+0.3
+
+0.4
+
+0.6
+
+0.7
+
+0.8
+
+0.9
+
+1
+
+0.5
+ε
+
+Fig. 4.3: Bifurcation diagram for the nonlinear pendulum (4.4) as a function of ho-
+motopy parameter ε. As before, switching continuation only discovers that part of
+the diagram labelled with red circles. The blue square denotes the discovery of a
+disconnected branch with deﬂation.
+
+identify a solution for ε = 1 only if there is a branch that continuously connects it to
+the solution for ε = 0 [23, §11.3].2
+
+Algorithm 2.1 was applied to (4.4), from ε = 0 to ε = 1, with continuation step
+∆ε = 10−2. The equation was discretized with 104 standard piecewise linear ﬁnite
+elements using FEniCS and PETSc. The same deﬂation and solver settings were
+used as in the previous example. The functional considered was the product of the
+derivative at the left endpoint and the H 1 norm of the solution.
+
+The resulting bifurcation diagram is shown in Figure 4.3. For ε = 0, the problem
+has a unique solution; as continuation is applied to this branch, no bifurcation points
+are encountered, and hence with switching continuation only one solution would be
+identiﬁed for ε = 1. As previously mentioned, a major diﬃculty with such homotopy
+methods is that the resulting bifurcation diagram must continuously connect the
+solution for ε = 0 to those of ε = 1; homotopy works robustly if this property holds,
+and fails if it does not. With deﬂated continuation, the requirements for success
+are weakened. Given a branch {(u(t), λ(t)) : t ∈ [0, 1]}, deﬁne its support to be
+
+2Another approach would be to consider the associated initial-value problem with boundary
+conditions θ(0) = 2, θ(cid:48)(0) = ε. The resulting IVP can be solved for varying values of ε and the
+solutions with θ(10) = 2 selected. This shooting approach does not generalize to higher dimensions,
+and can be unstable.
+
+(cid:90)
+
+Ω
+
+(cid:90)
+
+(cid:90)
+
+P. E. FARRELL ET AL.
+
+14
+{λ(t) : t ∈ [0, 1]} ⊂ R. Whereas switching continuation homotopy ﬁnds a solution
+only if there exists a continuously connected branch between it and the initial guess,
+deﬂated continuation homotopy only necessitates that the union of the supports of
+the branches covers the interval [λmin, λmax]. This is precisely the case in Figure
+4.3. As the supports of the branches intersect, Algorithm 2.1 is able to discover
+the disconnected branches that come into existence at ε ≈ 0.575 and ε ≈ 0.697,
+and identiﬁes four additional solutions that switching continuation homotopy neglects
+along this path.
+
+4.4. Deformation of a hyperelastic beam. A major strength of deﬂated
+continuation is that it scales to ﬁne discretizations of partial diﬀerential equations
+(PDEs). Unlike switching continuation, deﬂated continuation does not demand the
+nonscalable computation of determinants or diﬃcult eigendecompositions to detect
+bifurcations or switch branches.
+In fact, all of the subproblems arising in deﬂated
+continuation can be solved eﬃciently if a good preconditioner is available for the
+underlying forward problem.
+
+The example of section 4.2 modelled the deformation of a beam under compres-
+sion with Euler’s elastica equation. In this example, we model the same physical phe-
+nomenon, but with a two-dimensional compressible neo-Hookean hyperelastic PDE,
+solved with scalable Krylov methods and preconditioners. The potential energy Π is
+given by
+
+ψ(u) dx −
+
+B · u dx −
+
+T · u ds,
+
+Π(u) =
+
+(4.5)
+where Ω is the reference domain, u : Ω → R2 is the displacement, ψ is the elastic
+stored energy density, B is the body force per unit reference area, and T is the traction
+force per unit reference length. To deﬁne ψ, consider the deformation gradient
+
+∂Ω
+
+Ω
+
+the right Cauchy–Green tensor
+
+F = I + ∇u,
+
+C = F T F,
+
+(4.6)
+
+(4.7)
+
+and its invariants J = det(C) and Ic = tr(C). The compressible neo-Hookean stored
+energy density is given by
+
+ψ =
+
+µ
+2
+
+(Ic − 2) − µlog(J) +
+
+λ
+2
+
+log(J)2,
+
+(4.8)
+
+where µ and λ are the Lam´e parameters, which are calculated from the Young’s
+In this problem, we take Ω = (0, 1) × (0, 0.1),
+modulus E and Poisson ratio ν.
+B = (0,−1000), T = 0, E = 106, and ν = 0.3. In addition, Dirichlet conditions are
+imposed on the left and right boundaries:
+
+u(0,·) = (0, 0),
+u(1,·) = (0,−ε),
+
+(4.9)
+
+(4.10)
+
+where ε is the parameter to be continued.
+
+For a ﬁxed ε, let Vε = {u ∈ H 1(Ω; R2) : u(0,·) = (0, 0), u(1,·) = (0,−ε)} be
+the function space of admissible displacements. Minimizers of (4.5) are computed by
+seeking solutions of the associated optimality condition: ﬁnd u ∈ Vε such that
+
+Π(cid:48)(u; v) = 0 ∀ v ∈ V0.
+
+(4.11)
+
+COMPUTING DISCONNECTED BIFURCATION DIAGRAMS
+
+15
+
+Buckling of a hyperelastic beam
+
+0.15
+
+0.10
+
+0.05
+
+0.00
+
+-0.05
+
+-0.10
+
+)
+5
+0
+.
+0
+,
+5
+2
+.
+0
+(
+2
+u
+
+-0.15
+
+0.00
+
+0.05
+
+0.10
+
+ε
+
+0.15
+
+0.20
+
+Fig. 4.4: Bifurcation diagram for the hyperelastic PDE formulation for the deforma-
+tion of a beam (4.11) as a function of the displacement on the right-hand boundary.
+As before, switching continuation only discovers that part of the diagram labelled
+with red circles. Blue squares denote the discovery of disconnected branches with
+deﬂation.
+
+Algorithm 2.1 was applied to (4.11), from ε = 0 to ε = 0.2, with continuation
+step ∆ε = 0.0005. The equation was discretized with 2 × 104 piecewise linear ﬁnite
+elements using FEniCS and PETSc. Newton’s method was terminated with failure if
+convergence did not occur within 102 iterations. Each Newton step was solved with
+the GAMG algebraic multigrid preconditioner [2], equipped with the near-nullspace
+of rigid body modes [12]. Deﬂation was applied with power p = 2, shift σ = 1 and
+with distances measured in the H 1 norm. The functional considered was the vertical
+component of displacement evaluated at (0.25, 0.05).
+
+It is well-known that for B = T = 0, (4.11) enjoys a Z2 reﬂective symmetry and
+its bifurcation diagram undergoes a series of pitchfork bifurcations as ε is increased,
+similar to Figure 4.2a. However, in this conﬁguration the reﬂective symmetry has
+been broken by imposing a gravitational body force, causing the bifurcation diagram
+to disconnect. The resulting diagram is shown in Figure 4.4, and the computed
+solutions with positive functional value are shown in Figure 4.5. The bifurcation
+diagram has been computed correctly, indicating that Algorithm 2.1 is robust to the
+use of indirect solvers, and that it will scale to much ﬁner discretizations of PDEs.
+
+4.5. A generalized Bratu–Gelfand problem in two dimensions. Previous
+examples have demonstrated that deﬂated continuation is able to ﬁnd branches that
+
+16
+
+P. E. FARRELL ET AL.
+
+Fig. 4.5: Some of the solutions to the hyperelastic PDE (4.11) for ε = 0.2, found with
+deﬂated continuation. The color refers to the magnitude of the displacement from the
+reference conﬁguration.
+
+switching continuation misses because they are disconnected. Switching continuation
+can fail in other ways: for example, if a bifurcation is caused by an eigenvalue of even
+multiplicity crossing the origin, the standard bifurcation test functional (1.2) will
+neglect it. This example exhibits such a bifurcation, and demonstrates that deﬂated
+continuation is robust to this failure mode.
+
+We consider the problem of Mittelmann [21]:
+
+−∇2y = −10(y − λey) ≡ φ(y, λ),
+∇y · ˆn = 0,
+
+in Ω = (−0.5, 0.5)2,
+on ∂Ω.
+
+(4.12)
+
+This is a generalization of the Bratu–Gelfand problem to multiple dimensions with
+the addition of a linear term, and has been used as a test problem for the PLTMG [21]
+and pde2path [29] continuation codes.
+
+As noted by Mittelmann, this equation has two spatially constant solutions that
+satisfy φ(y, λ) = 0, i.e. y(x) = ¯y with ¯y = λe¯y. Linearising around ¯y with y = ¯y + w
+yields an eigenvalue problem
+−∇2w =
+∂φ
+∂y
+∇w · ˆn = 0,
+
+w = −10(1 − ¯y)w,
+
+(cid:12)(cid:12)(cid:12)(cid:12)(¯y,λ)
+
+in Ω,
+
+on ∂Ω.
+
+(4.13)
+
+COMPUTING DISCONNECTED BIFURCATION DIAGRAMS
+
+17
+
+Bifurcation diagram for the Mittelmann problem
+
+5
+
+4
+
+3
+
+2
+
+1
+
+2
+(cid:107)
+y
+(cid:107)
+
+0
+0.00
+
+0.05
+
+0.10
+
+0.15
+
+0.20
+
+0.25
+
+0.30
+
+0.35
+
+0.40
+
+λ
+
+Fig. 4.6: Bifurcation diagram for the Mittelmann problem in two dimensions (4.12)
+as a function of λ. Standard switching continuation approaches that rely on the sign
+of the determinant (1.2) as a bifurcation test functional only discover that part of
+the diagram labelled with red circles. Blue squares denote the branch overlooked by
+switching continuation, but found by deﬂated continuation. Compare with [21, Figure
+1], [29, Figure 2a].
+
+Non-trivial perturbations of the constant solutions can be located by examining the
+eigenvalues and corresponding eigenfunctions of the Laplacian on Ω. The bifurcation
+points are found by solving −10(1 − ¯y) = µm,n where µm,n are the eigenvalues of the
+Laplacian with Neumann boundary conditions. In this case, µm,n = (m2 + n2)π2 for
+m, n ∈ N+, and thus the bifurcations occur when ¯ym,n = 1 + µm,n/10 and λm,n =
+¯ym,ne−¯ym,n . The initial bifurcation points occur at λ0,0 = e−1 ≈ 0.3678 (a fold
+bifurcation), λ0,1 = λ1,0 ≈ 0.2724 (a double pitchfork bifurcation), and λ1,1 ≈ 0.1519
+(a simple pitchfork bifurcation).
+
+Consider again the computation of the bifurcation test functional τ , deﬁned in
+(1.2).
+In the case when a simple bifurcation point is crossed τ will indicate this
+by negation, as one of the eigenvalues will have passed through the origin. On the
+other hand, if an eigenvalue of even multiplicity passes through the origin, τ remains
+unchanged.
+In this case the bifurcation point is overlooked, and the machinery of
+switching continuation is not activated.3
+
+3Switching continuation can be rescued by deliberately breaking the symmetry of the domain, to
+unfold the double eigenvalues. Uecker et al. [29, Figure 4] suggest breaking the rotational symmetry of
+the domain by solving on ˜Ω = (−0.5, 0.5)×(−0.495, 0.495). The solutions found can then be continued
+
+18
+
+P. E. FARRELL ET AL.
+
+As the Mittelmann problem is two-dimensional, the Laplacian has degenerate
+eigenvalues of even multiplicity. For example, its eigenvalues µ0,1 and µ1,0 are identical
+but correspond to diﬀerent eigenfunctions (related by rotation). Thus, the associated
+bifurcation point at λ ≈ 0.2724 is missed by switching continuation, even though the
+bifurcation diagram is connected. This deﬁciency is not speciﬁc to this equation, and
+will manifest in any situation where such degeneracy of eigenvalues occurs.
+
+By contrast, the speciﬁc nature of the bifurcation is irrelevant to deﬂated contin-
+uation; we expect the algorithm to ﬁnd nearby solutions regardless of the details of
+how the branches are connected (or not connected). To investigate this, Algorithm
+2.1 was applied to (4.12), for λ ∈ [0.3678, 0.05], with continuation step ∆λ = −0.0001.
+The equation was discretized with 1600 piecewise linear ﬁnite elements using FEniCS
+and PETSc. Newton’s method was terminated with failure if convergence did not
+occur within 102 iterations. The same deﬂation and solver settings were used as in
+all previous examples. Following Uecker et al. [29], the functional considered was the
+L2 norm of the solution.
+
+The resulting diagram is shown in Figure 4.6. The outer branches (on the top and
+bottom) are the constant solutions, with branches bifurcating from the upper branch
+at λ0,1 = λ1,0 and λ1,1 as expected, and secondary bifurcations in turn emanating from
+these. Importantly, all branches in this interval have been discovered, including the
+branch overlooked with switching continuation (denoted with blue squares). Deﬂated
+continuation applies to both connected and disconnected bifurcation diagrams on
+which switching continuation fails.
+
+5. Conclusion. We have presented a new algorithm for bifurcation analysis that
+relies on the elimination of known branches, rather than the detection and analysis
+of bifurcation points.
+In this way, the algorithm applies equally to connected and
+disconnected diagrams. We have developed an initial analysis of multiconvergence of
+Newton’s method, giving suﬃcient conditions for when convergence to two solutions
+is guaranteed. In numerical experiments the algorithm is eﬀective and succeeds where
+switching continuation fails.
+
+Unlike switching continuation, the algorithm relies only on the solution of the orig-
+inal nonlinear problem with a ﬁxed parameter value, and the solution of deﬂations
+of that problem. The latter is straightforward to implement and solve if a precondi-
+tioner for the former is available. There is no need to implement augmented systems
+for diﬀerent kinds of bifurcation points, or to compute expensive test functionals, or
+to construct the nullspace of singular operators. Thus, if a scalable preconditioner
+for the undeﬂated Jacobian is available, it will be possible to apply the algorithm to
+massive discretizations of PDEs on supercomputers.
+
+References.
+
+[1] J. P. Abbott, Numerical continuation methods for nonlinear equations and
+
+bifurcation problems, PhD thesis, Australian National University, 1977.
+
+[2] M. F. Adams, H. H. Bayraktar, T. M. Keaveny, and P. Papadopou-
+los, Ultrascalable implicit ﬁnite element analyses in solid mechanics with over
+a half a billion degrees of freedom, in ACM/IEEE Proceedings of SC2004: High
+Performance Networking and Computing, Pittsburgh, Pennsylvania, 2004.
+
+[3] S. Balay, S. Abhyankar, M. F. Adams, J. Brown, P. Brune,
+K. Buschelman, L. Dalcin, V. Eijkhout, W. D. Gropp, D. Kaushik,
+
+to the true Ω. While this strategy is successful, it is laborious and requires expert knowledge of the
+system at hand.
+
+COMPUTING DISCONNECTED BIFURCATION DIAGRAMS
+
+19
+
+M. G. Knepley, L. Curfman McInnes, K. Rupp, B. F. Smith, and
+H. Zhang, PETSc users manual, Tech. Report ANL-95/11 - Revision 3.6, Ar-
+gonne National Laboratory, 2015.
+
+[4] C. H. L. Beentjes, Computing Bifurcation Diagrams with Deﬂation, master’s
+
+thesis, University of Oxford, 2015.
+
+[5] ´A. Birkisson, Numerical Solution of Nonlinear Boundary Value Problems for
+Ordinary Diﬀerential Equations in the Continuous Framework, PhD thesis, Uni-
+versity of Oxford, 2014.
+
+[6] L. Blum, F. Cucker, M. Shub, and S. Smale, Complexity and Real Com-
+
+putation, Springer-Verlag, 1998.
+
+[7] K. M. Brown and W. B. Gearhart, Deﬂation techniques for the calculation
+of further solutions of a nonlinear system, Numerische Mathematik, 16 (1971),
+pp. 334–342.
+
+[8] K. A. Cliffe, A. Spence, and S. J. Tavener, The numerical analysis of bi-
+furcation problems with application to ﬂuid mechanics, Acta Numerica, 9 (2000),
+pp. 39–131.
+
+[9] P. Deuflhard, Newton Methods for Nonlinear Problems, vol. 35 of Springer
+
+Series in Computational Mathematics, Springer-Verlag, 2011.
+
+[10] E. J. Doedel, AUTO: A program for the automatic bifurcation analysis of
+in Congressum Numerantium: Proceedings of the 10th
+autonomous systems,
+Manitoba conference on Numerical Mathematics and Computing, vol. 30, 1981,
+pp. 265–284.
+
+[11] M. Fabian, P. Habala, P. H´ajek, V. Montesinos, and V. Zizler, Ba-
+nach Space Theory: the Basis for Linear and Nonlinear Analysis, CMS Books in
+Mathematics, Springer-Verlag, 2011.
+
+[12] R. D. Falgout, An introduction to algebraic multigrid computing, Computing
+
+in Science & Engineering, 8 (2006), pp. 24–33.
+
+[13] P. E. Farrell, Multiple local minima of PDE-constrained optimisation problems
+
+via deﬂation, 2015. arXiv:1508.07633 [math.OC].
+
+[14] P. E. Farrell, ´A. Birkisson, and S. W. Funke, Deﬂation techniques for
+ﬁnding distinct solutions of nonlinear partial diﬀerential equations, SIAM Journal
+on Scientiﬁc Computing, 37 (2015), pp. A2026–A2045.
+
+[15] M. Golubitsky and D. Schaeffer, Singularities and Groups in Bifurcation
+
+Theory: Volume I, vol. 51 of Applied Mathematical Sciences, Springer, 1985.
+
+[16] L. Kantorovich, On Newton’s method for functional equations, Doklady
+
+Akademii Nauk SSSR, 59 (1948), pp. 1237–1249.
+
+[17] H. B. Keller, Numerical solution of bifurcation and nonlinear eigenvalue prob-
+lems, in Applications of Bifurcation Theory, P. H. Rabinowitz, ed., New York,
+1977, Academic Press, pp. 359–384.
+
+[18] E. Leonard and K. Sundaresan, A note on smooth Banach spaces, Journal
+
+of Mathematical Analysis and Applications, 43 (1973), pp. 450–454.
+
+[19] R. Levien, The elastica: a mathematical history, Tech. Report UCB/EECS-
+
+2008-103, University of California, Berkeley, 2008.
+
+[20] A. Logg, K. A. Mardal, G. N. Wells, et al., Automated Solution of
+
+Diﬀerential Equations by the Finite Element Method, Springer, 2011.
+
+[21] H. D. Mittelmann, Multilevel continuation techniques for nonlinear boundary
+value problems with parameter dependence, Applied Mathematics and Computa-
+tion, 19 (1986), pp. 265–282.
+
+[22] I. Mysovskikh, On convergence of Newton’s method, Trudy Matematicheskogo
+
+20
+
+P. E. FARRELL ET AL.
+
+Instituta imeni V.A. Steklova, 28 (1949), pp. 145–147.
+
+[23] J. Nocedal and S. J. Wright, Numerical Optimization, Springer Verlag, 2006.
+[24] L. B. Rall, A note on the convergence of Newton’s method, SIAM Journal on
+
+Numerical Analysis, 11 (1974), pp. 34–36.
+
+[25] E. L. Reiss, Column buckling – an elementary example of bifurcation, in Bifur-
+cation Theory and Nonlinear Eigenvalue Problems, J. B. Keller and S. Antman,
+eds., W. A. Benjamin, 1969, pp. 1–16.
+
+[26] W. C. Rheinboldt, An adaptive continuation process for solving systems of
+nonlinear equations, in Mathematical Models and Numerical Methods, vol. 3,
+Banach Center Publications, 1978, pp. 129–142.
+
+[27] R. Seydel, Practical Bifurcation and Stability Analysis, vol. 5 of Interdisci-
+
+plinary Applied Mathematics, Springer, 3 ed., 2010.
+
+[28] K. Sundaresan, Smooth Banach spaces, Mathematische Annalen, 173 (1967),
+
+pp. 191–199.
+
+[29] H. Uecker, D. Wetzel, and J. D. M. Rademacher, pde2path - A Mat-
+lab package for continuation and bifurcation in 2D elliptic systems, Numerical
+Mathematics: Theory, Methods and Applications, 7 (2014), pp. 58–106.
+
+

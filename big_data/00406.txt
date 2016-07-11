@@ -1,0 +1,2340 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+1
+
+ 
+
+ 
+ 
+]
+I
+
+N
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+6
+0
+4
+0
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Distributed Load Management Algorithms in
+
+Anycast-based CDNs$
+
+Abhishek Sinhaa,∗, Pradeepkumar Manib, Jie Liud, Ashley Flavelc,∗∗, Dave Maltzb
+
+aMassachusetts Institute of Technology, Cambridge, MA
+
+bMicrosoft Inc., Redmond, WA
+cSalesforce.com, Redmond, WA
+
+dMicrosoft Research, Redmond, WA
+
+Abstract
+Anycast is an internet addressing protocol where multiple hosts share the same
+IP-address. A popular architecture for modern Content Distribution Networks
+(CDNs) for geo-replicated services consists of multiple layers of proxy nodes for
+service and co-located DNS-servers for load-balancing among different proxies.
+Both the proxies and the DNS-servers use anycast addressing, which offers sim-
+plicity of design and high availability of service at the cost of partial loss of routing
+control. Due to the very nature of anycast, redirection actions by a DNS-server
+also affects loads at nearby proxies in the network. This makes the problem of op-
+timal distributed load management highly challenging. In this paper, we propose
+and evaluate an analytical framework to formulate and solve the load-management
+problem in this context. We consider two distinct algorithms. In the ﬁrst half
+of the paper, we pose the load-management problem as a convex optimization
+problem. Following a Kelly-type dual decomposition technique, we propose a
+fully-distributed load-management algorithm by introducing FastControl packets.
+This algorithm utilizes the underlying anycast mechanism itself to enable effec-
+tive coordination among the nodes, thus obviating the need for any external con-
+trol channel. In the second half of the paper, we consider an alternative greedy
+
+and Computing 2015.
+
+$Part of the paper appeared in 53rd Annual Allerton Conference on Communication, Control
+∗Corresponding Author
+∗∗This work was done when the author was an employee at Microsoft, Redmond.
+
+Email addresses: sinhaa@mit.edu (Abhishek Sinha), prmani@microsoft.com
+
+(Pradeepkumar Mani), Jie.Liu@microsoft.com (Jie Liu),
+aflavel@salesforce.com (Ashley Flavel), dmaltz@microsoft.com (Dave Maltz)
+
+Preprint submitted to Computer Networks
+
+March 2, 2016
+
+2
+
+load-management heuristic, currently in production in a major commercial CDN.
+We study its dynamical characteristics and analytically identify its operational and
+stability properties. Finally, we critically evaluate both the algorithms and explore
+their optimality-vs-complexity trade-off using trace-driven simulations.
+Keywords: Performance Analysis; Decentralized and Distributed Control;
+Optimization
+
+1. Introduction
+
+With the advent of ubiquitous computing and web-access, the last decade has
+witnessed an unprecedented growth of Internet-trafﬁc. Popular websites, such
+as bing.com, registers more than a billion hits per day, which need to be pro-
+cessed efﬁciently in an online fashion, with as little latency as possible. Content
+Distribution Networks (CDN) are de facto architectures to transparently reduce
+latency between the end-users and the web-services. In CDNs, a collection of
+non-origin servers (also known as proxies) attempt to ofﬂoad requests from the
+main servers located in the data-centers, by delivering cached contents on their
+behalf [13]. Popular examples of internet services using CDN includes web ob-
+jects, live-streaming media, emails and social networks [23]. Edge-servers with
+cached contents serve as proxies to intercept some user requests and return con-
+tents without a round-trip to the data-centers. Online routing of user-requests to
+the optimal proxies remains a fundamental challenge in managing modern CDNs.
+Routing to a remote proxy may introduce extra round-trip delay, whereas routing
+to an overloaded proxy may cause the request to be dropped.
+
+Anycast is a relatively new paradigm for CDN-management and there are al-
+ready several commercial CDNs in place today using anycast [8], [6], [26]. With
+anycast, multiple proxy-servers, having the same user-content, share the same
+IP-address. Anycast relies on internet-routing protocols (such as, BGP) to route
+service-requests to any one of the geo-replicated proxies, over a cheap network-
+path [28]. Anycast based mechanisms have the advantage of being simple to
+deploy and maintain. Being available as a service in IPv6 networks, no global
+topology or state information are required for its use [2].
+
+Although anycast routing can simplify the system-design and provide a high
+level of service-availability to the end-users [22], it comes at the cost of partial
+loss of routing-control. This is because, a user-request may be routed to any one
+of the multiple geo-replicated proxies having the same anycast address. Since
+the user-to-proxy routing is done by the Internet routing protocols, which is not
+
+DNS server
+
+3
+
+192.168.0.1
+
+192.168.0.1
+
+User 1
+
+User 2
+
+Proxy 1
+
+IP: 192.168.0.1
+
+Proxy 2
+
+IP: 192.168.0.1
+
+Figure 1: An example of Anycast-enabled CDN. User 1 and 2 obtain the anycast IP-address from
+the DNS server (blue-dotted arrow) and are then routed over the Internet either to Proxy 1 or to
+Proxy 2 for service (red solid arrow). Note that both proxies have the same IP-address (Anycast
+addressing). The fraction of users landing on a given proxy is dictated by the Internet routing
+protocols and is beyond the control of CDN operators. This lack of load-awareness often leads to
+overloading of certain proxies.
+
+under the control of the CDN-operator, the user-request may end up in an already
+overloaded proxy, deteriorating its loading-condition further. Figure 1 illustrates
+the problem of load-management with Anycast.
+
+There have been several attempts in the literature to cope up with the lack of
+load-awareness issue with network-layer anycast. Papers [16], [9] consider “Ac-
+tive Anycast” where additional intelligence is incorporated into the routers based
+on RTT and network congestion. It is speciﬁcally targeted to reduce pure latency
+rather than server overload, thus yielding sub-optimal performance in a CDN set-
+ting. Alzoubi et al. [1] formulates the anycast load-management problem as a
+General Assignment Problem, which is NP-hard. The paper [10] proposes a new
+CDN architecture which balances server-load and network-latency via detailed
+trafﬁc engineering.
+
+In this paper, we focus our attention to a state-of-the-art CDN-architecture,
+such as FastRoute [8], which uses DNS-controlled-redirection for overload con-
+trol in the proxies. Since DNS (Domain Name System) is the ﬁrst point-of-contact
+of users to the internet, DNS-redirection is a popular and effective way to miti-
+gate overload [19], [24]. In this architecture, the proxies are logically arranged
+in layers of anycast rings, with each layer having a distinct Anycast IP-address.
+
+4
+
+See Figure 3 for an example. The provisioned capacities of the proxies increase
+as we move from the outer-layers to the inner-layers of the anycast rings. DNS is
+responsible for moving load across different layers by intelligently responding to
+users with different anycast addresses. Each proxy is equipped with a co-located
+authoritative DNS server. We will collectively refer to a proxy and its co-located
+DNS-server simply as a node. Figure 2 and Figure 3 provide a high-level overview
+of the proposed CDN-architecture.
+
+An overload is said to occur when any proxy receives more service-requests
+than its processing-capacity. Since DNS is the primary control knob in this archi-
+tecture, each DNS-server at a node is responsible for redirecting trafﬁc to other
+layers to alleviate overload in the co-located proxy. A fundamental problem with
+this approach is that not all users, that hit a given proxy, can be redirected success-
+fully by the co-located DNS. This is because, due to anycast routing, DNS-path
+and the data-ﬂow paths are independent. Hence, an user’s Local DNS (LDNS)
+could be obtaining a DNS-response from some authoritative DNS-server in a
+node, which is different from the DNS server co-located with the proxy which
+the user hits. An example is shown in Figure 2. Hence, intuitively, the ability for
+a DNS-server at a node to control overload at the corresponding co-located proxy
+depends on the fraction of oncoming trafﬁc to the proxy that are routed by the co-
+located DNS-server to the node itself. Informally, we refer to the above quantity
+as the self-correlation [8] of a given node. A formal deﬁnition of correlation in
+this context will be given in Section 2.
+
+Poor self-correlation could impair a node’s ability to control overload in iso-
+lation. Hence, successful load management in layered CDN should involve coor-
+dinated action by DNS-servers in multiple nodes to alleviate overload. Thus the
+problem reduces to the DNS-plane determining the appropriate ofﬂoad or redirec-
+tion probabilities at each node to move trafﬁc from the overloaded proxies to the
+next layer. This control-decision could be based on variety of information such as
+load on each proxy, DNS-HTTP correlation etc. From a practical point of view,
+not all of these quantities are easily measured and communicated to wherever is
+needed. Thus a centralized solution is not practically feasible and the challenge is
+to design a provably optimal, yet completely distributed load management algo-
+rithm.
+
+Our key contributions in this paper are as follows:
+
+• In section 2, we present a simpliﬁed mathematical model for DNS-controlled
+load-management in modern anycast-based CDNs. Our model is general
+enough to address the essential operational problems faced by the CDN-
+
+Co-located Co-located
+
+DNS
+
+Proxy
+
+C12
+
+User
+
+Co-located Co-located
+
+DNS
+
+Proxy
+
+5
+
+Node 1
+
+Node 2
+
+Figure 2: Two FastRoute CDN nodes with their corresponding co-located DNS and Proxy servers.
+Note that, although the user gets served by the proxy at Node 2, it obtains the anycast IP-address
+from the DNS server at Node 1. Thus, in case of overload, this user can not be redirected from
+node 2 by altering the DNS-response from the co-located DNS server at node 2.
+
+operators yet tractable enough to draw meaningful analytical conclusions
+about its operational characteristics.
+
+• In section 3, we formulate the load management problem as a convex op-
+timization problem and propose a Kelly-type dual algorithm [11] to solve
+it in a distributed fashion. The key to our distributed implementation is the
+Lagrangian decomposition and the use of FastControl packets, which ex-
+ploits the underlying anycast architecture to enable coordination among the
+nodes in a distributed fashion. To the best of our knowledge, this is the
+ﬁrst instance of such a decomposition technique employed in the context of
+load-management in CDNs.
+
+• In section 4, we consider an existing heuristic load-management algorithm
+used in FastRoute, Microsoft's CDN for many ﬁrst party websites and ser-
+vices it owns [15]. We model the dynamics of this heuristic using non-linear
+system-theory and analytically derive its operational characteristics, which
+conform with the qualitative observations. To provide additional insight, a
+two-node system is analyzed in detail and it is shown, rather surprisingly,
+that given the “self-correlations” of the nodes are sufﬁciently high, this
+heuristic load-management algorithm is able to control an incoming-load
+of any magnitude, however large. Unfortunately, this theoretical guarantee
+
+6
+
+(Node= Proxy+ Co-located DNS-server)
+
+Node 1
+
+L1
+
+L2
+
+L1
+
+Node 2
+
+L2
+Users
+
+Figure 3: A CDN architecture with two anycast layers. Solid arrows denote user’s DNS path.
+Node 1’s DNS returns the anycast address for Layer 1, so, due to anycast, the user gets redirected
+to other nodes in L1. Node 2’s DNS returns the anycast address for L2. So the user is redirected
+to the data-center.
+
+breaks down once this correlation property no longer holds. In this case, the
+dual algorithm proposed in section 3 performs better than the heuristic.
+
+• In section 5, we critically evaluate relative performance-beneﬁts of the pro-
+posed optimal and the heuristic algorithm through extensive numerical sim-
+ulations. Our simulation is trace-driven in the sense we use real correlation
+parameters collected over months from a large operational CDN [8].
+
+2. System Model
+
+Nodes and Layers: We consider an anycast-based CDN system consisting of
+two logical anycast layers: primary (also referred to as L1) and secondary (also
+referred to as L2). See Figure 3 for a graphic depiction. The primary layer (L1)
+hosts a total of N nodes. Each node consists of a co-located authoritative DNS and
+a proxy server. See Figure 2 for a schematic diagram. The proxy servers are the
+end-points for user-requests (e.g. HTTP). The ith proxy has a (ﬁnite) processing-
+capacity of Ti user-requests per unit time. The secondary layer (L2) consists of a
+single data-center, with practically inﬁnite processing-capacity. Since the proxies
+in L1 are geographically distributed throughout the world, an average user is typi-
+cally located near to at least one proxy, resulting in relatively small user-to-proxy
+round-trip latency. On the other hand, the single data-center in L2 is typically
+located further from the average user-base, resulting in signiﬁcantly high user-to-
+data-center round-trip latency. Total response time for a user is the sum of round-
+
+7
+
+trip latency and processing time of the server (either proxy or the data-center),
+which we would like to minimize.
+Anycast Addressing : As discussed earlier, all proxies in the primary layer
+share the same IP-address I1 and the data-center in L2 has a distinct IP-address
+I2. This method of multiple proxies sharing the same IP-addresses is known as
+anycast addressing and is widely used for geo-replicated cloud services [27], [1].
+Control actions : When a DNS-request by an user 1 arrives at a node i in L1,
+requesting for the IP-address of a server, the co-located DNS-server takes one of
+the following actions
+
+• (1) It either returns the address I2 (which ofﬂoads the user-request to the
+data-center) or,
+• (2) it returns the anycast address I1 (which, instead, serves the user-request
+in some proxy in the primary layer L1 itself).
+
+This (potentially randomized) binary decision by the co-located DNS-server of
+node i could be based on the following local variables measurable at node i :
+
+1. DNS-inﬂuenced request arrival rate at node i’s co-located DNS-server,
+denoted by Ai requests per unit time2. Each DNS-request accounts for a
+certain amount of user-generated load which is routed to L1 or L2 according
+to the DNS-response by node i; We normalize Ai so that each unit of Ai
+corresponds to a unit of user-load; As an example, if 10% of DNS responses
+at node i returns the address I2, then the total amount of load shifted to the
+data-center (L2) due to node i’s DNS is 0.1Ai.
+
+2. User-load arrival rate at node i’s co-located proxy, denoted by Si(t) re-
+quests per unit time. This is clearly a function of the DNS-arrivals Ai’s
+and the redirection-decisions of the co-located DNS of different nodes (See
+Eqn.(2)). The variable Si(t) is available locally at node i (e.g., HTTP
+connection-request arrival-rates at the co-located proxy-server, in case of
+web-applications). We assume that the workloads induced by different user-
+requests have very small variability (which is true for web search query
+trafﬁc, e.g.).
+
+1In the Internet DNS-requests are actually generated by the Local DNS (LDNS) of the user and
+are recursively routed to an authoritative DNS server. However, to keep the model and the analysis
+simple, we will assume that individual DNS-queries are submitted by the users themselves.
+
+2We assume that Ai’s are piecewise constant and do not change considerably during the tran-
+
+sient period of the load-management algorithms discussed here.
+
+8
+
+Anycasting and inter-node coupling: When a DNS-request arrives at a node
+i and the co-located DNS-server returns the L1 anycast-address I1, the corre-
+sponding user-request may be routed to any of one of the N proxy-servers (all
+having the same IP-address I1) in the primary layer for service. The particular
+proxy, where the user-request actually gets routed to, depends on the correspond-
+ing ISP’s routing policy, network congestion and many other factors. We assume
+that a typical DNS-query, which is routed to L1 by the node i, lands at node j’s
+proxy for service with probability Cij, where
+
+Cij = 1, ∀i = 1, 2, . . . , N
+
+(1)
+
+N(cid:88)
+
+j=1
+
+In our system, we have determined the matrix C ≡ [Cij] empirically by setting
+up an experiment similar to the one described in [24], using data collected over
+several months.
+In the ideal case, we would like to have C ≈ I, where I is the N × N identity
+matrix. In this case, the nodes operate in an isolated fashion and situations like
+Figure 2 rarely takes place. However, as reported in [8], in real CDN-systems
+with ever-increasing number of proxies, the node are often highly-correlated. In
+this paper, we investigate the consequences that arise from non-trivial correlations
+among different nodes and its implications for designing load-management algo-
+rithms for CDNs.
+System Equations: Assume that, due to action of some control-strategy π,
+the co-located DNS at node i decides to randomly redirect 1 − xπ
+i (t) fraction of
+i (t) ≤ 1). Thus
+incoming DNS-queries (given by Ai) to Layer L2 at time t (0 ≤ xπ
+i (t) fraction of the incoming requests to different proxies in the layer
+it routes xπ
+L1. Hence the total user-load arrival rate, Si(t), at node i’s co-located proxy may
+be written as
+
+N(cid:88)
+
+j=1
+
+Si(t) =
+
+CjiAjxπ
+
+j (t), ∀i = 1, 2, . . . , N
+
+(cid:19)
+
+A local control strategy π is identiﬁed by a collection of mappings π =
+
+1, 2, . . . , N
+at node i up to time t.
+
+, given by xπ
+
+i : Ωt
+
+i × t → [0, 1], where Ωt
+
+i is the set of all observables
+
+(cid:18)
+
+(2)
+
+i (·), i =
+xπ
+
+9
+
+3. An Optimization Framework
+3.1. Motivation
+
+The central objective of a load-management policy π in a two-layer Anycast-
+CDN is to route as few requests as possible to the Data-Center L2 (due to its high
+round-trip latency), without overloading the primary-layer L1 proxies (due to their
+limited capacities). Clearly, these two objectives are at conﬂict with each other
+and we need to ﬁnd a suitable compromise. The added difﬁculty, which makes
+the problem fundamentally challenging is that, each node is an autonomous agent
+and takes its redirection decisions on its own, based on its local observables only.
+As an example, a simple locally-greedy heuristic for node i would be to redirect
+requests to L2 (i.e. decrease xi(t)) whenever its co-located proxy is overloaded
+(i.e., Si(t) > Ti) and redirect requests to L1 (i.e., increase xi(t)) whenever the
+co-located proxy is under-loaded (i.e., Si(t) < Ti). This policy forms the basis of
+the greedy control-strategy used in [8].
+This greedy strategy appears to be quite appealing for deployment, due to its ex-
+treme simplicity. However, in the next subsection 3.2, we show by a simple exam-
+ple that, in the presence of signiﬁcantly high cross-correlations among the nodes
+(i.e. non-negligible value of Cij, i (cid:54)= j), this simple heuristic could lead to an
+uncontrollable overload situation, an extremely inefﬁcient operating point with
+degraded service quality. This example will serve as a motivation to come up with
+a more efﬁcient distributed load-management algorithm, that we develop subse-
+quently.
+
+3.2. Locally Uncontrollable Overload: An Example
+
+Consider a two-layered CDN, hosting only two nodes a and b in the primary
+layer L1, as shown in Figure 4. The (normalized) DNS-request arrival rates to the
+nodes a and b are Aa = 1 and Ab = 1. Suppose the processing capacities (also
+referred to as thresholds) of the co-located proxies are Ta = 0.7 and Tb = 0.7
+respectively. With the correlation components [Cij] as shown in Figure 4, the
+user-loads at the co-located proxies are given as
+
+(3)
+(4)
+Since 0 ≤ xa(t), xb(t) ≤ 1, it is clear that under any control policy x(t) the
+following holds
+
+Sa(t) = 0.1xa(t) + 0.5xb(t)
+Sb(t) = 0.9xa(t) + 0.5xb(t)
+
+Sa(t) ≤ 0.1 × 1 + 0.5 × 1 = 0.6 < 0.7 = Ta, ∀t
+
+Trafﬁc to
+Aa(1 − xa(t))
+
+L2
+
+Cba = 0.5
+
+Trafﬁc to
+Ab(1 − xb(t))
+
+L2
+
+10
+
+Caa
+= 0.1
+
+Ta = 0.7
+xa(t)
+
+Tb = 0.7
+xb(t)
+
+L1
+
+Cbb = 0.5
+
+Aa = 1
+
+Cab = 0.9
+
+Ab = 1
+
+Figure 4: A two-node system illustrating locally uncontrollable overload at the node b
+
+Thus, the proxy at node a will be under-loaded irrespective of the load-management
+policy π in use. Consequently, under the greedy-heuristic (formally, Algorithm 2
+in Section 4), the co-located DNS-server at node a will greedily increase its L1
+redirection probability xa(t) such that xa(t) (cid:37) 1 in the steady-state (note that,
+node a acts autonomously as it does not have node b’s loading information). This,
+in turn, overloads the co-located proxy in node b because the steady-state user-
+load at proxy b becomes
+
+Sb(∞) = 0.9xa(∞) + 0.5xb(∞)
+
+= 0.9 × 1 + 0.5xb(∞)
+≥ 0.9 > 0.7 = Tb.
+
+Since node b is overloaded in the steady-state, under the action of the above
+greedy heuristic, it will (unsuccessfully) try to avoid the overload by ofﬂoading
+the incoming DNS-queries to L2, as much as it can, by letting xb(t) (cid:38) 0. Thus
+the steady-state operating point of the algorithm will be xa(∞) = 1, xb(∞) = 0,
+with node b overloaded. It is interesting to note that poor self-correlation of node
+a (Caa = 0.1) causes the other node b to overload, even under the symmetric
+DNS-request arrival patterns. Also, this conclusion does not depend on the de-
+tailed control-dynamics of the ofﬂoad probabilities (viz. the instantaneous values
+if ˙x1(t) and ˙x2(t)). Since the overload condition at the node-b can not be overcome
+by isolated autonomous action of node-b itself, we say that node-b is undergoing
+a locally uncontrollable overload situation.
+From the CDN-system point-of-view, the above situation is an extremely inefﬁ-
+cient operating-point, because a large fraction (45% in the above example) of the
+incoming user-requests either gets dropped or severely-delayed due to the over-
+loaded node-b. This poor operating point could have been potentially avoided
+
+ab11
+
+provided the nodes somehow mutually co-ordinate their actions3. It is not difﬁ-
+cult to realize that the principal reasons behind the locally uncontrollable overload
+situation in the above example are as follows:
+
+• (1) distributed control with local information
+
+• (2) poor self-correlation of node a (Caa = 0.1)
+
+The factor (1) is fundamentally related to the distributed nature of the system and
+requires coordinations among the nodes. In our distributed algorithm [1] we ad-
+dress this issue by introducing the novel idea of FastControl packets. This strategy
+does not require any explicit state or control-information exchange.
+Regarding the factor (2), we intuitively expect that the local greedy-heuristic
+should work well if the self-correlation of the nodes (i.e. Cii) are not too small. In
+this favorable case, the system will be loosely coupled, so that each node accounts
+for a major portion of the oncoming load to itself. In section 4, we will return to
+a variant of this local heuristic used in FastRoute [8] and derive analytical condi-
+tions under which the above intuition holds good.
+In this section, we take a principled approach and propose an iterative load-
+management algorithm, which is provably optimal for arbitrary system-parameters
+(A, C). In this algorithm, it is enough for each node i to know its own local DNS
+and user-load arrival rates (i.e., Ai and Si(t) respectively) and the entries corre-
+sponding to the ith row and column of the correlation matrix C (i.e., Ci·, C·i). No
+non-local knowledge of the dynamic loading conditions of other nodes j (cid:54)= i is
+required for its operation.
+
+3.3. Mathematical formulation
+
+We consider the following optimization problem. The variables x and S have
+the same interpretation as above. The cost-functions, constraints and their con-
+nection to the load-management problem are discussed in detail subsequently.
+
+Minimize W (x, S) ≡ N(cid:88)
+
+(cid:0)gi(Si) + hi(xi)(cid:1)
+
+i=1
+
+(5)
+
+3Another trivial solution to avoid overload could be to ofﬂoad all trafﬁc from all nodes to L2,
+i.e. xi(t) = 0,∀i,∀t. However, this is highly inefﬁcient because it is tantamount to not using the
+proxies in the Primary layer L1 at all.
+
+Subject to,
+
+N(cid:88)
+
+j=1
+
+Si =
+
+CjiAjxj, ∀i = 1, 2, . . . , N
+
+x ∈ X, S ∈ ΣT
+
+12
+
+(6)
+
+ ηiSi
+
+if Si ≤ Ti
+
+,
+
+1− Si
+Ti
+∞, otherwise
+
+Discussion. The ﬁrst component of the cost function, gi(Si), denotes the cost for
+serving Si amount of user-requests by the ith proxy in L1 per unit time. Clearly,
+this cost-component grows rapidly once the proxy is nearly over-loaded, i.e. Si ≈
+Ti. In our numerical work, we take gi(·) to be proportional to the average aggre-
+gate queuing delay for an M/G/1 queue with server-capacity Ti [5], i.e.,
+
+gi(Si) =
+
+(7)
+
+Here ηi is a positive constant, denoting the relative cost per unit increment in la-
+tency.
+The second component of the cost function hi(xi) denotes the cost due to round-
+trip-latency of requests routed to the Data-center (L2). As an example, in a popu-
+lar model [20] the delay incurred by a single packet over a congested path varies
+afﬁnely with the offered load. Since the rate of trafﬁc sent to the secondary layer
+by node i is Ai(1 − xi), according to this model, the cost-function hi(xi) may be
+taken as follows
+
+hi(xi) = θiAi(1 − xi)(cid:0)di + γiAi(1 − xi)(cid:1)
+
+(8)
+
+where di is a (suitably normalized) round-trip-latency parameter from the node
+i to the data-center in L2 and θi, γi are suitable positive constants. We use the
+cost-functions in Eqns. (7) and (8) for our numerical work. A typical plot of the
+cost-surface for the case of a two-node system as in Figure 4 is shown in Figure
+5.
+
+The constraint set X = [0, 1]N represents the N-dimensional unit hypercube
+in which the (controlled) redirection probabilities must lie and the set ΣT captures
+
+13
+
+x2
+
+x1
+
+Figure 5: A typical plot of cost-surface for a two-node system as a function of their redirection
+probabilities x1, x2(0 ≤ x1, x2 ≤ 1).
+
+the capacity constraints of the proxies which are downward closed, e.g., if the
+proxy i has capacity Ti then we have
+
+ΣT = {S : Si ≤ Ti,∀i = 1, 2, . . . , N}
+
+The functions gi(·), hi(·) are assumed to be closed, proper and strictly convex [3].
+We also assume the functions gi(·) to be monotonically increasing. Hence, we can
+replace the equality constraint (6) by the following inequality constraint, without
+loss of optimality
+
+N(cid:88)
+
+CjiAjxj ≤ Si, ∀i = 1, 2, . . . , N
+
+j=1
+
+This is because, if the optimal S∗
+(and feasibly) reduce the objective value by reducing S∗
+sulting in contradiction.
+Hence, the above load management problem is equivalent to the following opti-
+mization problem P1 :
+
+i is strictly greater than the LHS, we can strictly
+i to the level of LHS, re-
+
+Minimize W (x, S) =(cid:80)N
+
+i=1
+
+(cid:0)gi(Si) + hi(xi)(cid:1)
+
+Subject to,
+
+N(cid:88)
+
+CjiAjxj ≤ Si, ∀i = 1, 2, . . . , N
+
+j=1
+
+x ∈ X, S ∈ ΣT ,
+
+where, X = [0, 1]N and ΣT = {S : Si ≤ Ti,∀i = 1, 2, . . . , N}.
+
+14
+
+(9)
+
+(10)
+
+Since with the above assumptions, the objective function and the constraint
+sets of the problem P1 are all convex [3], we immediately have the following
+lemma:
+
+Lemma 3.1. The problem P1 is convex.
+
+Hence a host of methods [4] can be used to solve the problem P1 in a central-
+ized fashion. However, we are interested in ﬁnding a load balancing algorithm for
+each node, which collectively solve the problem P1 with locally available loading
+information only. This problem is explored in the next subsection.
+
+3.4. The Dual Decomposition Algorithm
+
+In this section we derive a dual algorithm [11], [14], [7] for the problem P1
+and show how it leads to a distributed implementation with negligible control
+overhead.
+By associating a non-negative dual variable µi to the ith constraint in (9) for all i,
+the Lagrangian of P1 may be written as follows:
+
+N(cid:88)
+
+(cid:0)gi(Si) − µiSi)(cid:1) +
+
+(cid:18)
+
+N(cid:88)
+
+L(x, S, µ) =
+
+(cid:0) N(cid:88)
+
+(cid:1)(cid:19)
+
+hi(xi) + Aixi
+
+µjCij
+
+i=1
+
+i=1
+
+j=1
+
+This leads to the following dual objective function [3]
+L(x, S, µ)
+
+D(µ) =
+
+inf
+
+x∈X,S∈ΣT
+
+(11)
+
+(12)
+
+We now exploit the separability property of the dual objective (11) to reduce the
+problem (12) into following two one-dimensional sub-problems:
+
+15
+
+(13)
+
+(cid:19)
+
+
+
+(cid:19)
+
+gi(Si) − µiSi
+
+hi(xi) + Aiβi(µ)xi
+
+,
+
+S∗
+i (µ) = inf
+
+0≤Si≤Ti
+
+x∗
+i (µ) = inf
+
+0≤xi≤1
+
+(cid:18)
+(cid:18)
+
+N(cid:88)
+
+where the scalar βi(µ) is deﬁned as the (scaled) linear projection of the dual-
+vector µ on the ith row of the correlation matrix, i.e.
+
+βi(µ) =
+
+µjCij = C T
+
+i µ,
+
+(14)
+
+and Ci is the ith row of the correlation-matrix C.
+
+j=1
+
+Discussion. The scalar βi(µ) couples the ofﬂoad decision of node i with the state
+of the entire network through Eqn. (13). Once the value of βi(µ) is available
+to the node i, the node has all the required information at its disposal to locally
+solve the corresponding sub-problems (13), for a ﬁxed value of µ. The solutions
+of these one-dimensional sub-problems may even be obtained in closed form in
+some cases. Also, note that βi(µ), being a scalar, is potentially easier to com-
+municate than the entire N dimensional vector µ. In sub-section 3.6, we exploit
+this fact and show how this factor βi(µ) may be made available to each node i
+on-the-ﬂy.
+With the stated assumptions on the cost functions, there is no duality-gap [3]. Con-
+vex duality theory guarantees the existence of an optimal dual variable µ∗ ≥ 0
+such that, the solution to the relaxed problem (13), corresponding to µ∗, gives an
+optimal solution to the original problem P1. To obtain the optimal dual variable
+µ∗, we solve dual P∗
+Problem P∗
+1:
+
+1 of the problem P1, given as follows
+
+Maximize D(µ)
+µ ≥ 0
+
+(15)
+
+16
+
+The dual problem P∗
+
+1 is well-known to be convex [3]. To solve the problem
+P∗
+1, we use the Projected Super-gradient algorithm [17], which will be shown to
+be amenable to a distributed implementation.
+At the kth step of the iteration, a super-gradient g(µ(k)) of the dual function D(µ)
+at the point µ = µ(k) is given by ∂D(µ(k)) = Sobs(k)− S(k) [3], where Sobs
+(k)
+is the observed rate of arrival of incoming user-load at the proxy of node i, i.e.,
+
+i
+
+(k) ≡ N(cid:88)
+
+j=1
+
+Sobs
+i
+
+CjiAjx∗
+
+j (k),
+
+(16)
+
+i (k) and S∗
+
+and x∗
+i (k) are the primal variables obtained from Eqn. (13), evaluated
+at the current dual variable µ = µ(k). Following a projected super-gradient step,
+the dual variables µ(k) are iteratively updated component-wise at each node i as
+follows:
+
+(cid:18)
+µi(k) + α(cid:0)Sobs
+
+i
+
+i (k)(cid:1)(cid:19)+
+
+(k) − S∗
+
+µi(k + 1) =
+
+(17)
+
+Here α is a small positive step-size constant, whose appropriate value will be
+given in Theorem (3.3). Since the problem-parameters might vary slowly over
+time, a stationary algorithm is practically preferable. Hence, we chose to use a
+constant step-size α, rather than a sequence of diminishing step-sizes {αk}k≥1.
+The above constitutes theoretical underpinning of steps (5) and (6) of the pro-
+posed distributed load-management algorithm in CDN, described in Algorithm 1.
+
+3.5. Convergence of the Dual Algorithm
+
+To prove the convergence of the above algorithm, we ﬁrst uniformly bound the
+
+(cid:96)2 norm of the super-gradients g(µ(k)):
+
+(cid:18) N(cid:88)
+
+(cid:19)N
+
+CjiAjx∗
+
+j (k) − S∗
+
+i (k)
+
+j=1
+
+i=1
+
+g(µ(k)) ≡ Sobs(k) − S(k) =
+
+We start with the following lemma.
+
+tem is bounded by Amax (i.e. (cid:80)
+
+Lemma 3.2. If the total external DNS-request arrival rate to the entire sys-
+i Ai ≤ Amax) and the maximum processing-
+capacity of individual proxies is bounded by Tmax (i.e. Ti ≤ Tmax,∀i) then,
+for all k ≥ 1
+
+17
+
+||g(µ(k))||2
+
+2 ≤ A2
+
+max + N T 2
+
+max
+
+(18)
+
+PROOF. See Appendix 7.1.
+
+Upon bounding the super-gradients uniformly for all k, the convergence of
+the dual algorithm follows directly from Proposition 2.2.2 and 2.2.3 of [4]. In
+particular, we have the following theorem:
+
+2
+
+max+N T 2
+
+. Then,
+
+Theorem 3.3. For a given  > 0, let the step-size α in Eqn. (17) be chosen as
+α =
+
+A2
+• The sequence of solutions, produced by the dual algorithm described
+above, converge within an -neighbourhood the optimal objective value
+of the problem P1.
+
+max
+
+• The rate of convergence of the algorithm to the -neighborhood of the
+
+√
+optima after k-steps is given by c/
+
+√
+k where c ∼ Θ(
+
+N ).
+
+√
+The above result states that the rate of convergence of the dual algorithm de-
+creases roughly at the rate of Θ(
+N ), where N is the total number of nodes in
+the system. This is expected as more nodes in the system would warrant greater
+amount of inter-node coordination to converge to the global optimum.
+
+3.6. FASTCONTROL Packets and Distributed Implementation
+
+In the previous subsection, we derived a provably optimal load-management
+algorithm for CDNs, which is implementable online, provided each node i knows
+how to obtain the value of the coupling-factors βi(µ(k)) at each step, in a decen-
+tralized fashion. To accomplish this, we now introduce the novel idea of FAST-
+CONTROL packets.
+In brief, it exploits the underlying anycast architecture of
+
+18
+
+the system (Eqn.(2)) for in-network, on-the-ﬂy computation of the coupling factor
+βi(µ(k)) (Eqn. (14)) for all i.
+General Descriptions. FASTCONTROL packets are special-purpose control pack-
+ets (different from the regular data-packets), each belonging to any one of N dis-
+tinct classes, which we refer to as categories. The category of each FASTCON-
+TROL packet is encoded in its packet-header and hence it takes extra log(N ) bits
+to encode the categories. Physically, these control packets originate from the users
+and are monitored by the proxies. However, the rates at which these packets are
+generated, are controlled by the DNS servers of the nodes i and are proportional
+to the dual variables µi(k), by a mechanism detailed below.
+Generation of FastControl packets. These packets are generated in a controlled
+manner by using a javascript embedded in responses to user DNS-requests (simi-
+lar to how data was generated to calculate the C matrix ofﬂine [8]). The javascript
+forces users to download a small image from an URL that is not affected by the
+load management algorithm. DNS-servers in each node are conﬁgured to respond
+back with anycast IP address for the primary layer (i.e. I1) for this special DNS-
+query. The use of various categories of FastControl packets will be clear from the
+description of the following distributed protocol used for determining βi(µ(k)):
+
+• At step k, the DNS server of each node i forces generation of FASTCON-
+TROL packets of category j (through its response to DNS-queries) at the
+rate
+
+rij(k) = γµi(k)
+
+Cji
+Cij
+
+,
+
+j = 1, 2, . . . , N
+
+(19)
+
+Note that this step is locally implementable at each node, since the value of
+the dual variable µi(k) is locally available at the node i. Here γ > 0 is a
+ﬁxed system parameter, indicating the rate of control packet generation.
+
+• At each step k, each node i also monitors the rate of reception of FAST-
+CONTROL packets of category i, denoted by Ri(k), at its co-located proxy.
+Using equation (19), the total rate of reception Ri(k) of ith category FAST-
+CONTROL packets at node i is obtained as follows
+
+N(cid:88)
+
+N(cid:88)
+
+γµj(k)
+
+Cij
+Cji
+
+Cji
+
+Ri(k) =
+
+rji(k)Cji =
+
+j=1
+
+j=1
+
+= γβi(µ(k))
+
+Inputs
+
+State Variables Outputs
+
+19
+
+µi(k),Si(k)
+
+...
+...
+
+(cid:27)
+(cid:27)
+
+(cid:26)
+
+Sobs
+i
+
+(k)
+
+Ri(k)
+
+(From
+L1)
+
+(From
+LDNS)
+
+Ai
+
+rij(k)
+
+FastControl
+
+Pkts
+(to L1)
+
+Data Pkts
+
+xi(k)Ai
+(to L1)
+(1 − xi(k))Ai
+(to L2)
+
+Node i
+
+Figure 6: Node-i implementing the dual algorithm
+
+Thus,
+
+βi(µ(k)) =
+
+1
+γ
+
+Ri(k)
+
+(20)
+
+Hence, the value of βi(µ(k)) at node i can be obtained locally by monitoring the
+rate of receptions of FASTCONTROL packets at the co-located proxy. A complete
+pseudocode of the algorithm is provided below. See Figure (6) for a schematic
+diagram of a node implementing the algorithm.
+
+DNSserverHTTPserver20
+
+Algorithm 1 Distributed Dual Decomposition Algorithm Running at Node i
+1: Initialize: µi(0) ← 0
+2: for k = 1, 2, 3, . . . do
+3: Monitor Ai(k), Sobs
+4:
+γ Ri(k);
+5:
+
+Set βi(k) ← 1
+Update Primal variables:
+
+(k), Ri(k);
+
+i
+
+Si(k) ← inf
+xi(k) ← inf
+0≤xi≤1
+
+0≤Si≤Ti
+
+(cid:1)
+
+(cid:0)gi(Si) − µi(k)Si
+(cid:1)
+(cid:0)hi(xi) + Ai(k)βi(k)xi
+(k) − Si(k))(cid:1)+
+
+i
+
+Update Dual variable:
+
+µi(k + 1) ←(cid:0)µi(k) + α(Sobs
+
+6:
+
+7:
+
+8:
+
+Via DNS-response, force users to generate FASTCONTROL packets of category j,
+destined to L1, at the rate
+
+rij(k + 1) = γµi(k + 1)
+
+, ∀j = 1, 2, . . . , N
+
+Cji
+Cij
+
+For an incoming DNS-query, respond with the anycast IP-address for L1 with
+probability xi(k) and IP-address for L2 with probability (1 − xi(k)).
+
+9: end for
+
+We make the following observations :
+
+• The full knowledge of the matrix C at node i is also not necessary. It is
+
+sufﬁcient that node i knows the ith row and column of the matrix C.
+
+• The optimality of the algorithm does not depend on the diagonally domi-
+nance property of the correlation matrix C, an essential requirement for the
+greedy heuristic (discussed in the next section) to work reasonably well.
+
+• The parameter γ in Eqn. (19) is directly related to the amount of control-
+
+overhead required for the distributed algorithm.
+
+This completes the description of the proposed load-management algorithm,
+which is completely distributed and provably optimal. In the following section,
+we concentrate our attention on the load-management heuristic used in FastRoute
+
+21
+
+and evaluate its performance. We will numerically compare the relative beneﬁts
+of these two algorithms in Section 5.
+
+4. The Greedy Load-Management Heuristic
+
+In this section, we focus exclusively on the distributed load management heuris-
+tic implemented in FastRoute [8], a commercial layered-CDN. This heuristic ig-
+nores inter-node correlations altogether. Thus, when an individual proxy be-
+comes overloaded, the co-located DNS-server modiﬁes its DNS-response to redi-
+rect more trafﬁc to the data-center (L2) and vice versa. This simple mechanism is
+reported to work well in practice when there is high correlation (60-80%) between
+the node receiving the DNS-query and the node receiving the corresponding user-
+request. However, in the event of sudden bursts of trafﬁc, e.g., Flash Crowds, this
+greedy heuristic often leads to an uncontrollable overload situation which neces-
+sitates manual intervention [8].
+
+Algorithmic challenges: With only local information available at each DNS-
+server, it faces the following dilemma: ofﬂoad too little to L2 and the collocated
+proxy, if overloaded, remains overloaded; ofﬂoad too much and the users are di-
+rected to remote data-centers and receive an unnecessarily delayed response, due
+to high round-trip latency. The coupling among the nodes because of inter-node
+correlation makes this problem highly challenging and gives rise to the so-called
+uncontrollable overload, discussed earlier in section 3.2.
+
+A pseudo-code showing the general structure of FastRoute’s heuristic, running
+at a node i, is provided below. An explicit control-law modeling the heuristic will
+be given in section 4.1.
+
+Algorithm 2 Decentralized greedy load-management heuristic used in FastRoute
+[8], running at the node i
+1: for t = 1, 2, 3, . . . do
+2:
+3:
+4:
+5:
+end if
+6:
+7: end for
+
+increase xi(t) proportional to −(Si(t) − Ti)
+decrease xi(t) proportional to (Si(t) − Ti)
+
+if the ith proxy is under loaded (Si(t) ≤ Ti) then
+
+else
+
+Motivation for analyzing the heuristic: The optimal algorithm of section-3
+requires the knowledge of the correlation matrix C and needs to utilize addi-
+
+22
+
+tional FASTCONTROL packets for its operation. In this section we analyze per-
+formance of the greedy heuristic, currently implemented in FastRoute [8], which
+does not have these implementation complexities. Since this heuristic completely
+ignores the inter-node correlations (given by the matrix C), it cannot be expected
+to achieve the optima of the problem P1, in general. Instead, we measure its per-
+formance by a coarser performance-metric, given by the number of proxies that
+undergo uncontrollable overload condition (refer to section 3.2) under its action.
+Depending on target applications, this metric is often practically good enough for
+gauging the performance of CDNs.
+
+4.1. Analysis of the Greedy Heuristic
+
+As before, let xi(t) denote the probability that an incoming DNS-query to
+the node i at time t is returned with the anycast address of the primary layer L1.
+Hence, the total rate of incoming load to the proxy i at time t is given by,
+
+N(cid:88)
+
+Si(t) =
+
+CjiAjxj(t),
+
+i = 1, 2, 3, . . . , N
+
+j=1
+
+The above system of linear equations can be compactly written as follows
+
+Where,
+
+S(t) = Bx(t)
+
+B ≡ C T diag(A).
+
+(21)
+
+(22)
+
+(23)
+
+Let the vector T denote the processing-capacities (thresholds) of the proxies.
+As described above, FastRoute’s greedy heuristic (2) monitors the overload-metric
+Si(t) − Ti and if it is positive (i.e., the node i overloaded), it reduces xi(t) (i.e.,
+dxi(t)
+dt < 0) and if the overload-metric is negative (i.e., the node i under-loaded),
+it increases xi(t) (i.e., dxi(t)
+dt > 0) proportional to the overload. We consider the
+following explicit control-law complying with the above general principle:
+
+= −βR(xi(t))(cid:0)Bx(t) − T(cid:1)
+
+i, ∀i
+
+dxi(t)
+
+dt
+
+(24)
+The factor R(xi(t)) ≡ xi(t)(1 − xi(t)) is a non-negative damping component,
+having the property that R(0) = R(1) = 0. This non-linear factor is responsible
+for restricting the trajectory of x(t) to the N-dimensional unit hypercube 0 ≤
+
+x(t) ≤ 1, ensuring the feasibility of the control (24)4. The scalar β > 0 is a
+sensitivity parameter, relating the robustness of the control-strategy to the local
+observations at the nodes.
+The following theorem establishes soundness of the control (24):
+
+23
+
+Theorem 4.1. Consider the following system of ODE
+˙xi(t) = −R(xi(t))(Bx(t) − T )i, ∀i
+
+(25)
+
+where R : [0, 1] → R+ is any C1 function, satisfying R(0) = R(1) = 0.
+Let x(0) ∈ int(H), where H is the N-dimensional unit hypercube [0, 1]N.
+Then the system (25) admits a unique solution x(t) ∈ C1 such that x(t) ∈
+H,∀t ≥ 0.
+
+PROOF. See Appendix 7.2.
+
+The following theorem reveals an interesting feature of the greedy algorithm,
+which states that, along any periodic trajectory the average load at any node i
+is equal to the threshold Ti of that node, and hence they are stable on the average.
+
+Theorem 4.2. Consider the system (24) with possibly time-varying arrival
+rate vector A(t) such that the system operates in a periodic orbit. Then the
+time-averaged user-load on any node i is equal to the threshold Ti of that
+node, i.e.
+
+(cid:90) τ
+
+0
+
+1
+τ
+
+Si(t)dt = ¯T , ∀i,
+
+(26)
+
+where the integral is taken along a periodic orbit of period τ.
+
+PROOF. See Appendix 7.3.
+
+4Remember that xi(t)’s, being probabilities, must satisfy 0 ≤ xi(t) ≤ 1,∀t,∀i
+
+24
+
+4.2. Avoiding Locally Uncontrollable Overload
+
+Having established the feasibility and soundness of the control-law (24), we
+return to the original problem of locally uncontrollable overload, described in
+Section 3.2. In the following, we derive sufﬁcient conditions for the correlation
+matrix C and the DNS-request arrival rate vector A, for which the system is
+stable, in the sense that no locally uncontrollable overload situation takes place.
+
+Characterization of the Stability Region
+
+For a ﬁxed correlation matrix C, we show that if the arrival rate vector A
+lies within a certain polytope ΠC, the system is stable in the above sense, under
+the action of the greedy load-management heuristic. The formal description and
+derivation of the result is provided in Appendix 7.4, which involves linearization
+of the ODE (24) around certain ﬁxed points. Here we outline a simple and intu-
+itive derivation of the stability region ΠC.
+We proceed by contradiction. Suppose that node i is facing a locally uncontrol-
+lable overload at time t. Hence, by deﬁnition, the following two conditions must
+be satisﬁed at node i
+
+Si(∞) − Ti > 0, and xi(∞) = 0
+
+(27)
+
+Here Eqn. (27) denotes the fact that FastRoute node i is overloaded, i.e., the in-
+coming trafﬁc to node i’s proxy is more than the capacity of the node i. Eqn. (27)
+denotes the fact that this overload is locally uncontrollable, since even after node
+i’s DNS-server has ofﬂoaded all incoming DNS-inﬂuenced arrivals to L2 (the best
+that it can do with its local information), it is facing the overload situation. The
+above two equations imply that the following condition holds at the node i:
+
+(cid:88)
+
+j(cid:54)=i
+
+(cid:88)
+
+j(cid:54)=i
+
+CjiAjxj(∞) > Ti,
+
+(28)
+
+a necessary condition for uncontrollable overload (28) at node i is(cid:80)
+Ti. Thus, if(cid:80)
+
+where we have used Eqn. (21) and the fact that xi(∞) = 0. Since 0 ≤ xj(∞) ≤ 1,
+j(cid:54)=i CjiAj >
+j(cid:54)=i CjiAj ≤ Ti, then the locally uncontrollable overload is avoided
+at the node i by the greedy heuristic. Taking into account all nodes, we see that if
+the external DNS-query arrival rate A lies in the polytope ΠC deﬁned as
+
+ΠC = {A ≥ 0 :
+
+CjiAj ≤ Ti, ∀i = 1, 2, . . . , N}
+
+(29)
+
+25
+
+then the locally uncontrollable overload situation is avoided at every node and the
+system is stable.
+Somewhat surprisingly, by exploiting the exact form of the control-law (24), we
+can show that a two-node system (as depicted in Figure 4) is able to control DNS-
+load A of any magnitude, under certain favorable conditions on the correlation
+matrix C.
+
+Special Case
+
+[Two-node System]
+Consider a two-node CDN discussed earlier in Section 3 (see Figure 4). Let
+
+the correlation matrix C for the system be parametrized as follows:
+
+(cid:18) α
+
+1 − β
+
+C(α, β) =
+
+(cid:19)
+
+1 − α
+β
+
+(30)
+
+Then we have the following theorem :
+
+Theorem 4.3. 1) The system does not possess any periodic orbit for any val-
+ues of its deﬁning parameters: A, C(α, β), T . Thus the two-node CDN never
+oscillates.
+2) If α > 1
+uncontrollable overload) for all arrival rate-pairs (A1, A2).
+2 and β < 1
+3) If α < 1
+the system is A1 < T1
+
+2 then the system is locally controllable (i.e., no locally
+
+2 then a sufﬁcient condition for local controllability of
+
+2 and β > 1
+
+1−α, A2 < T2
+1−β .
+
+PROOF. The proof of part-(1) follows from Dulac’s criterion [25], whereas proof
+for part-(2) and (3) follows from linearization arguments. See Appendix 7.5 for
+details.
+
+We emphasize that the part-(2) of the Theorem 4.3 is surprising, as it shows that
+the system remains locally controllable, no matter how large the incoming DNS-
+request arrival rate be (c.f. Section 3.2) . The 2D vector-ﬁeld plot in Figure 7
+illustrates the above result. In Figure 4(a), the matrix C is taken to be one sat-
+isfying the condition of part (2) of lemma 4.3. As shown, all four phase-plane
+trajectories with different initial conditions converge to an interior ﬁxed point
+(x1(∞) > 0, x2(∞) > 0).
+
+Fig. 4(a)
+
+Fig. 4(b)
+
+x2(t)
+
+(attractor)
+
+x2(t)
+
+26
+
+(attractor)
+
+x1(t)
+
+x1(t)
+
+Figure 7: 2D vector-ﬁelds of a two-node system illustrating locally controllable (Fig. 4(a)) and
+locally uncontrollable (Fig. 4(b)) overloads.
+
+For the purpose of comparison, in Figure 4(b) we plot the 2D vector-ﬁeld of a
+locally uncontrollable system (e.g., the system in Fig. 4).
+It is observed that
+all four previous trajectories converge to the uncontrollable attractor (x1(∞) =
+1, x2(∞) = 0). From the vector-ﬁeld plot, it is also intuitively clear why a peri-
+odic orbit can not exist in the system.
+
+Application of Theorem 4.3. Consider a setting where, instead of making locally
+greedy ofﬂoading decisions, nodes are permitted to partially coordinate their ac-
+tions. Also assume that there exists a partition of the set of nodes into two non-
+empty disjoint sets G1 and G2, such that their effective self-correlation values
+α(G1) and β(G2), deﬁned by
+
+(cid:80)
+
+(cid:80)
+
+|G1|
+
+α(G1) =
+
+i∈G1
+
+j∈G1
+
+Cij
+
+, β(G2) =
+
+(cid:80)
+
+(cid:80)
+
+i∈G2
+
+j∈G2
+
+Cij
+
+|G2|
+2, β(G2) > 1
+
+satisfy the condition (2) of Theorem 4.3, i.e. α(G1) > 1
+2. Then if the
+nodes in the sets G1 and G2 coordinate and jointly implement the greedy policy,
+then the system is locally controllable for all symmetric arrivals.
+
+5. Numerical Evaluations
+
+We use the operational FastRoute CDN to identify relevant system parame-
+ters for critical evaluations of the optimal algorithm and the heuristic. Currently,
+FastRoute has many operational nodes, spreading throughout the world [8]. We
+
+00.20.40.60.8100.20.40.60.8100.20.40.60.8100.20.40.60.8127
+
+show a sample result with N = 60 nodes. The inter-node correlation matrix C is
+computed using system-traces spanning over three months.
+For our performance evaluations, we use the cost-functions given in Eqns. (7) and
+(8). Different (normalized) parameters appearing in the cost-functions are chosen
+as follows
+
+γi = 1, θi = 10, ηi = 1, Ti = 0.7, di ∼ Ui[0, 1]
+
+∀i
+
+(31)
+
+where Ui[0, 1]’s denote i.i.d. uniformly distributed random variables in the range
+[0, 1]. The DNS-query arrival rates Ai’s are assumed to be i.i.d. distributed ac-
+cording to a Poisson variable with mean ¯A, which varies across the range [0.1, 10].
+The optimal solutions of the Lagrangian relaxations in Eqns. (13) for the above
+cost-functions can be obtained in closed form as follows :
+
+(cid:18)
+
+(cid:114) ηi
+
+(cid:19)
+
+µi
+
+S∗
+i (µ) = Ti max
+
+0, 1 −
+
+(32)
+
+(33)
+
+and,
+
+x∗
+i (µ) =
+
+1,
+
+1 + c2i
+2c1i
+o.w.
+0,
+
+if c2i > 0
+
+, if c2i ≤ 0 and 2c1i ≥ −c2i
+
+where c1i ≡ Aiθi and c2i ≡ θidi − βi(µ).
+For each value of ¯A, we run the simulation NE = 100 times, by randomizing over
+both Ai and di,∀i. The mean and standard-deviation of the resulting optimal cost
+values are plotted in the Figure 8(a). As expected, the average cost increases as
+the overall DNS-query arrivals to the system increases. However, the resulting
+cost remains ﬁnite always. This implies that none of the proxies are overloaded.
+The above observation is in sharp contrast with the situation using the greedy-
+heuristic, the subject of Figure 8(b). Here we plot the number of overloaded
+proxies for different values of ¯A, keeping all other system-parameters the same.
+While the greedy algorithm does yield acceptable result for small values of ¯A <<
+Ti = 0.7, we see that as many as four proxies undergo locally uncontrollable
+overload for relatively large values of ¯A.
+Thus, depending on the computed correlation-matrix C and a projected bound of
+the DNS-query arrival rate A, we can make an informed decision about the choice
+of the algorithms to employ in a CDN and the inherent complexity-vs-optimality
+trade-off it entails.
+
+28
+
+Optimal algorithm
+
+m
+h
+t
+i
+r
+o
+g
+l
+A
+
+l
+a
+m
+
+i
+t
+p
+O
+e
+h
+t
+
+f
+o
+
+t
+s
+o
+C
+
+s
+e
+d
+o
+n
+
+d
+e
+d
+a
+o
+l
+r
+e
+v
+o
+
+f
+o
+
+#
+
+Greedy heuristic
+
+Average load ( ¯A)
+
+Average load ( ¯A)
+
+(a)
+
+Figure 8: (a) Statistical variation of the cost of the optimal algorithm with mean load (DNS-query
+arrival rate) ¯A. (b) Average number of nodes undergoing uncontrollable overload condition under
+the action of the greedy algorithm (Threshold Ti = 0.7 for all nodes). Total number of nodes in
+the system included in this study is N = 60.
+
+(b)
+
+6. Conclusion
+
+In this paper we formalize the load management problem in modern CDNs
+utilizing anycast. We ﬁrst formulate the problem as a convex optimization prob-
+lem and study its dual and an associated algorithm. The novel idea of FAST-
+CONTROL packets facilitates distributed implementation of the proposed dual al-
+gorithm. Next we analyze stability properties of a greedy heuristic, currently in
+operation in a major commercial CDN. We ﬁnd that the optimal algorithm sig-
+niﬁcantly out-performs the heuristic for moderate-to-high value of system load.
+However, the heuristic performs satisfactorily given that the system is loosely-
+coupled and the offered load is low. Thus an informed choice between these two
+algorithms may be made depending on the range of system-parameters and the
+desired optimality/complexity trade-off for a particular CDN. Future work would
+involve investigating the amount of FASTCONTROL packets necessary for the dual
+algorithm to work in the presence of random packet-loss and delayed feedback.
+Also, It would be interesting to generalize the ﬁndings of Theorem 4.3 for the case
+of more than two nodes.
+
+References
+References
+[1] Alzoubi, H. A., Lee, S., Rabinovich, M., Spatscheck, O., Van der Merwe,
+J., 2008. Anycast CDNs revisited. In: Proceedings of the 17th International
+
+0246810#104012345601234500.511.522.533.5429
+
+Conference on World Wide Web. WWW ’08. ACM, New York, NY, USA.
+
+[2] Basturk, E., Engel, R., Haas, R., Peris, V., Saha, D., 1997. Using network
+layer anycast for load distribution in the Internet. In: Tech. Rep., IBM TJ
+Watson Research Center. Citeseer.
+
+[3] Bertsekas, D. P., 1999. Nonlinear programming. Athena scientiﬁc Belmont.
+
+[4] Bertsekas, D. P., 2015. Convex optimization algorithms. Athena Scientiﬁc.
+
+[5] Bertsekas, D. P., Gallager, R. G., 1987. Data networks. Prentice-hall.
+
+[6] Engel, R., Peris, V., Saha, D., Basturk, E., Haas, R., 1998. Using IP anycast
+for load distribution and server location. In: Proc. of IEEE Globecom Global
+Internet Mini Conference. Citeseer, pp. 27–35.
+
+[7] Eryilmaz, A., Ozdaglar, A., Shah, D., Modiano, E., 2010. Distributed cross-
+layer algorithms for the optimal control of multihop wireless networks.
+IEEE/ACM Transactions on Networking (TON) 18 (2), 638–651.
+
+[8] Flavel, A., Mani, P., Maltz, D., Holt, N., Liu, J., Chen, Y., Surmachev, O.,
+2015. Fastroute: A scalable load-aware anycast routing architecture for mod-
+ern cdns. In: 12th USENIX Symposium on Networked Systems Design and
+Implementation (NSDI 15). pp. 381–394.
+
+[9] Hashim, H. B., Manan, J.-l. A., 2005. An active anycast RTT-based server
+selection technique. In: Networks, 2005. Jointly held with the 2005 IEEE
+7th Malaysia International Conference on Communication., 2005 13th IEEE
+International Conference on. Vol. 1. IEEE, pp. 5–pp.
+
+[10] Jaseemuddin, M., Nanthakumaran, A., Leon-Garcia, A., 2006. TE-friendly
+content delivery request routing in a CDN. In: Communications, 2006.
+ICC’06. IEEE International Conference on. Vol. 1. IEEE, pp. 323–330.
+
+[11] Kelly, F., 1997. Charging and rate control for elastic trafﬁc. European trans-
+
+actions on Telecommunications 8 (1), 33–37.
+
+[12] Khalil, H., 1996. Nonlinear systems. 2nd Edition, Prentice Hall.
+
+[13] Krishnamurthy, B., Wills, C., Zhang, Y., 2001. On the use and performance
+of content distribution networks. In: Proceedings of the 1st ACM SIG-
+COMM Workshop on Internet Measurement. ACM, pp. 169–182.
+
+30
+
+[14] Lobel, I., Ozdaglar, A., 2011. Distributed subgradient methods for convex
+optimization over random networks. Automatic Control, IEEE Transactions
+on 56 (6), 1291–1306.
+
+[15] Microsoft, 2010. Azure. http://azure.microsoft.com/en-us/.
+
+[16] Miura, H., 2001. Server selection policy in active anycast.
+
+[17] Nedic, A., Ozdaglar, A., 2008. Convex optimization in signal processing and
+communications, chapter cooperative distributed multi-agent optimization.
+eds., eldar, y. and palomar, d.
+
+[18] Ogata, K., Yang, Y., 1970. Modern control engineering.
+
+[19] Pang, J., Akella, A., Shaikh, A., Krishnamurthy, B., Seshan, S., 2004. On
+the responsiveness of DNS-based network control. In: Proceedings of the
+4th ACM SIGCOMM conference on Internet measurement. ACM, pp. 21–
+26.
+
+[20] Roughgarden, T., 2005. Selﬁsh routing and the price of anarchy. Vol. 174.
+
+MIT press Cambridge.
+
+[21] Rudin, W., 1964. Principles of mathematical analysis. Vol. 3. McGraw-Hill
+
+New York.
+
+[22] Sarat, S., Pappas, V., Terzis, A., 2006. On the use of anycast in DNS. In:
+Computer Communications and Networks, 2006. ICCCN 2006. Proceed-
+ings. 15th International Conference on. IEEE, pp. 71–78.
+
+[23] Saroiu, S., Gummadi, K. P., Dunn, R. J., Gribble, S. D., Levy, H. M., 2002.
+An analysis of internet content delivery systems. ACM SIGOPS Operating
+Systems Review 36 (SI), 315–327.
+
+[24] Shaikh, A., Tewari, R., Agrawal, M., 2001. On the effectiveness of DNS-
+based server selection. In: INFOCOM 2001. Twentieth Annual Joint Con-
+ference of the IEEE Computer and Communications Societies. Proceedings.
+IEEE. Vol. 3. IEEE, pp. 1801–1810.
+
+[25] Strogatz, S. H., 2014. Nonlinear dynamics and chaos: with applications to
+
+physics, biology, chemistry, and engineering. Westview press.
+
+31
+
+[26] Swildens, E. S.-J., Liu, Z., Day, R. D., Aug. 11 2009. Global trafﬁc man-
+agement system using IP anycast routing and dynamic load-balancing. US
+Patent 7,574,499.
+
+[27] Yu, S., Zhou, W., Wu, Y., 2002. Research on network anycast. In: Algo-
+rithms and Architectures for Parallel Processing, 2002. Proceedings. Fifth
+International Conference on. IEEE, pp. 154–161.
+
+[28] Zaumen, W. T., Vutukury, S., Garcia-Luna-Aceves, J., 2000. Load-balanced
+anycast routing in computer networks. In: Computers and Communications,
+2000. Proceedings. ISCC 2000. Fifth IEEE Symposium on. IEEE, pp. 566–
+574.
+
+7. Appendix
+7.1. Proof of Lemma 3.2
+PROOF. We have,
+
+||gk||2
+
+2 =
+
+i
+
+i
+
+i=1
+
+i=1
+
+(Sobs
+
+N(cid:88)
+≤ N(cid:88)
+(cid:0)Sobs
+≤ N(cid:88)
+(cid:0) N(cid:88)
+N(cid:88)
+≤ (cid:0) N(cid:88)
+N(cid:88)
+= (cid:0) N(cid:88)
+N(cid:88)
+
+Aj
+
+j=1
+
+j=1
+
+j=1
+
+i=1
+
+i=1
+
+i=1
+
+(k) − Si(k))2
+
+N(cid:88)
+
+(k)(cid:1)2 +
+CjiAjxj(k)(cid:1)2 + N T 2
+
+i (k)
+
+S2
+
+i=1
+
+max
+
+CjiAj
+
+(cid:1)2 + N T 2
+(cid:1)2 + N T 2
+
+max
+
+max
+
+Cji
+
+(34)
+
+(35)
+
+(36)
+
+(37)
+
+(38)
+
+(39)
+
+(40)
+
+≤ (
+≤ A2
+
+Aj)2 + N T 2
+
+max
+
+j=1
+max + N T 2
+
+max
+
+Here Eqn. (35) follows from non-negativity of Sobs
+from the deﬁning equation of Sobs
+
+and Si, Eqn. (36) follows
+and the constraint that Si ≤ Ti (viz. Eqn. (13)),
+
+i
+
+i
+
+Eqn. (37) follows from the constraint 0 ≤ xi ≤ 1,∀i, Eqn. (38) follows from the
+change of order of summation and ﬁnally Eqn. (39) follows from the fact that C
+is a correlation matrix and hence its rows sum to unity (viz. Eqn. (1)).
+
+32
+
+7.2. Proof of Theorem 4.1
+PROOF. First we show that, any solution of the system (24) (if exists) must lie in
+the unit hypercube H. We prove it via contradiction. On the contrary to the claim,
+assume that for some solution of the system (24), there exists a component xi(·)
+and a ﬁnite time 0 ≤ τ < ∞ such that xi(τ ) < 0. Since xi(·) is continuous and
+xi(0) > 0, by intermidiate value theorem, there must exist a time 0 < t0 < τ
+such that xi(t0) = 0. Now consider the differential equation corresponding to
+the ith component of the system (25). We substitute for all other components
+{xj(t), j (cid:54)= i} on the RHS of the following equation.
+
+(cid:88)
+
+˙xi(t) = −R(xi)(
+
+Bijxj(t) − Ti),
+
+xi(t0) = 0
+
+(41)
+
+j
+
+Since the vector x(t) is C1 and the regularizer R(·) is assumed to be C1, the RHS
+of the equation (41) is C1. Hence (41) admits a unique local solution. However
+note that the following is a solution to (41)
+
+xi(t) = 0,
+
+∀t ≥ t0
+
+(42)
+
+This is because R(0) = 0. By uniqueness, (42) is the only solution to (41). This
+contradicts the fact that xi(τ ) < 0. Hence x(t) ≥ 0,∀t ≥ 0. In a similar fashion,
+we can also prove that x(t) ≤ 1,∀t ≥ 0. This proves that all solutions to (24)
+must lie in the compact set H.
+To complete the proof, we observe that the RHS of the system (24) is locally
+Lipschitz at each point in the compact set H. Thus the global existence of the
+solution of (24) follows directly from Theorem 2.4 of [12].
+
+7.3. Proof of Theorem 4.2
+PROOF. Let τ be the period of the orbit. Consider the ith differential equation
+
+˙xi(t) = −R(xi)(Si(t) − Ti)
+= −(Si(t) − Ti)dt
+
+dxi
+R(xi)
+
+(43)
+
+(44)
+
+33
+
+Since xi(·) belongs to the interior of the compact set H,
+zero in the denominator for the enire orbit. Hence
+Riemann integral exists [21]. Integrating both sides from 0 to τ, we have
+
+R(xi(t)) does not have a
+R(xi(t)) is continuous and its
+
+1
+
+1
+
+(Si(t) − Ti)dt
+
+(45)
+
+(cid:90) τ
+
+0
+
+(cid:90) τ
+
+0
+
+dxi
+R(xi)
+
+=
+
+Let J(xi) be an anti-derivative of
+calculus [21], we can write the LHS of (45) as
+
+1
+
+R(xi). Hence using the fundamental theorem of
+
+J(xi(τ )) − J(xi(0)) =
+
+Si(t)dt − τ Ti
+
+(46)
+
+(cid:90) τ
+
+0
+
+Since the orbit is assumed to have a period τ, we have xi(τ ) = xi(0). Hence
+J(xi(τ )) − J(xi(0)) = 0. Thus we have
+
+(cid:90) τ
+
+0
+
+¯Si ≡ 1
+τ
+
+Si(t)dt = Ti
+
+7.4. Formal Derivation of the Stability Condition
+
+Let us write the system (24) conveniently as ˙x = F (x). Consider a ﬁxed point
+x of the system such that the kth node faces an uncontrollable overload condition.
+By Hartman-Grobman theorem [25], it is enough to consider linearized version
+of the system to determine the stability of ﬁxed points. The ﬁrst-order Taylor
+expansion about the ﬁxed point x yields the following:
+
+∂x
+
+∂F (x)
+
+∂F (x)
+
+|x=x(x − ¯x)
+
+|x=x(x − ¯x) =
+
+˙x ≈ F ( ¯x) +
+∂x |x=x denotes the Jacobian [18] of the system (24) evaluated at the
+Where, ∂F (x)
+ﬁxed point x = x and Bij = CjiAj. The second equation follows because x is
+assumed to be a ﬁxed point (and consequently F (x) = 0).
+Next we proceed to explicitly compute the Jacobian of the system (24) at a given
+point x. Note that the ith row of the system equation is given by
+
+∂x
+
+(cid:88)
+
+Fi(x) ≡ −xi(1 − xi)(
+
+Bijxj − T )
+
+Thus for i (cid:54)= j, we have
+
+j
+
+= −xi(1 − xi)Bij
+
+∂Fi
+∂xj
+
+(47)
+
+(48)
+
+and for i = j, the diagonal entry is given by
+
+(cid:19)
+
+Bijxj − T )
+
+34
+
+(49)
+
+(cid:88)
+(cid:19)
+
+j
+
+(cid:18)
+
+(cid:18)
+
+∂Fi
+∂xi
+= −
+
+= −
+
+xi(1 − xi)Bii + (1 − 2xi)(
+
+xi(1 − xi)Bii + (1 − 2xi)(Si − T )
+
+Since the node k is assumed to undergo an uncontrollable overload condition, we
+necessarily have xk = 0. Hence from Eqns (48) and (49), in the kth row of the
+Jacobian matrix, the off-diagonal entries are all zero and the diagonal entry is
+−(Sk − T ). Hence if Sk − T < 0, at least one eigenvalue of the Jacobian matrix
+at the ﬁxed point x is strictly positive and hence the ﬁxed point x is unstable. This
+implies that a sufﬁcient condition to avoid uncontrollable overload at node k is
+given by
+
+CjkAj ≤ Tk
+
+(50)
+
+(cid:88)
+
+j(cid:54)=k
+
+where we have used the fact that xi(t) ≤ 1,∀i and xk = 0. The derivation of the
+sufﬁcient condtion for absence of uncontrollable overload condition is completed
+by taking intersection of hyperplanes (50) for all k = 1, 2, . . . , N. (cid:4)
+
+7.5. Proof of Theorem 4.3
+PROOF. part-(1) [non-existence of periodic orbits]
+We use Dulac’s criterion to prove the non-existence of periodic orbits for the gen-
+eral two-node system. For ease of reference, we recall Dulac’s criterion below :
+
+Theorem 7.1 (Dulac’s criterion [25]). Let ˙x = f (x) be a continuously differen-
+tiable vector-ﬁeld deﬁned on a simply connected subset R of the plane. If there
+exists a continuously differentiable, real-valued function g(x) such that ∇ · (g ˙x)
+has one sign throughout D, then there are no closed orbits lying entirely in D.
+Now we return to the proof of the result. Let H2 = [0, 1]2 be the unit square,
+where by virtue of theorem 4.1, the trajectory of the two-node system lies for all
+time t ≥ 0. Thus, it sufﬁces to show that there does not exist any periodic orbit
+in its interior ˚H2 ≡ D. It is obvious that the region D is simply connected. Now
+consider the following g(x) for application of the Dulac’s criterion,
+
+g(x) =
+
+1
+
+x1x2(1 − x1)(1 − x2)
+
+(51)
+
+It is easy to verify that g(x) is continuously differentiable throughout the region
+D. We next evaluate the divergence
+
+(cid:18)
+
+(cid:19)
+
+35
+
+(52)
+
+∇ · (g ˙x) = −β
+
+B11
+
+x2(1 − x2)
+
++
+
+B22
+
+x1(1 − x1)
+
+It is easy to verify that the term within the parenthesis is always strictly positive
+throughout the region D. Hence, by Dulac’s criterion, there are no closed orbits
+in D. This proves the result.
+part-(2) and (3) [controllability of the system]
+Let the arrival rates to node 1 and 2 be given by A1 and A2. Let x1 and x2 denote
+the operating point of the system at the steady-state. Our objective is to ﬁnd
+sufﬁcient conditions on the arrival rate vector (A1, A2), under which the operating
+points (x1, x2) such that either x1 = 0 or x2 = 0 (i.e. full ofﬂoad to Layer-II)
+are avoided in the steady-state. This will ensure that no uncontrollable overload
+situation takes place in the system. First we consider the ﬁxed point
+
+x1 = 0, x2 = 1
+
+(53)
+
+This ﬁxed point will be stable if both the eigenvalues of the Jacobian matrix at
+this point be negative. From Eqns.
+(48) and (49) we have the following two
+conditions:
+
+S1 > T, S2 < T
+
+(1 − α)A2 > T, βA2 < T
+
+i.e.,
+
+i.e.,
+
+T
+1 − α
+
+< A2 <
+
+T
+β
+
+(54)
+
+Similarly, analyzing the stability of the ﬁxed points around the point x1 = 1, x2 =
+0, we obtain that this ﬁxed point will be unstable if
+
+i.e.,
+
+S1 < T, S2 > T
+
+αA1 < T, (1 − β)A1 > T
+
+i.e.,
+
+T
+1 − β
+
+< A1 <
+
+T
+α
+
+36
+
+(55)
+
+Note that if α + β > 1, both the above regions (54) and (55) will be empty and
+the ﬁxed points (1, 0) and (0, 1) will be always unstable. Thus the operating point
+will not converge to these undesirable ﬁxed points in the steady-state.
+Now consider the (possibly feasible) ﬁxed point (x1, x2) such that
+
+x1 = 0, S2 = T
+
+(56)
+
+The above condition translates to,
+
+x1 = 0, A2x2β = T
+
+This ﬁxed point will be feasible provided T
+this ﬁxed point is evaluated as
+
+(cid:18) (1 − β) T
+β − T
+A2β (1 − T
+A2β )B21
+
+T
+
+∂F (x)
+
+∂x
+
+|x = −
+
+x1 = 0, x2 =
+
+T
+A2β
+A2β < 1. The Jacobian matrix about
+
+(57)
+
+(cid:19)
+
+A2β (1 − T
+
+0
+A2β )B22
+
+T
+
+From the Jacobian matrix above, we conclude that both of its eigenvalues are
+negative provided the following two conditions hold
+
+A2 >
+
+T
+β
+
+, β <
+
+1
+2
+
+.
+
+(58)
+
+Doing similar analysis around the ﬁxed point (S1 = T, x2 = 0), we conclude that
+the above ﬁxed point will be stable for all arrival rates A1 > T
+Finally, to obtain efﬁcient operating region for the system (with no uncontrol-
+lable overload situation), we take union over stability region of all undesired ﬁxed
+points and take the complement of it. Hence, if α > 1
+2 all the undesri-
+ble ﬁxed points are unstable and hence the uncontrollable overload situation is
+avoided for all DNS-request arrival rates A. This proves part (2) of the theorem.
+On the other hand, if either α < 1
+2 holds, then a sufﬁcient condition for
+the stability of the system is given by
+
+α and α < 1
+2.
+
+2 or β < 1
+
+2, β > 1
+
+A1 <
+
+T
+1 − α
+
+, A2 <
+
+T
+1 − β
+
+This proves part (3) of the theorem.
+
+

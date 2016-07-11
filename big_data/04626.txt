@@ -1,0 +1,1920 @@
+TAPER: query-aware, partition-enhancement for large,
+
+heterogenous, graphs
+
+Hugo Firth
+
+School of Computing Science
+
+Newcastle University
+h.ﬁrth@ncl.ac.uk
+
+Paolo Missier
+
+School of Computing Science
+
+Newcastle University
+
+paolo.missier@ncl.ac.uk
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+5
+1
+
+ 
+ 
+]
+
+B
+D
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+6
+2
+6
+4
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+ABSTRACT
+Graph partitioning has long been seen as a viable approach
+to address Graph DBMS scalability. A partitioning, how-
+ever, may introduce extra query processing latency unless it
+is sensitive to a speciﬁc query workload, and optimised to
+minimise inter -partition traversals for that workload. Ad-
+ditionally, it should also be possible to incrementally adjust
+the partitioning in reaction to changes in the graph topology,
+the query workload, or both. Because of their complexity,
+current partitioning algorithms fall short of one or both of
+these requirements, as they are designed for oﬄine use and
+as one-oﬀ operations.
+
+The TAPER system aims to address both requirements,
+whilst leveraging existing partitioning algorithms. TAPER
+takes any given initial partitioning as a starting point, and
+iteratively adjusts it by swapping chosen vertices across par-
+titions, heuristically reducing the probability of inter-partition
+traversals for a given pattern matching queries workload. It-
+erations are inexpensive thanks to time and space optimisa-
+tions in the underlying support data structures.
+
+We evaluate TAPER on two diﬀerent large test graphs
+and over realistic query workloads. Our results indicate
+that, given a hash-based partitioning, TAPER reduces the
+number of inter-partition traversals by ∼ 80%; given an un-
+weighted METIS [13] partitioning, by ∼ 30%. These reduc-
+tions are achieved within 8 iterations and with the additional
+advantage of being workload-aware and usable online.
+
+Categories and Subject Descriptors
+H.2.4 [Database Management]: Systems
+
+General Terms
+Algorithms, Performance
+
+Keywords
+Graph databases, Graph repartitioning, Workload mining
+
+Permission to make digital or hard copies of all or part of this work for
+personal or classroom use is granted without fee provided that copies are
+not made or distributed for proﬁt or commercial advantage and that copies
+bear this notice and the full citation on the ﬁrst page. To copy otherwise, to
+republish, to post on servers or to redistribute to lists, requires prior speciﬁc
+permission and/or a fee.
+Copyright 20XX ACM X-XXXXX-XX-X/XX/XX ...$15.00.
+
+Figure 1: Illustrative example graph
+
+1.
+
+INTRODUCTION
+
+Pattern matching queries over labelled graphs are increas-
+ingly common in many applications. These include fraud
+detection [27], recommender systems [10] and social anal-
+ysis [3], where labels typically denote the type of a vertex
+(Person, Group, Post etc. . . ). A vertex-labelled graph has
+the form G = (V, E, LV , l ), where each vertex v is annotated
+with a label l (v) ∈ LV from a predeﬁned set LV of labels.
+The focus of this paper is on large labelled graphs that are
+both partitioned and heterogeneous. Partitioning a graph
+into several sub-graphs occurs either because the data is
+naturally distributed across separate physical hosts, or as
+a result of an explicit partitioning process, aimed at over-
+coming resource limitations such as storage space or CPU
+cores. Heterogeneity refers to the diversity in the labels LV
+associated to the vertices. For example, a social network
+might choose to distinctly represent the various content its
+members produce, such as a messages, images and events,
+causing its associated graph to be more heterogeneous.
+
+We consider pattern matching queries that extend Reg-
+ular Path Queries [2, 18] (RPQ), which can be expressed
+using a restricted form of regular path expressions over
+the set of vertex labels. Examples of valid expressions
+are Q1 = a · (b|c) · (c|d) and Q2 = (c|a) · c · a, where
+a, b, c, d ∈ LV . The answers to a such a path-query consists
+of the sets of paths in G, whose vertex labels satisfy the
+regular expression. For instance, executing Q1 and Q2 over
+the graph of Fig. 1 results in the sets {(1, 2, 3), . . . , (6, 5, 4)}
+and {(5, 3, 6), . . . , (6, 5, 6)} respectively. The CRPQ formal-
+ism has been used to model a variety of graph query lan-
+guages, including XPath [17] and proposed extensions to
+SPARQL [1].
+
+Pattern matching queries that involve many edge traver-
+sals can usually be processed eﬃciently on centralised graph
+database management systems (GDBMS) [24]. When the
+
+acbdac123456ABgraph is partitioned, however, query execution will require
+traversing edges that straddle partition boundaries, incur-
+ring performance penalties. These inter -partition traversals
+are traversal over edges of the set (vi, vj) ∈ E such that
+vi ∈ Vi, vj ∈ Vj, where i (cid:54)= j. One known approach to im-
+proving query processing is to ﬁnd a partitioning Pk(V ) of V
+into k sets {V1, V2, . . . , Vk}, for which the number of these in-
+ter -partition traversals is minimal for a ﬁxed k. A number of
+systems address this problem, potentially through a combi-
+nation of optimising data placement strategies [9, 13, 25, 26],
+and selective vertex replication [19, 22, 29].
+
+Graph partitioning techniques that seek optimal vertex
+placement have two main drawbacks. Firstly, they are com-
+putationally complex [26] and therefore often performed as
+one-oﬀ operations, ahead of oﬄine, analytical workloads.
+For online, non-analytical workloads, these expensive algo-
+rithms may need to be periodically re-executed, i.e after a
+series of graph updates. The impact on system availabil-
+ity associated with these operations has been found to be
+unacceptable in online settings [11]. Existing tools [19, 29]
+trade eﬃciency for optimality. They opt for a simple hash-
+based partitioning approach, where vertices are assigned to
+partitions using Id range or some other property. Though
+highly eﬃcient to compute, these partitionings will typically
+exhibit a large number of inter -partition edges, leading to
+poor average pattern matching query performance.
+
+The second drawback is that a one-oﬀ graph partitioning
+strategy naturally assumes a uniform, or at least constant,
+likelihood of traversal for each edge throughout query pro-
+cessing. This is an unrealistic assumption, as it does not
+account for speciﬁc, changing, query workloads. In reality,
+queries may traverse a limited number of edges, which are
+also speciﬁc to the query patterns. In such cases, min-cut
+algorithms [13], which optimise a partitioning solely by min-
+imising the number or weight of inter-partition edges, may
+do more work than is necessary and fail to identify a near-
+optimal placement of vertices.
+
+1.1 Contributions
+
+We propose a new approach to improving path-query
+performance over large, heterogeneous graph partitionings,
+which involves incrementally enhancing a given initial par-
+titioning whilst accounting for a speciﬁc query workload.
+More precisely, let Q be a query workload over G, along
+with the relative frequency of each query in Q. Firstly, we
+estimate the probabilities of traversing any particular edge
+in G when processing a random q ∈ Q. We then use these
+estimates to deﬁne the quality of a partitioning, as an es-
+timate of the probability of inter-partition traversals given
+Q. Note that this is diﬀerent from the more commonly used
+cost function for a partitioning alluded to above, namely the
+number of inter-partition edges.
+
+k (V ), P 2
+
+Secondly, given any initial partitioning P 0
+
+k (V ) of a graph
+G into k subgraphs, we iteratively compute new partition-
+ings P 1
+k (V ), . . . , improving the partitioning with re-
+spect to our quality metric at each step. Note that the initial
+partitioning is not necessarily optimal in any way, indeed it
+may be obtained using any of several available techniques;
+for instance hash partitioning, multilevel partitioning [13] or
+spectral recursive octasection [9]. P i+1
+(V ) is obtained from
+P i
+k(V ).
+We prioritise and limit these swaps by their potential qual-
+ity improvement. As such, our method only involves moving
+
+k(V ) by swapping vertices across the partitions of P i
+
+k
+
+relatively few vertices from one partition to another and is
+much less expensive than a complete re-partitioning, even
+after many iterations.
+
+Concretely, we make the following contributions:
+• We extend an existing notion of partitioning quality
+[5], to account for the probabilities of crossing partition
+boundaries during execution of a query from a given
+workload Q.
+
+• We deﬁne a measure of the likelihood for a vertex to
+
+be the source of inter -partition traversals, given Q.
+
+• We propose an eﬃcient heuristic method for iteratively
+k(V ) for
+
+increasing the quality of k-way partitionings P i
+a given Q over time, where k is ﬁxed.
+
+We evaluate our approach using both real and synthetic
+graph datasets of varying sizes. We use a one-oﬀ partition-
+ing computed by the popular METIS tool1, without edge
+weights, as proxy for the optimal workload-agnostic parti-
+tioning of these graph datasets. We then assess the perfor-
+mance of our method against this ideal upper bound, as a
+function of the number of iterations, given Q and a simple
+hash-based partitioning P 0
+
+k (V ).
+
+Our results show that our algorithms improves over the
+quality of P 0
+k (V ) by more than 70% in fewer than 8 itera-
+tions. Furthermore, we also show that if a METIS partition-
+ing itself is used as the starting point, our method improves
+upon this baseline, by around 30% over at most 6 iterations.
+1.2 Related Work
+
+Two main strands of prior work are relevant to our study:
+(1) workload aware replication and data placement in dis-
+tributed databases; and (2) graph partitioning.
+
+In the context of online application, distributed database
+queries that traverse multiple partitions are expensive [21],
+incurring high communication cost and, in some implemen-
+tations, resource contention.
+In order to achieve good la-
+tencies, distributed databases must ﬁnd a data placement
+strategy which minimises these transactions, and the over-
+head they cause, whilst maintaining a balanced load across
+all machines involved. This is also known as reducing av-
+erage query span, i.e. the number of partitions involved in
+answering a query.
+
+For graph data, balanced graph partitioning has been ex-
+haustively studied in literature since the 1970s [9, 13, 25, 26,
+28], and a number of practical solutions are available [13,25].
+We do not seek a new graph partitioning algorithm; rather,
+to propose a workload-driven method for improving par-
+titions that already exist. Curino et al. [4, 21] have pro-
+posed systems to tackle the related problem of workload
+driven data placement in distributed RDBMS. In particu-
+lar, Schism [4] captures a query workload over a period of
+time, modelling it as a graph, each edge of which represents
+tuples involved in the same transaction. This graph is then
+partitioned using existing “one-oﬀ” techniques to achieve a
+minimum edge-cut. Mapped back to the original database,
+this partitioning represents an arrangement of records which
+causes a minimal number of transactions in the captured
+workload to be distributed.
+
+In their work SWORD, Quamar et al [23] build upon the
+ideas presented in Schism [4]. They use a compressed rep-
+resentation of the workload graph and perform incremental
+1METIS:
+metis/overview
+
+http://glaros.dtc.umn.edu/gkhome/metis/
+
+re-partitioning to improve the partitioning’s scalability and
+sensitivity to workload changes.
+
+Although the goal of these works and our own is similar,
+there exist major diﬀerences in approach. For instance, in
+Schism, edges directly represent the elements accessed by
+a query, rather than their labels as we do. However this
+ﬁne grained approach produces very large graphs, which are
+expensive to both partition and store, and may impact scal-
+ability [23]. Furthermore, these works are focused on a rela-
+tional data model, where typical workloads overwhelmingly
+consist of short, 1-2 “hop” queries. This justiﬁes Quamar
+et al’s simplifying decision, when repartitioning a graph, to
+only consider queries which span a single partition. How-
+ever this assumption does not hold for general graph path
+and pattern matching queries. It is unclear how SWORD’s
+approach would perform given a workload containing many
+successions of join operations, equivalent to the traversals
+required for graph pattern matching.
+
+Further prior work has focused on exploiting statistical
+properties of a query workload, to eﬃciently manage graph
+data through replication [19,22,29]. In [29], Yang et al. pro-
+pose algorithms to eﬃciently analyse online query workloads
+and to dynamically replicate “hotspots” (cross partition
+clusters of vertices which are being frequently traversed),
+thereby temporarily dissipating network load. Whilst highly
+eﬀective at dealing with unbalanced query workloads, Yang
+et al. focus solely upon the replication of vertices and edges
+using temporary secondary partitions. They do not improve
+upon the initial partitioning, nor do they consider workload
+characteristics when producing it. This can result in replica-
+tion mechanisms doing far more work than is necessary over
+time, adversely aﬀecting the performance of a system. As
+a result, the enhancement techniques we present here could
+eﬀectively complement many workload aware replication ap-
+proaches, such as that proposed by Yang et al.
+
+2. DEFINITIONS
+
+In a labelled graph G = (V, E, LV , l ), function l : V → LV
+associates a label l(v) from a given set LV to each vertex
+v ∈ V . A path-query q over G is a regular expression over
+symbols in LV . In this work, we are going to use queries
+related to Regular Path Queries (RPQ) [18], deﬁned by the
+following expression language over LV :
+
+E ::= τ | (E · E) | (E + E) | (E | E) | E∗
+
+(1)
+where τ ∈ LV , and as usual “+” represents union, “|” exclu-
+sive disjunction, and “*” the Kleene closure operator.
+
+Let L(q) denote the regular language deﬁned by a query
+q. The result of executing q is a set of subgraphs Gi =
+(Vi, Ei, LV , l ), where Vi = {vi1 . . . vin} ⊂ V consists of all
+and only the vertices such that l (vi1 ) . . . l (vin ) is a valid
+path, that is, a valid expression in L(q). Ei ⊂ E is the set
+of edges e ∈ E that connect the vertices vij in G.
+
+Note that queries that include more complex topologies,
+such as branching and cycles, typically require conjunctions
+between expressions, or other extensions to RPQs, such as
+those proposed by Barcelo et al. [2]. These extensions are
+not covered by the RPQ fragment deﬁned by expression lan-
+guage (1), and are not within the scope of this work.
+A k-way graph partitioning is a family Pk(V ) of k
+mutually disjoint sets of vertices: Pk(V ) = {V1, V2, . . . , Vk}.
+Partitioning Pk(V ) induces a natural partitioning on G, i.e.
+
+into a set S1 . . . Sk of subgraphs Si = (Vi, Ei), where Ei =
+{(v, w) ∈ Vi × Vi ∩ E}.
+2.1 Stability of a graph partitioning
+
+The broad goal of TAPER is to increase the quality of a
+k-way partitioning (Sec. 1.1). Here we deﬁne the measure
+of partition quality which we aim to increase. For this, we
+extend the notion of partition stability, ﬁrst introduced by
+Delvenne et al. [5] in the context of multi-resolution com-
+munity detection in graphs; stability is described in terms of
+network ﬂow. The main intuition is that, when a partition
+is stable, a ﬂow that originates from a point within a par-
+tition and moves randomly along paths should be trapped
+within the same partition for a long time. Time is the res-
+olution parameter. This concept of network ﬂow in graphs
+is readily modelled as a random walk, where discrete time
+t is measured as the number of steps. More precisely, the
+stability of a partition Si is deﬁned as the probability that
+it contains the same random walker both at time t0 and at
+time t0 + t, less the probability for an independent walker
+to be in Si (by ergodicity2):
+
+p(Si, t0, t0 + t) − p(Si, t0,∞)
+
+(2)
+
+Note that this deﬁnition allows for the possibility of a walker
+crossing multiple partition boundaries before returning to its
+initial partition at any time during the [t0, t0 + t] interval.
+The overall stability of a partitioning Pk(V ) is the sum of
+the stability of all partitions Si where 1 ≤ i ≤ k. In other
+words, the greater the stability of a partitioning, the higher
+the probability that a random walker, having traversed t
+steps, will be in the same partition where it started.
+2.2 Workload-aware stability
+
+In this work, we extend stability by creating a new mea-
+sure of partition quality which we will refer to as workload-
+aware stability. Our extensions are driven by two main re-
+quirements. Firstly, TAPER aims to improve the quality of
+a graph partitioning by minimising the probability of ex-
+pensive inter -partition traversals, when executing a given
+query workload Q (Sec. 1.1). Using stability, which mod-
+els network ﬂow as random walkers that traverse paths in
+a graph, gives us more ﬂexibility than other measures of
+partition quality, such as edge-cut, when we try to incor-
+porate information on a query workload. Stability’s ‘walk-
+ers’, represented by the probabilities in a transition matrix,
+may be modiﬁed to account for the speciﬁc graph patterns
+associated with the queries in Q, along with their relative
+frequency. This will reveal diﬀerent dominant traversal pat-
+terns and produce a measure of quality more closely corre-
+lated with the cost of executing Q over a particular graph
+partitioning. Secondly, the current deﬁnition of stability as
+given above is also limited, as it does not account for the
+probability that a walker crosses partition boundaries mul-
+tiple times within t steps. In contrast, we need to be able
+to estimate the probability that the walker does not leave
+the partition within the interval.
+2.3 The Visitor Matrix: Non-random walks
+
+with memory
+
+2According to the ergodic hypothesis (http://bit.ly/
+1n6515p) P (S, t0,∞), after an inﬁnite time a walker holds
+no memory of its initial position.
+
+We address both requirements by extending the well-
+known notion of a biased random walk over a graph. Rather
+than uniform transition probabilities, such a “random” walk
+assumes the more general Markov property; that is, the
+probability of a transition from vertex vk to vj only depends
+on the prior probability of being in vk:
+
+P r(vk → vj|vi → . . . → vk) = P r(vk → vj|vk)
+
+In this case, the probabilities P r(vk → vj|vk) are captured
+by a transition matrix M :
+
+M [k, j] = P r(vk → vj|vk)
+
+and the probability of a t-steps walk from vk to vj is com-
+puted as M t[k, j]. However, taking into account the query
+matching patterns as per our requirements above, invali-
+dates the Markov property, because the probability of a
+transition vk → vj now depends on the speciﬁc path through
+which we arrive at vk:
+
+P r(vk → vj|p → vk) (cid:54)= P r(vk → vj|p
+
+(cid:48) → vk)
+in general, for any two paths p (cid:54)= p(cid:48) leading to vk.
+
+In other words, in order to account for query matching
+patterns of length up to t, where t is deﬁned by the query
+expressions in Q, we use a multi-step (non-random) walk
+model over the graph, which has memory of the last t steps.
+Each transition probability vk → vj is now explicitly condi-
+tioned on the paths, of length up to t, which lead to vk.
+
+To represent these probabilities, we extend M to a set:
+
+VM (t) ≡ {VM (1), . . . , VM (t)}
+
+(3)
+
+of matrices, where the parameter t denotes the longest query
+matching pattern in Q, and VM (k) has dimension 1 ≤ k ≤ t.
+We use the term Visitor Matrix to refer to (3).
+
+The deﬁnition is by induction, where the base cases are
+the prior probabilities P r(vi) to be in vi, for VM (1), and the
+normal transition matrix M , for VM (2). Formally:
+
+VM (1)[i] = P r(vi)
+
+VM (2)[i1, i2] = P r(vi1 → vi2|vi1 ) = M [i1, i2]
+
+(4)
+
+(5)
+
+and
+
+VM (k)[i1, . . . , ik] = P r(vik−1 → vik|vi1 → . . . → vik−1 )
+
+(6)
+for 2 < k ≤ t. Fig. 2 shows a representation of a Visi-
+tor Matrix with t = 3, using a 2-dimensional matrix layout
+where VM (3) is “appended” to VM (2). The cells in the ma-
+trix store probabilities for paths in the example graph to the
+right (originally Fig. 1), relative to query expression Q1. For
+example, path 1 → 2 → 3 is an instance of query pattern
+abc, and its probability is stored in VM (3)[1, 2, 3] (similarly
+for the other highlighted elements in the matrix). A VM ,
+like any ﬁnite transition matrix, is right-stochastic, i.e., each
+row sums to 1, and the cells represent all paths up to length
+t. We show how compute the elements of VM (t) for a given
+query workload Q in section 4.2.
+
+In practice, VM (t) can be partitioned into n sub-matrics
+VM i(t), one for each of n partitions, because we can ﬁnd
+a permutation of the rows and columns of VM such that
+VM i(t) is a contiguous sub-matrix of VM . Thus, in the
+following we use VM i(t) to refer the V M for partition Vi.
+Note that the visitor matrix is impractically large to com-
+pute, with a space complexity of O(|V |t). In Sec. 5.2 we
+
+Figure 2: Visitor Matrix structure
+
+present heuristics that are designed to reduce both space
+complexity, as well as to avoid computing some of the cells
+in the VM .
+
+3. ENHANCING A PARTITIONING
+
+(V ), given initial partitioning P 0
+
+k
+
+We are going to exploit the VM structure just deﬁned,
+k(V ) →
+to iteratively compute incremental enhancements P i
+P i+1
+k (V ) of G. In each it-
+eration we identify the set of vertices in each partition that
+are most likely to be the source of inter -partition traver-
+sals, given the query workload Q, and then swap such high-
+extroversion vertices between partitions. As we will show
+experimentally, this has the eﬀect of incrementally reducing
+the overall likelihood of inter-partition traversal across all
+partitions Vi, and thus, indirectly, of increasing workload-
+aware stability (Sec. 2.2). Note that we never explicitly cal-
+culate any form of stability, as it is an expensive global mea-
+sure (O(|V | · |E| + |V |2) [16]), unsuitable for use as a cost
+function for a partitioning enhancement technique.
+3.1
+
+Increasing stability by Vertex swapping
+
+Informally, we deﬁne the extroversion of a vertex v to
+be the likelihood that it is the source of an inter -partition
+traversal, given any of the query patterns in Q. TAPER
+seeks to enhance a partitioning by determining a series of
+vertex swaps between graph partitions such that their to-
+tal extroversion is minimised. This is an extension of the
+general graph partitioning problem, a classic approach to
+which is the algorithm KL/FM, proposed by Kernighan and
+Lin [14] and later improved upon by Fiduccia and Mattheyes
+[6]. They present techniques that attempt to ﬁnd sets of ver-
+tices and edges which, when moved between two halves of a
+graph bisection, produce an arrangement that is globally op-
+timal for some criteria (usually edge-cut). Karypis and Ku-
+mar [13] subsequently generalise this technique to address
+the problem of k -way partitioning, in an algorithm which
+they call Greedy Reﬁnement. Greedy Reﬁnement selects a
+random boundary vertex3 and orders the partitions to which
+
+3A vertex with neighbours in one or more external parti-
+tions.
+
+nn2n2 D3 D1,1   1,2                   1,66,1   6,2                   6,6(1,1),1                (1,1),6(6,6),1                (6,6),6Q1 = a⋅(b|c)⋅(c|d) 123126365124654(1,2),1                (1,2),6(6,5),1                (6,5),6123456abcdcait is adjacent by the potential gain (reduction in edge-cut)
+of moving the vertex there, subject to some partition bal-
+ance constraints. If a move does not satisfy chosen balance
+constraints, progressively less beneﬁcial destination parti-
+tions are considered. Finally, the move will be performed.
+Greedy Reﬁnement has been shown to converge within 4-8
+iterations. It is this algorithm which we use as the basis for
+our TAPER’s vertex swapping procedure. However, rather
+than reduction in edge-cut, we use the reduction in extro-
+version as our measure of gain for evaluating vertex swaps.
+There are some other key diﬀerences between our own
+approach, and that of Greedy Reﬁnement. Firstly, Greedy
+Reﬁnement considers vertices at random from the boundary
+set, whilst we consider only the set of most extroverted ver-
+tices, in descending order of extroversion. This reduces the
+number of swaps performed and so should improve perfor-
+mance. Secondly, Greedy Reﬁnement is designed to operate
+on a graph compressed using a matching algorithm, so ev-
+ery vertex move corresponds to the movement of a cluster
+of vertices in the original graph. Without this trait, Greedy
+Reﬁnement would be more susceptible to being trapped in
+local optimisation minima: as vertex clusters are iteratively
+moved across partition boundaries edge-cut may temporar-
+ily increase. We do not operate on a compressed graph;
+instead we opt for a simple ﬂood ﬁll approach, detailed in
+section 5.5. Using traversal probabilities, precomputed in
+the visitor matrix, we identify a vertex v’s “family”: those
+vertices likely to be the source of traversals to v. This is
+the clique of vertices which should accompany a swapping
+candidate to a new partition.
+3.2
+
+Introversion and Extroversion
+
+metrically, its extroversion), in terms of the VM.
+
+We now formally deﬁne a vertex’s introversion (and, sym-
+Given v ∈ Vi, we have seen that VM cell:
+(cid:48)
+
+VM (k+2)
+
+i
+
+[vi1 , . . . , vik , v, v
+
+]
+
+denotes the probability of a transition from v to v(cid:48), given
+a path p = vi1 → . . . → vik → v that matches a query
+pattern. Let paths(v, Vi) denote the set of all such paths in
+Vi, i.e. those that match a query pattern in Q and end in v.
+We deﬁned the introversion(v) of v as the total probability
+of such transition occurring, summed over every path p ∈
+paths(v, Vi) and every destination vertex v(cid:48) ∈ Vi. Formally:
+
+(cid:88)
+
+( P r(p) · (cid:88)
+
+VM i(t)[p, v
+
+(cid:48)
+
+])
+
+introversion(v) =
+
+1
+
+P r(v)
+
+p
+
+for all p ∈ paths(v, Vi)
+
+v(cid:48)∈Vi
+
+(7)
+where for path p = vi1 → . . . → vik → v of length k + 1, we
+have:
+P r(p) = P r(v|vi1 → . . . → vik )·
+
+P r(vik|v1 → . . . → vik−1 ) · . . . · P r(vi2|vi1 ) · P r(vi1 ) =
+VM (k+1)
+VM (k)
+
+[vi1 , . . . , vik ] · . . . · VM (2)
+
+[vi1 , . . . , v]·
+
+[vi1 , vi2 ] · VM (1)
+
+i
+
+[vi1 ]
+
+i
+
+i
+
+i
+
+and the total intra-partition traversal probability is divided
+by the total probability of all traversal paths to v:
+
+(cid:88)
+
+P r(v) =
+
+P r(p)
+
+p∈paths(v,Vi)
+
+to account for the percentage of the traversals from v that
+are internal.
+Symmetrically, we deﬁne the extroversion of vertex v as
+the total likelihood of inter-partition traversal v → v(cid:48), where
+v ∈ Vi and v(cid:48) ∈ Vj, j (cid:54)= i. As the VM is stochastic and we
+may assume that a partition’s VM forms a sub-matrix of the
+global VM, inter -partition probabilities are the complement
+to 1 of the intra-partition probabilities:
+
+(cid:88)
+
+( P r(p) · (1 − (cid:88)
+
+extroversion(v) =
+
+1
+
+P r(v)
+
+p
+
+for all p ∈ paths(v, Vi)
+
+v(cid:48)∈Vi
+
+VM i(t)[p, v
+
+(cid:48)
+
+]))
+
+(8)
+
+4. PREFIX TRIE ENCODING OF QUERY
+
+EXPRESSIONS
+
+We use a preﬁx trie, which we have called the Traversal
+Pattern Summary Trie (TPSTry), to encode the entire set
+of path expressions deﬁned by each query Q in our workload
+Q. In practice, TPSTry gives us a compact way to represent
+legal paths that may lead to each vertex v in G, along with
+each path’s probability of being traversed. From the set of
+regular expressions which comprise a query workload Q, we
+derive the dictionary set D of all label sequences (strings)
+described by these expressions. If a sequence of vertices p is
+connected, such that (pn, pn−1) ∈ E, and its corresponding
+sequence of labels l(p) is a preﬁx of some sequence from D,
+then that sequence is considered legal. A trie is highly eﬃ-
+cient at matching preﬁxes for multiple sequences or strings.
+The idea of using a trie is inspired by Li et al. [17] who
+use them to encode sequences of clicked hyperlinks over a
+web graph, summarising the top k most frequent patterns in
+web browsing sessions. In our context, a sequence of clicked
+hyperlinks is just a particular case of generic traversals over
+more general forms of graph data. By treating path queries
+as a stream of the traversal operations they cause, we are
+able to produce a similar summary: those paths in the graph
+G most frequently traversed during execution of our query
+workload Q.
+
+Although Li et al’s strategy is eﬀective at summarising
+common patterns, it does not entirely apply to our scenario,
+because the branching factor of the trie is determined by the
+number |V | of vertices in the graph, and thus it can grow
+very large. While they control the size of the trie by heuris-
+tically limiting the number of patterns which are stored in
+the trie, in our case this solution is not feasible, because
+we require the relative frequency of patterns in Q in order
+to compute the transition probabilities out of each vertex.
+Therefore, omitting some of those patterns would have an
+adverse eﬀect on the accuracy of the transition probabilities.
+Instead of encoding all actual graph traversals, we only
+encode query patterns in terms of the labels associated with
+each vertex. Then we associate probabilities to each node
+in this, smaller, trie of labels.
+
+In practice, each path in the trie is an intensional repre-
+sentation of a (possibly very large) set of paths in the graph,
+namely those whose vertices match the sequence of labels in
+the trie branch. This representation is very compact, be-
+cause this trie grows with |LV |t, where t is the length of the
+longest path expressed by queries in Q and LV is typically
+small. Of course, one path in the trie now corresponds to a
+
+
+
+v1
+v2
+.
+.
+.
+v6
+
+v1, v1
+v1, v2
+
+.
+.
+.
+
+v6, v3
+
+.
+.
+.
+
+v6, v6
+
+v1
+v2
+0.67 0.33
+
+0
+
+.
+.
+.
+0
+0
+0
+
+.
+.
+.
+0
+
+.
+.
+.
+0
+
+0
+
+.
+.
+.
+0
+0
+0
+
+.
+.
+.
+0
+
+.
+.
+.
+0
+
+v3
+0
+0
+
+.
+.
+.
+
+0.33
+
+0
+
+v4
+0
+0
+
+.
+.
+.
+0
+0
+
+v5
+0
+0
+
+.
+.
+.
+
+v6
+0
+0
+
+.
+.
+.
+
+0.33 0.33
+
+0
+
+0.25
+
+0.5
+
+0.25
+
+.
+.
+.
+0
+
+.
+.
+.
+0
+
+.
+.
+.
+
+.
+.
+.
+
+0.25 0.25
+
+0.5
+
+.
+.
+.
+0
+
+.
+.
+.
+0
+
+.
+.
+.
+0
+
+
+
+0
+0
+
+.
+.
+.
+
+Figure 3: Example of summary trie from restricted regular
+path expressions.
+
+Figure 4: Visitor Matrix (left), TPSTry probabilities (right)
+
+set of paths in the graph. We are going to take this one-many
+relationship into account when we convert the probabilities
+associated with nodes in the trie, into the probabilities as-
+sociated with vertices in the graph, i.e., the elements of the
+VM.
+Given a workload Q, TPSTry is constructed by mapping
+each regular expression Q ∈ Q to a set of strings, and adding
+the strings to the trie using standard trie insertion proce-
+dure, while labelling the trie nodes with query labels at the
+same time. The mapping s = str (Q) of a query expression
+Q to string s is straightforward and is deﬁned as follows
+(append (x, y) simply appends string y to string x):
+
+str (l) = {l} for each l ∈ LV
+str (e1 | e2) = str (e1) ∪ str (e2)
+str (e1 · e2) = {append (x, y)|x ∈ str (e1), y ∈ str (e2)}
+str (eN ) = str (e · e . . . e) // N times
+
+Example. Consider again the graph in Fig. 1 and expres-
+sions Q1 = a · (b|c) · (c|d) and Q2 = (c|a) · c · a. The two
+expressions are encoded using the two preﬁx trees in Fig. 3
+(a). These two trees are then further combined into the sin-
+gle preﬁx tree in Fig. 3(b), with each node labelled with the
+set of queries it pertains to.
+Note that, in an operation setting where the content of Q
+changes over time, TPSTry must be updated as new queries
+arrive.
+4.1 Associating probabilities to trie nodes
+
+Once the trie is constructed, as in Fig. 3(b), we associate
+a probability to each node in the trie, reﬂecting the relative
+likelihood that a sequence of vertices with those labels will be
+traversed in the graph. These probabilities are calculated by
+considering both the individual contribution of each query
+to the trie, as well as the relative frequency of occurrence of
+each query within the workload.
+
+To understand these calculations, consider again the trie
+of Fig. 3(b), where we assume that Q1, Q2 each occur once
+in Q, i.e., they have the same relative frequency. Starting
+from root E, consider transition E → a. Its probability can
+be expressed as:
+P r(E → a) = P r(E → a|Q1)·P r(Q1)+P r(E → a|Q2)·P r(Q2)
+where the conditional probabilities are computed using the
+labels on the nodes and the P r(Qi) are the relative frequen-
+cies of the Qi. In the example we have P r(Q1) = P r(Q2) =
+.5, P r(E → a|Q1) = 1 because a is the only possible ﬁrst
+match in Q1’s pattern, and P r(E → a|Q2) = .5 because ini-
+
+tially Q2 can match both a and c, with equal probability.
+Thus, P r(E → a) = 1 · .5 + .5 · .5 = .75.
+We can now use P r(E → a) to compute P r(E → a → b)
+and P r(E → a → c):
+
+P r(E → a → b) =
+
+P r(E → a → b|Q1) · P r(Q1)+
+P r(E → a → b|Q2) · P r(Q2)
+
+where
+
+P r(E → a → b|Q1) =
+
+P r(a → b|E → a, Q1) · P r(E → a|Q1) =
+.5 · 1 = .5
+
+and P r(E → a → b|Q2) = 0 because pattern E → a → b is
+not feasible for Q2. Thus, P r(E → a → b) = .5 · .5 = .25.
+
+Formally, we identify each node n in the trie by the se-
+quence of k steps (n1, n2, . . . , nk) required to reach it from
+the root node, E. A probability label p(n) is then associated
+with each node, its value computed as follows:
+
+(cid:88)
+
+Qi∈Q
+
+p(N ) = P r(E → . . . → nk) =
+
+P r(E → . . . → nk|Qi) · P r(Qi)
+
+The individual terms of the sum are conditional probabil-
+ities over the path in the trie to node N . As we have seen in
+the example, these conditional probabilities over the paths
+are computed recursively on the length k:
+P r(E → . . . → nk−1 → nk|Qi) =
+
+P r(nk−1 → nk|E → . . . → nk−1, Qi)·
+P (E → . . . → nk−1|Qi)
+
+4.2 Computing VM cells with the TPSTry
+
+TPSTry encodes the likelihood of traversing from a vertex
+with some label, to any connected vertex with some other
+label (Sec. 4.1). This is an abstraction over the values we
+actually need for the visitor matrix, which are vertex-to-
+vertex transition probabilities. We may derive the desired
+vertex transition probabilities, given a path of previously
+traversed vertices p = p1, p2, . . . , pk. First we look up the
+the path’s corresponding sequence of vertex labels in the
+pattern summary trie. This returns a set of child trie nodes
+n ∈ N which represent legal labels for the next vertex to
+be traversed, along with each label’s associated probability
+p(n). Subsequently, the traversal probabilities for each label
+are uniformly distributed amongst those neighbours of pk
+which share that label. This produces a vector of traversal
+
+Q1:(cid:1)abcddQ2:(cid:1)accaacQ1, Q2:(cid:1)accdacbda(a)(b)Q1, Q2Q1, Q2Q1Q1Q1Q2Q2Q2Q2ccccQ1Q1Q1:(cid:1)abcddQ2:(cid:1)accaacQ1, Q2:(cid:1)accdacbda(a)(b)Q1, Q2Q1, Q2Q1Q1Q1Q2Q2Q2Q2ccccQ1Q1Trie with probabilities on the nodes.25(cid:1)accdacbdacc.75.5.125.125.125.125.25.25.25.25probabilities, one for each neighbour of the pk. This vector
+corresponds to a row in the visitor matrix.
+
+For each path of traversals with length < t, the VM as-
+sumes that a subsequent traversal is guaranteed, i.e.
+the
+total traversal probability in each row is 1, and the VM is
+stochastic. In reality some paths of traversals must have a
+total length < t, either because a query expression deﬁnes a
+path of a shorter length, or because a vertex does not have
+a neighbour with the label required by a query expression.
+A query execution engine would stop traversing in such a
+scenario. We represent this non-zero probability of no sub-
+sequent traversal from a vertex as probability to traverse
+to the same vertex4, as this is equivalent to intra-partition
+traversal probability.
+
+In Sec.2.3 we described a VM cell as containing the prob-
+ability of traversing to a vertex v given some preceding se-
+quence of traversals p1 → p2 → . . . → pt−1. Formally, we
+compute the value of a cell VM (t)[p1, . . . , pt−1, v] as
+P r(pt−1 → v|p1 → . . . → pt−1) =
+
+P r(l (pt−1) → l (v)|E → l (p1) → . . . → l (pt−1)) ·
+P r(pt = v|l (pt) = l (v), pt ∈ NG(pt−1))
+
+where l : V → LV is the labelling function for a graph G,
+and NG : V → V corresponds to the set of neighbours of
+v such that (v, n) = e ∈ E for all n ∈ NG(v). The latter
+term of this deﬁnition uniformly distributes the traversal
+probability to a vertex with label l across all of of pt−1’s l
+labelled neighbours.
+
+Example. Given the graph in Fig. 1, consider the element
+VM (3)[1, 2, j] in its visitor matrix. The probability to be in
+vertex 2, having previously been in vertex 1, is given by the
+matrix’s VM (2)[1, 2]th element. The labels of vertices 1 and
+2 are a and b respectively. There exist two valid suﬃxes to
+the label sequence a → b: c and d. From the query pattern
+summary trie in Fig. 4, we know that the relative frequency
+of c from a → b is 0.5 .
+
+P r(b → c|a → b) =
+
+0.125
+0.25
+
+= 0.5
+
+The relative frequency of d from a → b is also 0.5 . Vertex
+2 has the neighbours 1,3,4 and 5 with the labels a, c, d and
+c respectively. As an example, the probability of traversing
+to vertex 3 is the probability of traversing to a c labelled
+vertex, divided by the number of c labelled neighbours of 2.
+
+VM (3)[1, 2, 3] = 0.5 · P r(j = 3|l(j) = c, j ∈ NG(2))
+
+= 0.5 · 0.5 = 0.25
+
+Therefore, as shown in Fig. 4(left), we have VM (3)[1, 2,∗] =
+(0, 0, 0.25, 0.5, 0.25, 0).
+
+5.
+
+IMPLEMENTATION
+
+The TAPER system consists of a main algorithm for cal-
+culating elements of the Visitor Matrix and for deriving the
+most extroverted vertices for each vertex swapping iteration.
+The system also implements the TPSTry traversal pattern
+summery trie. In this section we present the TAPER pro-
+totype architecture, we discuss heuristics for managing the
+
+4We do not consider the possibility of self-referential edges;
+any probability to remain in the same vertex is equivalent
+to probability of no subsequent traversal.
+
+Figure 5: Architecture
+
+space and time complexity associated with the Visitor Ma-
+trix, and we describe in detail the vertex ranking and swap-
+ping algorithm that takes place at each iteration.
+5.1 Architecture
+TAPER takes a partitioned graph G, along with a query
+workload Q, as input and produces a new partitioning of
+G with better workload-aware stability (Sec. 2.2). We have
+implemented a TAPER prototype on top of the Tinkerpop
+graph processing framework5, which allows us to use any
+of several popular GDBMS to store G. Though our pro-
+totype, built using the Akka framework6, is designed to be
+distributed across multiple hosts, in the current implementa-
+tion input graph partitionings are local, i.e. partitions reside
+on a single host. Partitions are deﬁned in terms of vertex-
+cut [15], as opposed to edge-cut; inter -partition connections
+are represented by ﬂagging cut vertices and annotating them
+with the partitions they belong to. For the purpose of our
+experiments, we have extended Tinkerpop so that multi-
+ple edge-disjoint subgraphs are treated as a single, global,
+graph and queried using the Gremlin query language7. An
+inter-partition traversal is detected when a Gremlin query
+retrieves the external neighbours of a cut vertex. Our test
+architecture is shown in Fig. 5. It simulates a distributed de-
+ployment, where each partition is logically isolated, managed
+by a separate instance of the TAPER algorithm implemen-
+tation. Each instance is responsible for updating the Visitor
+Matrix for its partition, and also determines the rank of ex-
+troverted vertices to evict at each iteration. Additionally,
+our modiﬁed query processor is connected to the TPSTry
+manager, which is responsible for updating the summary
+trie with the patterns found in each of the new queries that
+are accepted through the client API.
+5.2 Reducing the cost of the Visitor matrix
+
+As noted in Sec. 2.3, the space complexity of the VM for
+each partition Si grows with the number of vertices in the
+partition, and exponentially with the length of the query
+patterns: O(|Vi|t). Here we discuss two heuristics, aimed at
+reducing the portion of the VMs that need to be explicitly
+represented or computed for each partition, reducing both
+the time and space complexity of the TAPER algorithm.
+
+5.2.1
+
+Space complexity
+
+5The Tinkerpop project: http://www.tinkerpop.com/
+6Akka concurrency framework: http://bit.ly/1B6WXGG
+7The Gremlin query language:
+tinkerpop/gremlin/wiki
+
+https://github.com/
+
+TAPERVMPartition 2TAPERVMPartition kTAPERVMPartition 1ClientQuery ProcessorTPSTryManagerBlueprints GraphFirstly, we note that large graphs are typically sparse [8]:
+i.e. |E| << |V |2. As each vertex is only connected to a small
+number of neighbours, the adjacency and transition matri-
+ces representing such graphs contain many 0-value elements,
+which may be discarded, compressing the matrices. A VM,
+which is essentially a family of k dimensional transition ma-
+trices where 2 ≤ k ≤ t and t is the number of traversal steps
+we remember, can be compressed using this standard tech-
+nique. Although in general we cannot be certain that the
+graphs against which TAPER is applied will be sparse, the
+only non-zero elements that may exist in a VM are those
+that correspond to label paths in the pattern summary trie.
+This additional constraint serves to make the VM sparser,
+and therefore especially well suited to compression, than
+a corresponding adjacency matrix. Secondly, we avoid the
+costly computation and storage of many VM rows associ-
+ated with vertices likely to be “safe”; i.e. vertices unlikely to
+have high extroversion. Remember that, with TAPER, we
+are only interested in identifying highly extroverted vertices.
+These are the most likely to be the source of inter -partition
+traversals and therefore good candidates for being swapped
+to another partition. From equations 7 & 8 (Sec. 3.2), we
+know that such extroverted vertices will necessarily have a
+low total intra-partition traversal probability: low introver-
+sion. We therefore declare vertices with introversion above
+a conﬁgurable threshold “safe” and discard them, reducing
+the space complexity of the VM.
+
+Consider for example vertex 3 (denoted v3) of partition B
+in Fig. 1. Accounting for the TPSTry of Fig. 3, the traversal
+B [3,∗],
+probabilities for v3 are found in VM B(3) rows VM (2)
+B [6, 3,∗] and so on. The probability to
+VM (3)
+be in v3 from vertex 5 is computed as VM (1)
+B [5, 3].
+Extending this, the total intra-partition traversal probability
+from 3, given 5, is
+
+B [5, 3,∗], VM (3)
+
+B [5]· VM (2)
+
+B [5, 3] ·(cid:88)
+
+VM (1)
+
+B [5] · VM (2)
+
+VM (3)
+
+B [5, 3, j]
+
+j
+
+Given the values in Fig. 4, completing this process for
+paths p ∈ paths(v3, VB) to all j ∈ VB gives v3 an intra-
+partition traversal probability of 0.44. Doing the same for
+all j ∈ V gives a total traversal probability through v3
+(P r(v3)) of 0.5. For any choice of introversion threshold less
+than 0.44
+0.5 = 0.88, v3 would be a safe vertex. We may discard
+any VM rows associated with v3 except where necessary for
+paths through other, more extroverted, vertices.
+
+Note that the lower the threshold value, the smaller the
+stored portion of the visitor matrix ends up being. Whilst it
+may therefore appear beneﬁcial to choose a very low thresh-
+old value, it should be noted that each partition enhance-
+ment step seeks to swap a set of vertices. Overly small val-
+ues may limit the size of this swapped set, reducing the
+eﬃciency of the enhancement process. Furthermore, ver-
+tices with high inter-partition traversal probabilities which
+are not members of the swapped set are likely to be in con-
+tention in the next step, when their associated probabilities
+will have to be completely recalculated if had been discarded
+earlier.
+5.2.2 Time complexity
+In order to maximise the savings of the heuristic above, we
+would like to avoid computing some of the matrix rows we
+eventually discard. We rely upon the following observations
+to achieve this: as the probability of any given traversal from
+
+a vertex is usually less than 1.0, longer paths of traversals
+generally have a lower probability than shorter ones; the less
+likely a path of traversals though a vertex v, the less it will
+contribute to v’s introversion and extroversion; and the VM
+rows for each vertex v are computed in ascending order of
+the length of their associated paths (Sec. 4.2). Given these
+observations, we know that for the set of VM rows associated
+with a given vertex v: those rows computed earlier should
+contribute more to v’s introversion and extroversion than
+those compute later.
+
+We may therefore compare v’s introversion to our chosen
+“safe” threshold after only having considered paths through
+v of length up to k, where k is less than the maximum length
+k < t. We then do not need compute further VM rows for
+safe vertices.
+In eﬀect this provides another conﬁgurable
+threshold, this time controlling time complexity at the po-
+tential expense of accuracy. The smaller the value of k the
+more likely the algorithm is to declare a vertex safe which
+actually has a total introversion below the “safe” thresh-
+old and might therefore have been an eﬀective candidate for
+swapping to another partition.
+
+As a special case, internal vertices, i.e. vertices with no
+neighbours in other partitions, represent a special case of
+this heuristic. They are guaranteed to be “safe” and have
+no extroversion. Therefore we do not calculate VM rows
+associated with internal vertices, except where needed by
+other paths.
+5.3 TPSTry Implementation
+
+TAPER represents the common query patterns in a work-
+load, along with each pattern’s probability, in the traversal
+pattern summary trie, TPSTry (Sec. 4). TPSTry is actually
+implemented as two separate data structures: i) a trie mul-
+timap, where each trie node maps to the set of queries which
+could be responsible for a traversal path with the associated
+sequence of vertex labels; and ii) a sorted table mapping
+queries8 to their respective frequencies.
+
+For the purposes of evaluation, in the TAPER prototype,
+the second data structure is static, with query frequencies
+provided in advance. In a production environment however,
+its values can be calculated by continuously sampling a ﬁxed-
+width sliding window over the stream of queries. The trie is
+recalculated for each TAPER iteration. Therefore, as query
+frequencies change or new queries are added, the TPSTry
+probabilities remain accurate.
+5.4 Calculating a partial extroversion order
+
+TAPER relies upon a partial order of the vertices in a
+partition by their likelihood to be the source of an inter -
+partition traversal. In order to produces this order, we group
+the rows of a partition’s visitor matrix by the ﬁnal vertex of
+the paths they represent and then derive their extroversion
+(Sec. 3.2). All vertices in a partition are nominally repre-
+sented in the visitor matrix and so could be sorted with this
+measure. Due, however, to the heuristics outlined earlier,
+many vertices with low levels of interaction with external
+neighbours are not present. Thus, we refer to the sorted col-
+lection of vertices with the highest inter-partition transition
+probabilities as a partial extroversion ordering.
+
+Rather than grouping the rows of a pre-existing matrix,
+we deﬁne a corecursive algorithm to eﬃciently produce such
+
+8Note that we consider queries to be uniquely identiﬁed by
+their regular expression
+
+rows consecutively during VM construction. This greatly
+simpliﬁes the process of maintaining a running total of intra-
+partition transition probabilities for each vertex, as required
+for the heuristics presented in section 5.2. A simpliﬁed ver-
+sion of the procedure is expressed in Alg. 1.
+
+Algorithm 1 Calculate the VM i rows for a vertex v
+
+path ← sequence of vertices (initially (v))
+paths ← set of paths (initially {(v)})
+transitions ← vector of probability values for v’s neighbours
+trie ← traversal pattern summary trie
+threshold ← safe introversion value
+length ← max length of a path in trie
+rows ← map of path → transitions vectors
+introversion(rows) ← total introversion of a set of VM i rows
+
+calcVMRows(paths, transitions, rows)
+
+newP aths ← ∅
+for path in paths do
+
+if path size > length then
+
+if path in trie then
+
+return rows
+transitions ← probabilities from trie given path
+rows ← rows + (path → transitions)
+if introversion(rows) > threshold then
+
+rows ← ∅
+stop calcVMRows
+
+neighbours ← path.head.neighbours
+for n in neighbours do
+
+newP aths ← newP aths + n prepended to path
+return calcVMRows(newPaths, transitions, rows)
+
+Consider again our earlier example of vertex 3 in parti-
+tion B (Fig. 1), along with the pattern summary trie in
+Fig. 4(right). Vertex 3 has the label c, which does exist as
+a preﬁx in the trie. It has local neighbours 5 and 6, along
+with external neighbours 2 and 4, labelled c,a,b and d re-
+spectively. The external transition probability from 3 given
+a path of (3) is 1 − Σ(0, 1, 0) multiplied by the probability
+to have made the sequence of traversals which that path
+represents ( 0.25|c| = 0.125). In this case: 0.
+
+The preﬁxes cc and ac also exist in the trie, therefore
+(5, 3) and (6, 3) are further potential paths through 3. The
+external transition probabilities from 3 given paths of (5, 3)
+and (6, 3) are (1− Σ(0, 0, 1))· 0.125 and (1− Σ(0, 0.25, 0.5))·
+0.25 respectively. Note that the total probability for the
+path (6, 3, j), j ∈ VB is < 1 because acd is also a preﬁx in
+the pattern summary trie, and vertex 3 is adjacent to the
+“external” vertex 4. The ﬁnal external transition probability
+from 3 is 0.06; its extroversion 0.06 · 1
+5.5 Vertex Swapping
+
+0.5 = 0.12.
+
+To achieve its aims, TAPER improves distributed query
+performance by reducing the probability of inter-partition
+traversals when answering queries. For each partition, given
+a sorted collection of the vertices with the highest extrover-
+sion, TAPER must reduce this probability without mutating
+the underlying graph structure.
+
+To achieve this we propose a simple variation on the k-way
+Kernighan-Lin algorithm proposed by Karypis and Kumar
+[13] (Sec. 3.1). This is a two-step, symmetric process, shown
+in Fig. 6: ﬁrstly, given a priority queue of candidate vertices
+with high extroversion, compute the preferred destination
+partition for each vertex, along with the neighbours of that
+vertex which should accompany it (Alg. 2); secondly, when
+oﬀered a new group of vertices, a partition should compute
+
+Figure 6: Oﬀer/Receive algorithm in each TAPER instance
+
+potential gains in introversion and decide whether or not to
+accept the oﬀer.
+
+Algorithm 2 Compute a beneﬁcial swap for a vertex
+
+v ← swapping candidate
+candidates ← set of accompanying vertices + v
+destination ← the partition to oﬀer candidates to
+
+oﬀerVertices(v)
+
+n ← v neighbours
+neighbourhood ← n external, grouped by partition
+destination ← neighbourhood max by group size
+getFamily(v)
+
+f ← v neighbours with traversal probability to v > 0.5
+for member in f
+
+extended ← extended + getFamily(member)
+
+return f + extended
+
+candidates ← getF amily(v) + v
+lef t ← candidates neighbours /∈ candidates
+loss ← traversal probability from lef t to candidates
+
+return (candidates, destination, loss)
+
+The ability to move clusters of connected vertices at once
+is important. Without it, as vertices are swapped amongst
+partitions, the total introversion of oﬀering partitions might
+increase dramatically, causing beneﬁcial swaps to be re-
+jected. Recursively, given a vertex candidate for swapping,
+we examine its neighbours; if a traversal from a neighbour
+to a candidate is more likely than not, then it too becomes
+a candidate. We refer to these new candidates for swapping
+as the new candidate’s “family”. This provides a simplis-
+tic “lookahead” mechanism when performing vertex swaps,
+in place of that used by Kernighan-Lin to avoid such local
+optimisation minima [14].
+
+Once the candidates set has been determined, we evalu-
+ate the total loss in introversion the partition would suﬀer
+from their loss. This is the total probability to traverse to a
+member of the candidate set from local vertices outside the
+set. It should be noted that this process is highly eﬃcient
+as all the relevant values are preserved in the visitor matrix,
+either from calculating the introversion of vertices, or from
+constructing a candidates set in the previous step.
+
+When on the receiving end of a swap, a partition should
+calculate the total local introversion of a candidate set, and
+compare it to the potential loss to the oﬀering partition.
+Partitions are “cooperative” rather than greedy, so if the
+introversion gain for a receiving partition partition is not
+greater than the loss for a sending one, the swap is rejected.
+If a swap is rejected the oﬀering partition will subsequently
+try less “preferable” destination partitions from the neigh-
+bourhood of the original candidate vertex. In the event that
+all partitions adjacent to the candidate vertex reject a swap,
+
+TAPERTAPEROfferOfferRecieveRecieveVisitorMatrixVisitorMatrixPartition 1Partition kboth the candidate vertex and its family remain in their orig-
+inal partition.
+
+This two-step process runs independently for each parti-
+tion, swapping extroverted vertices to their preferred neigh-
+bouring partitions. A vertex may only be swapped once
+per iteration of the algorithm. When a partition’s origi-
+nal queue of extroverted vertices is exhausted, the resulting
+subGraph acts as input to a subsequent iteration of TAPER.
+Repeated iterations of this process will produce the desired
+result: an enhanced partitioning with a lower overall prob-
+ability for inter-partition traversals, better workload-aware
+stability given a query workload Q. Finally, because swaps
+of vertex clusters which decrease introversion are never per-
+formed, the enhancement process is interruptible; swaps may
+be interleaved with other operations of a system, targeting
+periods of reduced load.
+
+6. EVALUATION
+
+Our evaluation aims to show how TAPER improves upon
+the quality, expressed as workload-aware stability, of a graph
+partitioning. We present two main results. Firstly we show
+that, with a simple hash partitioning as input, TAPER
+achieves a quality comparable to that of a METIS parti-
+tioning in at most 8 iterations. Secondly, we show that TA-
+PER can also enhance a METIS produced input partitioning
+with high initial quality; we achieve a reduction in inter-
+partition traversals of around 30%, demonstrating that our
+approach can take advantage of a proven oﬄine partitioning
+algorithm. We use METIS as our basis for comparison be-
+cause it is a highly eﬀective oﬄine technique [13], whose par-
+titionings we use as an inexact proxy for a workload-agnostic
+optimum. However, as a “one-oﬀ” technique, METIS itself is
+not a suitable approach to online partitioning improvement
+(Sec. 1).
+6.1 Experimental setup
+
+For all experiments we initially split the test graphs into a
+reasonable number of partitions (8), using either hash-based
+or a METIS partitioning, as described below. We measure
+the quality of a partitioning by executing each query in the
+test workload, and counting the number of boundary vertex
+traversals (Sec. 5). The frequency of each query is chosen
+randomly, but all within an order of magnitude of one an-
+other. By executing each workload over its graph several
+times, altering the frequencies and rerunning TAPER each
+time, we produce aggregate values for the number of traver-
+sals, which do not unfairly favour any single approach. All
+algorithms, data structures and dataset transformations, in-
+cluding calcVMRows and the TPSTry, are written in Scala
+and are publicly available9. All our experiments are per-
+formed on a machine with a 3.1GHz Intel Core i7 CPU and
+16GB RAM.
+
+6.1.1 Test Datasets
+TAPER is designed to perform best on highly heteroge-
+neous graphs, as noted in Sec. 4. When the graph is ho-
+mogeneous, the uniformity of traversal probabilities renders
+edge-cut an equally good measure of partition quality. Thus,
+we have tested the algorithm on two heterogeneous graphs.
+
+9The TAPER repository: omitted for blind review
+
+The ﬁrst, MusicBrainz10, is a freely available database
+of music which contains curated records of artists, their af-
+ﬁliations and their works. This database currently stores
+over 950,000 artists and over 18 million tracks. When con-
+verted to a property graph model, the subset of data we
+use amounts to around 10 million vertices and more than
+30 million edges. The graph is also highly heterogeneous,
+containing more than 12 distinct vertex labels.
+
+The second test dataset is a synthetic provenance graph,
+generated using the ProvGen generator [7] and compliant
+with the W3C PROV format11. ProvGen is designed to
+produce arbitrarily large PROV graphs starting from small
+seed graphs and following a set of user-deﬁned topological
+constraint rules. Provenance graphs are a form of meta-
+data, which contains records of the history of entities, e.g.
+documents, complex artifacts, etc. . . In our setting, prove-
+nance graphs are good exemplars of the large-scale hetero-
+geneous graphs that TAPER is designed to partition. For
+the purpose of these experiments we generated a graph with
+about 1 million vertices and 3 million edges. As described
+in [20], PROV graphs naturally have three labels, represent-
+ing the three main elements of provenance: Entity (data),
+Activity (the execution of a process that acts upon data), ,
+and Agent, namely the people, or systems, that are respon-
+sible for data and activities.
+6.1.2 Test query workloads
+Regarding the MusicBrainz dataset, to the best of our
+knowledge there is no widely accepted corpus of benchmark
+queries. Thus, we deﬁne a small set of common-sense queries
+that focus on discovering implicit relationships in the graph,
+such as collaborations between artists, and migrations be-
+tween geographical areas.
+
+MQ1 Area·Artist·(Artist|Label)·Area: searches for two
+distinct patterns which would indicate an artist has moved
+away from their country of origin.
+MQ2 Artist· Credit· (T rack|Recording)· Credit· Artist:
+might be used to detect collaboration between 2 or more
+artists on a single track.
+MQ3 Artist· Credit· T rack· M edium: would return a set
+of all the Mediums (e.g. Cd) which carry an Artist’s work.
+
+Regarding provenance graphs, several categories of typical
+pattern matching queries have been proposed [12]. We use
+these categories to derive a workload which is representative,
+of the common use cases for provenance data, as follows.
+
+closure over a data derivation relationship.
+
+PQ1 Entity · (Entity) ∗ ·Entity: computes the transitive
+PQ2 Agent · Activity · Entity · Entity · Activity · Agent:
+identiﬁes pairs of agents who have collaborated as data pro-
+ducer/consumers pairs.
+PQ3 (Entity)∗·Activity · Entity: returns all entities and
+PQ4 Entity · Activity · (Agent)∗: returns agents respon-
+
+all activities involved in the creation of a given entity.
+
+sible for the creation of a given an entity.
+
+6.2 Results
+6.2.1 Quality improvement over an initial hash par-
+
+titioning
+
+10The MusicBrainz database: http://bit.ly/1J0wlNR
+11The PROV data model: http://bit.ly/1HHfEpk
+
+Figure 7: Traversals per TAPER iteration
+
+Figure 8: Traversal per approach
+
+Fig. 7 shows the improvement in partitioning quality, mea-
+sured by the number of actual inter-partition traversals ob-
+served in our test environment against the number of TA-
+PER iterations over an initial hash-partitioned graph. The
+dotted line bisecting the left y-axis is the baseline number of
+traversals for the initial hash partitioning, while the bottom
+dotted line indicates the quality of a one-oﬀ METIS parti-
+tioning. The chart shows how partitioning quality converges
+to within 10% of that over a METIS partitioned graph, after
+fewer than 8 iterations. Also, TAPER achieves this reduc-
+tion whilst keeping partition sizes balanced to within 5%.
+As this is an online iterative technique, unlike METIS we
+expect this performance to be eﬃciently maintainable when
+the graph is updated or the query workload changes.
+
+Figure 7 also demonstrates that TAPER requires far less
+communication than a METIS repartitioning. 5 iterations of
+TAPER over the ProvGen dataset (Fig. 7(a)) required 300k
+vertex swaps to produce its ∼ 80%, enhancement. On the
+other hand, the number of swaps required to rearrange Hash
+partitions to be consistent with a METIS partitioning (i.e
+the cost of a METIS repartitioning) is at least 500k. This
+cost also ignores any communication cost associated with ac-
+tually computing the repartitioning, such as gathering the
+graph (|V | swaps). Practically, a METIS repartitioning has
+a cost at least 2X that of TAPER in both our test cases, yet
+achieves only a small improvement in query performance.
+This suggests that, by performing swaps in extroversion
+order (Sec. 3.1), we are correctly prioritising those swaps
+that are more eﬀective at reducing inter -partition traver-
+sals, given a workload Q. This renders TAPER suitable to
+use with an online database, where other requirements may
+severely limit the number of vertex swaps possible in a given
+timeframe.
+
+Improving an initial METIS partitioning
+
+6.2.2
+Fig 8 illustrates an interesting feature of TAPER parti-
+tioning, namely that it achieves an asymptotic quality im-
+provement over not only a hash partitioning, but also a
+METIS partitioning. Evidently, the absolute number of
+inter-partitions traversals, given Q, achieved with each in-
+put partitioning is not the same. When improving upon a
+METIS partitioning (METIS + TAPER in the ﬁgure), TA-
+PER achieves a 30% reduction in inter-partition traversals,
+usually converging in about 5 iterations. As seen in the pre-
+vious section, Hash + TAPER achieve a level of optimisation
+around 10% worse than METIS alone. Thus we conjecture
+
+Figure 9: Reduction in traversals per query.
+
+that the TAPER algorithm is sensitive to its starting input
+and, despite getFamily (Sec. 5.5), when starting from a Hash
+partitioning is likely to get trapped in a local optimisation
+minimum. When starting from a METIS partitioning, TA-
+PER iteratively approaches a new minimum closer to the
+global one.
+
+TAPER’s ability to improve over METIS graphs my be ex-
+plained by observing that in non-trivial partitionings, some
+edges must cross partition boundaries. As a workload-
+agnostic algorithm, METIS is optimising for a diﬀerent
+cost function than TAPER and may cut edges which are
+likely to be frequently traversed, giving TAPER scope for
+its improvement. Note that improvement is not necessarily
+possible when METIS is given an input graph with edge-
+weights corresponding to traversal likelihood given Q. In
+that instance, edge-weight cut is equivalent to inter-partition
+traversal probability: both METIS and TAPER are optimis-
+ing for the same cost function. However, tracking workload
+with edge-weights is challenging, and adapting to workload
+changes with METIS would still require a full repartitioning.
+Fig. 9 shows how TAPER makes use of query frequen-
+cies to prioritise vertex swaps. The relative frequencies of
+queries MQ1, MQ2, and MQ3 is 10%, 20% and 70%, re-
+spectively. Relative to the METIS benchmark, standalone
+TAPER achieves its worst result for MQ1, improving with
+MQ2 and surpassing the other system for MQ3. This is be-
+cause paths in a graph which form a full, or partial, match
+of a high frequency query aﬀord their vertices and edges a
+higher probability of being traversed. When edges in the
+
+TAPER TrHash TrMETIS TrTAPER Sw< METIS Sw 1234567891040K80K120K160K200K#  Inter-partition traversals (Tr)# ProvGen Iterations00100K200K300K400K500K# Vertex swaps (Sw)12345678910200K400K600K800K1M# Inter-partition traversals (Tr)# MusicBrainz Iterations001M2M3M4M5M# Vertex swaps (Sw)# Inter-partition traversalsHashHash+TAPERMETISMETIS+TAPERMusicBrainz 1M800K0600K400K200K200K160K0120K80K40K# Inter-partition traversalsProvGen MQ1MQ3MQ2MusicBrainz Query No.1M100K10K1K100# Inter-partition traversalsHashHash+TAPERMETISMETIS+TAPERpath cross partition boundaries, this traversal probability
+contributes to extroversion. In other words, TAPER is pri-
+oritising vertex-swaps to internalise paths traversed by the
+most common queries to single partitions.
+
+This renders our enhancement tractable: by manually
+misreporting frequencies, we can balance query performance
+in order to satisfy external requirements, such as a minimum
+median latency on an infrequent query.
+6.2.3 The effect of changes in query workloads
+With TAPER, we are ﬁtting the distribution of vertices
+across partitions to a particular workload’s traversal pat-
+terns. This improves performance when serving queries from
+that workload. However, as with “one-oﬀ” workload-aware
+partitioning [23], under a diﬀerent or even changing work-
+load, the performance of a TAPER enhanced graph might
+degrade signiﬁcantly. Existing partitioning techniques [23]
+employ iterative enhancement techniques such as KL/FM
+[6, 14] to maintain performance without resorting to full
+repartitioning. As an iterative enhancement technique itself,
+TAPER need employ no additional techniques. However,
+thoroughly evaluating the impact of TAPER enhancement
+under time varying workloads will be a subject of future
+work.
+
+7. CONCLUSIONS
+
+In this paper, we have presented TAPER: a practical sys-
+tem for improving the query performance of a graph parti-
+tioning, for a given workload of path-queries. By capturing
+the traversal patterns and probabilities associated with each
+query in a workload, we can calculate the likelihood for each
+vertex to be a source of inter-partition traversals. Using ver-
+tex labels as an intensional representation of traversal pat-
+terns, along with several other heuristics, the challenge of
+of identifying and relocating these most extroverted vertices
+becomes tractable.
+
+Our experiments show that TAPER signiﬁcantly reduces
+the number of inter-partition traversals over a graph, even
+one which is already well partitioned with respect to some
+objective function such as edge-cut. In addition, TAPER is
+designed to work well alongside online systems, where low
+latency is key. For instance, it requires a lower communi-
+cation volume than other (re)partitioning approaches when
+adapting to a query workload. Also, TAPER’s partitioning
+improvement is comprised of many smaller iterations which
+may be interspersed with the other operations of a system.
+As mentioned (Sec. 2), in TAPER we only consider queries
+as single regular expressions over vertex labels when encod-
+ing traversal patterns in the TPSTry. For future work we
+plan to extend this, including edge types, along with seman-
+tic relations between trie nodes. This will allow us to capture
+more complex traversal patterns and increase the accuracy
+of extroversion orderings, improving performance. We plan
+to evaluate the potential of further methods, besides simple
+frequency, for assigning ‘weight’ to workload queries. User
+speciﬁed priorities, for example. Finally we plan to evaluate
+the impact of TAPER enhancement given a time-varying
+query stream.
+8. REFERENCES
+[1] F. Alkhateeb, J. F. Baget, and J. Euzenat. Extending
+
+SPARQL with regular expression patterns (for
+querying RDF). Web Semantics, 7(2):57–73, 2009.
+
+[2] P. Barcelo, C. a. Hurtado, L. Libkin, and P. T. Wood.
+
+Expressive languages for path queries over
+graph-structured data. PODS, pages 3–14, 2010.
+
+[3] L. Chen. Distance-Join : Pattern Match Query In a
+Large Graph. Science And Technology, 2(1):886–897,
+2009.
+
+[4] C. Curino, E. Jones, Y. Zhang, and S. Madden.
+
+Schism. PVLDB, 3(1-2):48–57, 2010.
+
+[5] J.-c. Delvenne, M. T. Schaub, and S. N. Yaliraki. The
+
+Stability of a Graph Partition: A Dynamics-Based
+Framework for Community Detection. In Dynamics
+On and Of Complex Networks, volume 2, pages
+221–242. 2013.
+
+[6] C. Fiduccia and R. Mattheyses. A Linear-Time
+
+Heuristic for Improving Network Partitions. In DAC,
+1982.
+
+[7] H. Firth and P. Missier. ProvGen: Generating
+
+Synthetic PROV Graphs with Predictable Structure.
+In IPAW, pages 16–27, 2014.
+
+[8] G. Goel and J. Gustedt. Bounded Arboricity to
+
+Determine the Local Structure of Sparse Graphs. In
+Graph-Theoretic Concepts in Computer Science, pages
+159–167. 2006.
+
+[9] B. Hendrickson and R. Leland. An Improved Spectral
+
+Graph Partitioning Algorithm for Mapping Parallel
+Computations. SIAM Journal on Scientiﬁc
+Computing, 16(2):452–469, 1995.
+
+[10] Z. Huang, W. Chung, T.-H. Ong, and H. Chen. A
+
+graph-based recommender system for digital library.
+In ACM/IEEE-CS joint conference on Digital
+libraries, pages 65–73, 2002.
+
+[11] A. Jindal and J. Dittrich. Relax and let the database
+
+do the partitioning online. In Enabling Real-Time
+Business Intelligence, pages 65–80. 2012.
+
+[12] G. Karvounarakis, Z. G. Ives, and V. Tannen.
+
+Querying data provenance. In SIGMOD, page 951,
+2010.
+
+[13] G. Karypis and V. Kumar. Multilevel k -way
+
+Partitioning Scheme for Irregular Graphs. Journal of
+Parallel and Distributed Computing, 47(2):109–124,
+1997.
+
+[14] B. W. Kernighan and S. Lin. An eﬃcient heuristic
+
+procedure for partitioning graphs. Bell systems
+technical journal, 49(2):291—-307, 1970.
+
+[15] M. Kim and K. S. Candan. SBV-Cut: Vertex-cut
+based graph partitioning using structural balance
+vertices. Data and Knowledge Engineering,
+72:285–303, 2012.
+
+[16] E. Le Martelot and C. Hankin. Multi-scale community
+
+detection using stability optimisation within greedy
+algorithms. In KDIR, pages 216–225, 2011.
+
+[17] H. Li and S. Lee. Mining Top-K Path Traversal
+Patterns over Streaming Web Click-Sequences.
+Journal of Information Science and Engineering,
+1133(95):1121–1133, 2009.
+
+[18] A. O. Mendelzon and P. T. Wood. Finding Regular
+
+Simple Paths in Graph Databases. SIAM Journal on
+Computing, 24(6):1235–1258, 1995.
+
+[19] J. Mondal and A. Deshpande. Managing large
+dynamic graphs eﬃciently. In SIGMOD, pages
+145–156, 2012.
+
+[20] L. Moreau, P. Missier, K. Belhajjame, R. B’Far,
+
+Techniques and Applications, pages 29–46. 2011.
+
+J. Cheney, S. Coppens, S. Cresswell, Y. Gil, P. Groth,
+G. Klyne, T. Lebo, J. McCusker, S. Miles, J. Myers,
+S. Sahoo, and C. Tilmes. PROV-DM: The PROV
+Data Model. Technical report, World Wide Web
+Consortium, 2012.
+
+[21] A. Pavlo, C. Curino, and S. Zdonik. Skew-aware
+
+automatic database partitioning in shared-nothing,
+parallel OLTP systems. In SIGMOD, page 61, 2012.
+
+[22] J. M. Pujol, V. Erramilli, G. Siganos, X. Yang,
+
+N. Laoutaris, P. Chhabra, and P. Rodriguez. The little
+engine(s) that could. In SIGCOMM, pages 375–386,
+2010.
+
+[23] A. Quamar, K. A. Kumar, and A. Deshpande.
+
+SWORD. In EDBT, page 430, 2013.
+
+[24] M. A. Rodriguez and P. Neubauer. The Graph
+Traversal Pattern. In Graph Data Management:
+
+[25] P. Sanders and C. Schulz. Think locally, act globally:
+Highly balanced graph partitioning. In Lecture Notes
+in Computer Science, volume 7933, pages 164–175.
+2013.
+
+[26] I. Stanton and G. Kliot. Streaming graph partitioning
+
+for large distributed graphs. In SIGKDD, pages
+1222–1230, 2012.
+
+[27] H. Tong, B. Gallagher, C. Faloutsos, and
+
+T. Eliassi-Rad. Fast best-eﬀort pattern matching in
+large attributed graphs. In SIGKDD, page 737, 2007.
+
+[28] C. Tsourakakis, C. Gkantsidis, B. Radunovic, and
+M. Vojnovic. FENNEL. In WSDM, pages 333–342,
+2014.
+
+[29] S. Yang, X. Yan, B. Zong, and A. Khan. Towards
+
+eﬀective partition management for large graphs. In
+SIGMOD, pages 517–528, 2012.
+
+

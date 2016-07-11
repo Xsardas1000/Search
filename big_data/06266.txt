@@ -1,0 +1,1035 @@
+Multidimensional Predicates for Prolog
+
+G¨unter Khyo
+
+March 22, 2016
+
+Abstract
+
+In 2014, Ungar et al. proposed Korz, a new computational model for structuring adaptive (object-
+oriented) systems [UOK14]. Korz combines implicit parameters and multiple dispatch to structure
+the behavior of objects in a multidimensional space. Korz is a simple yet expressive model which does
+not require special programming techniques such as the Visitor or Strategy pattern to accommodate
+a system for emerging contextual requirements.
+
+We show how the ideas of Korz can be integrated in a Prolog system by extending its syntax and
+semantics with simple meta-programming techniques. We developed a library, called mdp (multidi-
+mensional predicates) which can be used to experiment with multidimensional Prolog systems. We
+highlight its beneﬁts with numerous scenarios such as printing debugging information, memoization,
+object-oriented programming and adaptive GUIs.
+
+In particular, we point out that we can structure and extend Prolog programs with additional
+concerns in a clear and concise manner. We also demonstrate how Prolog’s unique meta-programming
+capabilities allow for quick experimentation with syntactical and semantical enhancement of the new,
+multidimensional model.
+
+While there are many open concerns, such as eﬃciency and comprehensibility in the case of larger
+systems, we will see that we can use the leverage of mdp and Prolog to explore new horizons in the
+design of adaptive systems.
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+0
+2
+
+ 
+ 
+]
+L
+P
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+6
+6
+2
+6
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+1
+
+Introduction
+
+Consider the problem of ﬁnding a path in a directional graph. The graph is represented by the
+edge(N1, N2)-relation.
+In anticipation of changing requirements, we decide to use mdp from the
+beginning and deﬁne the transitive relation path(From, To) as follows:
+
+[] # edge (a , b ). [] # edge (b , c ). % ...
+
+[] # path (A , B ) : - ? edge (A , B ).
+
+[] # path (A , C ) : -
+
+? edge (A , B ) ,
+? path (B , C ).
+
+As a multidimensional relation, path/2 consists of two parts separated by a hashtag: (1) a list
+of concerns (its context) and (2) the name of the predicate. Currently, there are no concerns and
+therefore all context speciﬁcations are empty. For implementation reasons, when evaluating a multi-
+dimensional relation the ? operator has to be supplied explicitly.
+
+Suppose we want to add debugging output to our program. We add a new variant of edge/2 by
+
+adding a debugging dimension to its context:
+
+[ debug : P ] # edge (A , B ) : -
+
+[ - debug ] ? edge (A , B ) , % Remove debug dimension from implicit context
+apply (P , [( A , B )]).
+
+We get the desired behavior by executing path/2 within a debug context, i.e.,
+[debug: writeln] ? path(X, Y). The context is implicitly passed along the call chain. If there
+are multiple deﬁnitions of a predicate, the deﬁnitions which have the highest number of matching
+dimension/value pairs will be chosen. Thus, our augmented deﬁnition of edge/2 will be preferred
+over the plain deﬁnition.
+
+In addition, the programmer may add arbitrary Prolog expressions to a context speciﬁcation.
+These then serve as preconditions which have to hold for the matching result to count. For example,
+we could constrain our debugging context as follows:
+
+[ debug : P , is_io_predi ca te (P , IODevice ) , ready ( IODevice )] # edge (A , B ) : - ...
+
+% definitions for is_io_predic at e /2 and ready /1 ...
+
+(where the programmer has to provide deﬁnitions for is io predicate and ready which serve as
+
+illustration purposes only in this example).
+
+If any of the preconditions do not hold, the default variant with no debugging will be executed.
+If we do not want this behavior but throw an exception instead, we have to move the preconditions
+inside the body of edge and throw an exception.
+
+While we have a clean solution for debugging, we have to write our debugging code for every
+predicate, which will soon become tedious. We can generalize our debugging concern for arbitrary
+predicates by deﬁning an anonymous multidimensional rule:
+
+[ predicate : P ,
+
+debug : D ,
+is_io_predic at e (P , IODevice ) , ready ( IODevice )] : -
+
+[ - debug ] ? P ,
+apply (D , [ P ]).
+
+The dimension predicate is part of every context and is supplied by mdp automatically. Note that
+it is important that we remove our specialized debugging rule for edge/2, otherwise, we execute the
+
+2
+
+generalized deﬁnition and the specialized rules since both have equal matching scores 1.
+
+Looking back at the problem of ﬁnding paths, as experienced programmers we know immediately
+that our solution will only work for acyclic graphs. To accommodate for cycles, we have to keep
+record of already visited nodes. However, instead of simply adapting our implementation to the most
+general case, we decide to keep the simpler and more eﬃcient implementation for acyclic graphs. We
+make following arrangements:
+
+[] # path (A , B ) : - ? edge (A , B ).
+
+[ graph_type : acyclic ] # path (A , C ) : -
+
+? edge (A , B ) ,
+? path (B , C ).
+
+We then add following lines:
+
+[ graph_type : cylic , nodes : _ ] # path (A , B ) : - ? edge (A , B ).
+
+[ graph_type : cylic , nodes : L ] # path (A , C ) : -
+
+? edge (A , B ) ,
+\+ member (B , L ) ,
+
+append ([ A ] , L , LWithA ) ,
+[ nodes : LWithA ] ? path (B , C ).
+
+[ graph_type : cyclic ] # path (A , C ) : -
+
+? edge (A , B ) ,
+[ nodes : []] ? path (B , C ).
+
+When we state the query
+
+? - graph_type ( T ) , [ graph_type : T ] ? path (X , Y )
+
+the most eﬃcient of the available implementations will be chosen.
+However, we have to be careful: If we do not provide any context information to our query, our
+program may yield unpredictable results or even hang (since all path deﬁnitions are equally speciﬁc
+and get ”‘mixed-up”’). For the same reason, it is also crucial that the ﬁrst line also includes the
+nodes dimension even if it is not needed in the base-case.
+
+To ﬁx this, in the default case, if we know nothing about the structure of a graph, it is safe to
+
+execute the predicate which can handle cycles. We add following line:
+
+[] # path (A , B ) : - [ graph_type : cyclic ] ? path (A , B ).
+
+There are many other aspects that we can improve on. For example, we can add another dimension
+which describes the type of data-structure for holding the visited nodes. Instead of using a list, we
+could use a set or any data structure and let mdp select the most eﬃcient predicates for inserting and
+testing for members. Expanding the example is straightforward and left as an exercise to the reader.
+In summary, mdp allows us to add concerns to a prolog program with relative ease. There are
+many other useful applications for mdp as shown in Section 2, where we will see how we can model
+objects, context-sensitive GUIs and memoization. Details on the implementation and guidance on
+how to extend mdp are found in Section 3.
+
+1The programmer may also inﬂuence this behavior by assigning weights to context speciﬁcations (an example is shown
+
+in Section 2.2.2).
+
+3
+
+2 Further mdp-Examples
+
+In this section we will see more examples that motivate the use of mdp. We will address following
+issues: memoization, object-oriented programming and how we can augment a GUI with additional
+concerns.
+
+2.1 Memoization
+
+Memoization is a common technique used to cache expensive computations. In this section, we will
+explore how we can orthogonally add the concern of memoization to prime number generation. We
+will then derive a generic solution to memoize arbitrary predicates.
+
+Suppose we have a naive implementation of a prime number test:
+
+[] # is_prime ( P ) : -
+
+P > 1 ,
+UpperTestLimi t is floor ( sqrt ( P )) ,
+forall ( between (2 , UpperTestLimit , Divisor ) , \+ 0 is P mod Divisor ).
+
+Fortunately we know that, for some reason, there are only a few unknown numbers we are testing
+
+so we might get away with memoization. We add following lines:
+
+: - dynamic memoized_i s_ p ri m e /2.
+
+[ memoize : _ ] # is_prime ( P ) : -
+
+memoized_is _p r im e (P , IsPrime ) ->
+
+call ( IsPrime ) ;
+
+(
+
+).
+
+[ - memoize ] ? is_prime ( P ) ->
+
+assertz ( memoized_is _p r im e (P , true )) ;
+assertz ( memoized_is _p r im e (P , false ))
+
+This works ﬁne, but if we have to copy and paste the memoization code for every other predicate we
+would like to enhance with memoization. We remove our specialized implementation and generalize
+as follows:
+
+: - dynamic memoized /2.
+
+[ memoize : _ , predicate : P , memoized (P , TorF )]
+
+: - call ( TorF ).
+
+[ memoize : _ , predicate : P , \+ memoized (P , _ )] : -
+
+forall ([ - memoize ] ? P , assertz ( memoized (P , true ))) ,
+
+(
+
+).
+
+\+ [ - memoize ] ? P ->
+
+assertz ( memoized (P , false )) , fail ;
+memoized (P , _ )
+
+This solution is slightly more complex, since it also handles memoization for non-deterministic
+
+predicates. Now, for every multidimensional predicate P we can state the query:
+
+? - [ memoize : _ ] ? P ( Args )
+
+to memoize. Our solution can be further improved by extending assert and retract to invalidate
+
+memoization data, which is left as an exercise to the reader.
+
+4
+
+2.2 Object-oriented Programming with mdp
+
+In this section, we will explore how mdp can be used to implement a purely object-oriented system,
+i.e., no classes. To this end, we built a simple meta-object-protocol mop on top of mdp.
+In the
+following sections, we explore how we can represent messages and state in mdp and implement a
+model for subtyping, polymorphism and protecting data.
+
+2.2.1 Objects, Messages and State
+
+In mop, as in Korz, an object is a globally unique identiﬁer. New objects (identiﬁers) are created with
+the predicate new_oid(+NewOID). Messages can be sent to objects with the ! operator (inspired by Er-
+lang), for example, Display ! render(Object) which is equivalent to [rcvr: Display] ? render(Object).
+Thus, a method is just a multidimensional predicate which includes a receiver dimension, containing
+the id of the object.
+
+The attribute of an object can be inspected and changed with OID ! read(Name, Value) and
+OID ! write(Name, NewValue), respectively. Also, for every object there are predicates to clone the
+object (which is a shallow copy of its attributes) and to query its type (which, internally, is just an
+attribute).
+
+The meta-object protocol is deﬁned as follows:
+
+: - dynamic data /3. % data ( OID , Name , Value )
+
+: - op (0101 , xfx , !). % Send a message
+
+[ rcvr : OID ] # write ( Name , Value ) : -
+
+retractall ( data ( OID , Name , _ )) ,
+assertz ( data ( OID , Name , Value )).
+
+[ rcvr : OID ] # read ( Name , Value )
+
+: - data ( OID , Name , Value ).
+
+[ rcvr : OID ] # type ( T ) : - data ( OID , type , T ).
+
+[ rcvr : OID ] # clone ( OIDClone ) : -
+
+new_oid ( OIDClone ) ,
+forall ( data ( OID , Name , Value ) , OIDClone ! write ( Name , Value )).
+
+The message-send operator is implemented using a hook provided by mdp (see Section 3):
+
+% Translate Receiver ! P ( Args ) to [ rcvr : Receiver ] ? P ( Args )
+hook_mdp_ter m (
+
+ImplicitContext ,
+Receiver ! Predicate ,
+?( ImplicitContext , [ rcvr : Receiver ] , Predicate )).
+
+% Translate [ Context ] ? Receiver ! P ( Args ) to
+%
+hook_mdp_ter m (
+
+[ rcvr : Receiver , Context ] ? Receiver ! P ( Args )
+
+ImplicitContext ,
+Receiver ! (?( GivenContext , Predicate )) ,
+?( ImplicitContext , [ rcvr : Receiver | GivenContext ] , Predicate )).
+
+The last deﬁnition allows us to provide a context to a message-send (we will see examples of this
+in Section 2.2.3 and Section 2.3). (There are other hook-deﬁnitions to implement further syntactic
+variations which can be found in the mdp distribution.)
+
+5
+
+2.2.2 Subtyping and Polymorphism
+
+Let us consider the canonical example of modeling objects and behavior for representing geometric
+shapes. On the type level, we deﬁne following subtype-relations:
+
+subtype ( shape , rectangle ).
+subtype ( rectangle , special_rec t an gl e ).
+subtype ( shape , circle ).
+
+We deﬁne the polymorphic predicate (method) representation/1 as follows:
+
+% OID < shape reads : OID is a subtype of shape
+[ rcvr : Shape , Shape < shape ] # representatio n ( _ ) : -
+
+throw ( ’ Abstract   method :   No   implementati on ’ ).
+
+[ rcvr : Rectangle , Rectangle < rectangle ] # representatio n ( R ) : -
+
+Rectangle ! read ( width , W ) ,
+Rectangle ! read ( height , H ) ,
+R = rectangle (W , H ).
+
+[ rcvr : Rectangle , Rectangle < special_rec ta n gl e ] # representati on ( R ) : -
+
+Rectangle ! read ( width , W ) ,
+Rectangle ! read ( height , H ) ,
+R = special_re ct a ng l e (W , H ).
+
+[ rcvr : Circle , Circle < circle ] # representati on ( R ) : -
+
+Circle ! read ( radius , Radius ) ,
+R = circle ( Radius ).
+
+Internally, the subtype-relation < is translated to a form mdp can understand, i.e.,
+
+[ rcvr : OID , OID < rectangle ] # representatio n ( R ) : - ...
+
+% Translates to
+
+[ rcvr : OID ,
+
+[ rcvr : OID ] ? type ( ActualType ) ,
+@ ( type_affinity ( Subtype , ObjectType , D ) , D )
+
+] # representatio n ( R ) : - ...
+
+We can specify this translation by deﬁning a rule for a hook supplied by mdp:
+
+h o o k _ c o n t e x t _ r u l e _ m d p _ t e r m( Context , OID < Subtype , Translation ) : -
+
+Translation = (
+
+[ rcvr : OID ] ? type ( ObjectType ) ,
+@ ( type_affinity ( Subtype , ObjectType , D ) , D )
+
+).
+
+where the predicate type_affinity measures how close the supplied type constraint ﬁts the actual
+type of the objects. The result is then used to give weight to the rule, using the @-annotation, to
+ensure proper matching.
+
+type_affinit y (T , S , N ) : -
+
+max_type_di s ta n ce ( D ) ,
+type_distance (T , S , DistanceTS ) ,
+N is D - DistanceTS + 1.
+
+6
+
+type_distanc e (T , T , 1).
+
+type_distanc e (T , S , N ) : -
+
+T \= S ,
+subtype ( Parent , S ) ,
+type_distance (T , Parent , N1 ) ,
+N is N1 + 1.
+
+max_type_d i st an c e ( D ) : -
+
+findall (D , (
+
+subtype (T , _ ) ,
+subtype (_ , S ) ,
+type_distanc e (T , S , D )) , Distances ) ,
+
+max_list ( Distances , D ).
+
+While this is a highly ineﬃcient implementation for a subtype check, we can use memoization to
+
+make the type check eﬃcient and we have the advantage of a readable speciﬁcation.
+
+We can now run the query AnyShapeType ! representation(R) and we get the representation
+corresponding to the type of AnyShapeT ype. Since there are no classes, prototypes have to be deﬁned
+and cloned to create new instances. For example, the rectangle prototype can be created as follows:
+
+? -
+
+new_oid ( Rectangle ) ,
+Rectangle ! write ( type , rectangle ) ,
+Rectangle ! write ( width , 100) ,
+Rectangle ! write ( height , 100) ,
+
+Rectangle ! representatio n ( R ).
+
+R = rectangle (100 , 100).
+
+There are many improvements we can make to our meta-object protocol. For example, we could
+
+check whether an attribute has been declared before writing to it.
+
+2.2.3 Protecting Data
+
+In many class-based object-oriented languages, the programmer may restrict access to certain at-
+tributes or methods with visibility modiﬁers. For example, consider following game:
+
+% Overrides default mop read method
+[ rcvr : OID , OID < guessing_game ] # read ( secret_number , S ) : -
+
+throw ( ’ No   funny   stuff ’ ).
+
+[ rcvr : OID , OID < guessing_game , modifier : private ] # read ( secret_number , S ) : -
+
+number ( S ) ,
+data ( OID , secret_number , S ).
+
+[ rcvr : OID , OID < guessing_game ] # guess ( S ) : -
+
+[ modifier : private ] ? OID ! read ( secret_number , S ).
+
+We could improve our solution by protecting access to data/3 and providing a cryptographic
+context which cannot be tempered with. The reader is encouraged to experiment with more secure
+models.
+
+The key point is that mdp provides all facilities to model a variety of concerns and no special
+language constructs such as visibility modiﬁers are needed. In fact, mdp oﬀers even more ﬂexibility,
+for instance, we can also imagine role-based visibility.
+
+7
+
+2.2.4 But why are there no classes?
+
+Most object-oriented languages rely on concepts such as classes, meta-classes, subtyping and visibility
+modiﬁers for data protection. In accordance to the research of Self [US87, CUS95], we do not believe
+that there should be a separate language concept for classes (or a ﬁxed class model) for following
+reasons:
+
+1. Classes as abstract entities break with the real-world metaphor of having tangible objects.
+
+Humans are better dealing with the concrete, rather than abstract, non-tangible ideas.
+
+2. Classes introduce the problem of inﬁnite meta-regress [US87]. If there is a class, there must be
+
+a meta-class, and if there is a meta-class, there must be a meta-meta-class and so on.
+
+3. A purely object-based system can be used to implement a class-based system. For example, a
+
+Smalltalk interpreter can be written in Self.
+
+4. Just as classes, objects can serve as namespaces, protect access to attributes and do everything
+
+a class description can do, even more.
+
+mdp gives us the ﬂexibility to create objects and contexts that serve as class descriptions or in
+general, ontologies of any kind. The reader is encouraged to experiment with new ideas using mdp
+and mop.
+
+2.3 An Adaptive GUI
+
+In this section we will explore how we can model an adaptive graphical user interface system. (Note
+that the example is only a sketch and serves for demonstrating the potential of mdp. We will provide
+full-ﬂedged examples of adaptive GUIs in future works).
+
+The system executes within a dynamic context which can be manipulated by the user or other
+parts of the system. For the moment, we do not make any assumptions how the context is structured,
+i.e., which dimensions of user-experience it contains. In this example, we focus on displaying objects
+only.
+
+In some part of the system, assume we have a predicate refresh(Display, Object) which is evaluated
+
+whenever there is a change in the system context or one of its graphical objects:
+
+refresh ( Display , Object ) : -
+
+system_conte xt ( Context ) ,
+Context ? Object ! representati o n ( R ) ,
+Display ! present ( R ).
+
+Diﬀerent types of objects have diﬀerent graphical representations. For the moment, we assume
+that all objects are represented as colored bitmaps. We use a third-party library for rasterization.
+There might be following implementations for the predicate representation.
+
+[ rcvr : G , G < text ] # representati on ( R ) : -
+
+G ! text_contents ( T ) ,
+G ! text_color ( Color ) ,
+
+text_pixmap (T , Color , R ). % Third party library
+
+[ rcvr : G , G < box ]
+
+# representati on ( R ) : -
+
+G ! bounds ( Width , Height ) ,
+G ! color ( Color ) ,
+
+box_pixmap ( Width , Height , Color , R ). % Third party library
+
+8
+
+% Specification s for other shape types ...
+
+% If we do not recognize a new type of object , use a default representati on
+[ rcvr : G , G < object ] # representati on ( R ) : -
+
+d e f a u l t _ r e p r e s e n t a t i o n( R ).
+
+Many modern GUIs such as browsers accept diﬀerent types of graphical representations, for ex-
+ample vector graphics. Assuming we ﬁnd out that our display object is capable of rendering vector
+graphics, we do not have to change any of the existing code to support this. We just add the dimen-
+sion render type to our system (and provide means of render-type-selection for the user) and add a
+corresponding predicate deﬁnition:
+
+[ rcvr : G , G < box , render_type : svg ] # representati on ( R ) : -
+
+G ! bounds ( Width , Height ) ,
+G ! color ( Color ) ,
+R = svg ( shape = box , color = Color ).
+
+[ rcvr : G , G < box , render_type : pixmap ] # representatio n ( R ) : -
+
+% Fallback to original implementatio n
+[ - render_type ] ? G ! representatio n ( R ).
+
+Now suppose that there is a light-sensor hooked to our system and we would like to take advantage
+of this by adapting the colors of the objects to the ambient light. For example, when the room is
+dark, we want to display our objects in a midnight blue theme. Now, we could add following lines:
+
+[ rcvr : G , G < text , ambient_light : dark ] # representatio n ( R ) : -
+
+G ! set_color ( gray ) ,
+[ - ambient_light ] ? G ! representatio n ( R ).
+
+[ rcvr : G , G < box , ambient_light : dark ] # representatio n ( R ) : -
+
+G ! set_color ( midnight_blue ) ,
+[ - ambient_light ] ? G ! representatio n ( R ).
+
+Unfortunately, this will introduce non-determinism if the context contains both an ambient light
+and a render type dimension. The reason is that, given a graphical object, the light-sensitive and the
+render-type sensitive implementations of representation match the context as none is more speciﬁc
+than the other. mdp will evaluate both variants, in the order of their deﬁnitions.
+
+? - box_prototype ( T ) , [ ambient_light : dark , render_type : svg ] ? T ! representati on ( R ).
+
+R = svg ( shape = box , color = midnight_blue ) ;
+R = svg ( shape = box , color = original_colo r ).
+
+We can ﬁx this in two ways: We can either add the render_type dimension to our deﬁnitions or
+
+we can assign a higher score to the context:
+
+[ rcvr : G , G < box , ambient_light : dark , render_type : _ ] # representatio n ( R ) : -
+
+G ! set_color ( midnight_blue ) ,
+[ - ambient_light ] ? G ! representatio n ( R ).
+
+% Alternative implementat io n
+
+dimension_ we ig h t ( ambient_light , 2).
+
+9
+
+[ rcvr : G , G < box ,
+
+ambient_ligh t : dark ,
+dimension_we i gh t ( ambient_light , W ) @W ] # representati o n ( R ) : -
+
+G ! set_color ( midnight_blue ) ,
+[ - ambient_light ] ? G ! representatio n ( R ).
+
+However, both solutions have the problem that all variants of representation have to be examined
+to safely add new variants. Nonetheless, the latter solution of assigning weights to dimension, gives
+us more ﬂexibility as it allows us to organize dimension as a separate concern. Nonetheless, the
+programmer might forget that there is a weight assignment for a speciﬁc dimension and manually
+adding a weight annotation to each dimension is too tedious. However, it is straightforward extend
+mdp with automatic annotations.
+
+The bigger issue is how the programmer can be assisted in structuring a multidimensional predicate
+space. Also, Ungar et al. stress the importance of having equal dimensions (”‘no dimension holds
+sway over another”’). Future research and experimentation with larger systems is needed to assess
+this problem.
+
+10
+
+3
+
+Implementation
+
+The implementation consists of two parts: an extensible transformer which translates mdp speciﬁca-
+tions into ordinary Prolog rules and a dispatcher which is responsible for evaluating multidimensional
+queries by selecting and evaluating the most speciﬁc predicates w.r.t. a given a context.
+
+Both the transformer and the dispatcher are implemented in standard Prolog. The transformer
+implements the predicate term expansion/3 which is oﬀered by Prolog systems for rewriting consulted
+programs.
+
+3.1 Transforming mdp-Code
+
+For every mdp rule, the transformer generates two parts, an implementation for the predicate and a
+signature which contains various meta-data used by the dispatcher to determine which implementation
+to select.
+
+For example, consider following mdp rule:
+
+[ debug : P , weight ( debug , D ) @D ] # edge (A , B ) : -
+
+[ - debug ] ? edge (A , B ) , % Remove debug dimension from implicit context
+call (P , (A , B )).
+
+The transformer will generate following code:
+
+mdp_signatur e (
+
+edge /2 ,
+mdp_implem en t at i on ( edge /815) ,
+% where 815 is a generated identifier to distinguish mdp predicates
+% that have the same functor and arity
+
+context_spec (
+
+% Context variable
+Ctx ,
+
+% Defined dimensions
+[ debug ] ,
+
+% Translated context specification ( used by the dispatcher )
+[ ctx_member ( Ctx , debug , P ) , weight ( debug , D )] ,
+
+% Matching - score variables ( summed up by the dispatcher ) ,
+[ D ]
+
+)
+
+).
+
+mdp_implem e nt a ti o n ( edge /815 , Ctx , A , B ) : -
+
+ctx_member ( Ctx , debug , P ) ,
+? ( Ctx , [ - debug ] , edge (A , B ) , % invoke dispatcher
+call (P , (A , B )).
+
+The basic transition rules for the transformer and the semantics of mdp are shown in Table 1.
+The transformer is applied to every mdp deﬁnition and executes within an environment Γ. Γ
+comprises four kinds of information: Γcontext, Γdimensions, Γscores and Γrules. Γcontext denotes a
+fresh variable which holds the context of an mdp rule, Γdimensions and Γscores are initially empty lists
+that are extended by the transition rules to contain the required dimension names and the weights
+
+11
+
+of an mdp rule. The weights are either variables or integer constants. Finally, Γrules contains the
+translated code of a context-speciﬁcation. For readability reasons its derivation is omitted.
+
+The rules can be extended to accommodate for syntactical and semantical enhancements such as
+we have seen for object-oriented programming (see Section 2.2). For this purpose, the transformer
+provides two hooks that allow the extension of the basic rules.
+
+The ﬁrst hook hook context rule mdp term(+Context, +Rule, -Term) is applied to every term in
+a context speciﬁcation and can be extended by the programmer to add transformation rules. T erm
+can be either ordinary Prolog code or an mdp query.
+
+The second hook hook mdp term(+Context, +Term1, -Term1) is applied after the ﬁrst hook and
+
+transforms the context speciﬁcation terms and the bodies of predicates into ordinary prolog terms.
+
+3.2 Predicate Selection and Evaluation
+
+When given a multidimensional query, the dispatcher will manipulate the implicit context (such as
+remove or change dimensions) and select the most speciﬁc predicates (MSPs).
+
+The MSPs are determined by following steps:
+
+1. Collect the list of all deﬁned mdp rules that match the functor and arity of a query.
+
+2. Add all anonymous rules to the list.
+
+3. Remove all rules which have failed preconditions.
+
+4. Remove all rules which require more dimensions than are present in the implicit context.
+
+5. Determine the score of every rule by counting one for each matched dimension and adding up
+
+all weights.
+
+6. Select all predicates with the highest score.
+
+Listing 1 shows how the dispatcher works in detail.
+
+12
+
+% G i v e n C o n t e x t refers to the e x p l i c i t c o n t e x t
+% given in a m u l t i d i m e n s i o n a l query
+d i s p a t c h( I m p l i c i t Co nte xt , GivenContext , P r e d i c a t e) : -
+
+% Update c o n t e x t i n f o r m a t i o n ( remove or update dimensions ,
+%
+u p d a t e d _ c o n t e x t (
+
+see source d i s t r i b u t i o n for d e t a i l s)
+
+I m p l i c i t C on text , GivenContext , Predicate , U p d a t e d C o n t e x t ) ,
+
+P r e d i c a t e =.. [ _ | A r g u m e n t s] ,
+m o s t _ s p e c i f i c _ p r e d i c a t e ( U p d a t e d C onte xt , Predicate , MSP ) ,
+e v a l u a t e( MSP , U p d a t e d C onte xt , [ U p d a t e d C o n t e x t | A r g u m e n t s ]).
+
+m o s t _ s p e c i f i c _ p r e d i c a t e ( Ctx , Predicate , MSP ) : -
+
+f u n c t o r( Predicate , Name , Arity ) ,
+
+f i n d a l l( ScoreKey - MSP ,
+
+(
+
+(
+
+) ,
+
+m d p _ s i g n a t u r e ( Name / Arity , MSP , S ) ;
+m d p _ s i g n a t u r e ( ’ $ a n o n y m o u s _ r u l e ’/_ , MSP , S )
+
+p r e d i c a t e _ s c o r e ( Ctx , S , Score ) ,
+
+S c o r e K e y is - Score
+
+) ,
+M S P B y S c o r e) ,
+
+k e y s o r t( MSPByScore , [ -( Score , _ )| _ ]) ,
+member ( Score - MSP , M S P B y S c o r e ).
+
+p r e d i c a t e _ s c o r e ( Context , Signature , Score ) : -
+
+S i g n a t u r e =
+
+c o n t e x t _ s p e c ( Context , R e q u i r e d D i m en si on s , ContextRules , Vars ) ,
+
+c t x _ k e y s( Context , G i v e n D i m e n s i o n s ) ,
+i n t e r s e c t i o n ( R e q u i r e d D i m en sio ns , G i v e n D i m e n s i o n s , R e q u i r e d D i m e n s i o n s ) ,
+length ( R e q u i r e d D i m en si ons , N u m M a t c h i n g D i m e n s i o n s ) ,
+
+call ( C o n t e x t R u l e s ) , % E v a l u a t e p r e c o n d i t i o n s
+s u m _ l i s t( Vars , V a r S c o r e ) ,
+
+Score is V a r S c o r e + N u m M a t c h i n g D i m e n s i o n s .
+
+Listing 1: Dispatcher Implementation
+
+13
+
+(Phase 1) The following rules are applied to every term in an mdp rule
+
+multidimensional query
+
+Γ ⊢ Context?P (Args)
+
+Γ ⊢ dispatch(Γcontext, Context, P (Args))
+
+term extension
+
+Γ ⊢ T, hook mdp term(Γcontext, T, T ′)
+
+Γ ⊢ T ′
+
+(Phase 2) Translation of mdp rules to single dimensional rules
+
+dimension
+
+Γ, Γdimensions ∪ {Dim} ⊢ R # P (Args) :– ctx member(Γcontext, Dim, Coord), Body
+
+Γ ⊢ [Dim : Coord | R] # P (Args) :– Body
+
+precondition
+
+Γ ⊢ [P re(Argsp) | R] # P (Args) :– Body
+Γ ⊢ R # P (Args) :– P re(Argsp), Body
+
+weight
+
+Γ ⊢ [ @W | R] # P (Args) :– Body
+
+Γ, Γscores ∪ {W } ⊢ R # P (Args) :– Body
+
+spec extension
+
+Γ ⊢ [SpecP art | R] # P (Args) :– Body
+
+hook context rule mdp term(Γcontext, SpecP art, SpecP art′)
+
+Γ ⊢ R # P (Args) :– SpecP art′, Body
+
+(might require re-application
+
+of Phase 1)
+
+rule generation
+
+Γ ⊢ [] # P (Args) :– Body
+
+mdp implementation(P/N ewID, Args, Body)
+
+mdp signature(P/Arity, mdp implementation(P/N ewID),
+
+context(Γcontext, Γdimensions, Γrules, Γscores))
+
+fact extension
+
+Γ ⊢ ContextSpec # P (Args)
+
+Γ ⊢ ContextSpec # P (Args) :– true
+
+anonymous rule
+
+Γ ⊢ ContextSpec :– Body
+
+Γ ⊢ ContextSpec # ’$anonymous rule’(Args) :– true
+
+Table 1: Overview of mdp transformation rules
+
+14
+
+4 Related Work
+
+Numerous methods and techniques such as Aspect-Oriented Programming (AOP), Subject-oriented
+programming [HO93, LRN11] and special programming techniques for one-dimensional systems in
+the form of architectural and design patterns have been conceived to handle concerns in adaptive
+systems. The problems with these techniques are that they either require the use of special tools and
+languages, such as aspect description languages and compilers, or reprogramming of the mechanisms
+mdp already provides for every problem instance. We further argue that patterns in particular reduce
+the readability of context-sensitive systems since they oﬀer no real separation between speciﬁcation
+and implementation of concerns at the language level.
+
+Korz, on the other hand, has been designed with multidimensionality from the start and ﬁrmly
+builds on the principles of uniformity and minimality. As such, the system is simple yet very expressive
+and readable. However, it has to be pointed out that techniques such as AOP, are in general, more
+expressive (but not necessarily as comprehensible) than Korz.
+
+While mdp rests on a Prolog, a single-dimensional language, its unique properties of uniformity,
+minimality and homoiconicity provide a ﬂexible foundation for embedding multidimensionality and
+experimenting with new features. This allowed us to quickly implement one of Ungar et al.’s suggested
+improvements to Korz, selector-based matching (anonymous rules). Also, unlike Korz, multiple
+methods (predicates) can be executed if they have the same speciﬁcity. We made this design choice
+because non-determism is an important and desired feature of Prolog programming and it naturally
+extends to multidimensional predicates. Another notable diﬀerence is mdp’s reliance on weights. The
+initial design did not include weights, but when introducing subtyping, it became apparent that there
+must be a kind of weight dimension. Also, we can exploit Prolog’s uniﬁcation capabilities to perform
+pattern matching on dimension coordinates which will be explored in future works.
+
+5 Conclusion and Future Work
+
+We have seen that we can use mdp for many purposes. We can use multidimensional predicates to do
+object-oriented programming and to extend a program with additional concerns. Using techniques
+such as memoization, we obtain the beneﬁt of having readable and eﬃcient speciﬁcations. Yet we
+have barely scratched the surface and we will present more scenarios in future works.
+
+In particular, there are following issues that need attention:
+
+• Eﬃciency of Implementation
+
+A major drawback of mdp is its eﬃciency. The dispatching mechanism for multidimensional
+predicates is very ineﬃcient and has been programmed with quick adaptability and readability
+in mind. Its performance is unlikely to be satisfactory in production systems. For satisfactory
+performance, a Prolog VM could be extended with special instructions for multidimensional
+dispatching.
+However, it is not clear at this stage whether the mechanism is suﬃciently expressive for large-
+scale Prolog systems. To this end, more scenarios have to be investigated to reveal possible
+shortcomings.
+
+• Debugging and Comprehensibility
+
+Currently, there is no support for debugging mdp programs. When debugging an mdp program,
+the programmer has to trace the call-chain of the mdp implementation to get information such
+as the context and predicate selection. A usable debugger has to hide these implementation
+details from the user and present the desired information in an easily accessible way.
+Also, the programmer has to be very careful in organizing multidimensional predicates. When
+programming in the large-scale, a development environment that helps a programmer organizing
+dimensions and point out at possible mistakes is mandatory.
+The design of such a development environment with a suitable debugger will be an interesting
+challenge.
+
+15
+
+• Weight Dimension and Pattern Matching on Dimension Values
+
+We have seen that in many cases such as implementing subtyping, a weight dimension is neces-
+sary to ensure selection of the most speciﬁc subtype. However, instead of using annotations, a
+cleaner solution would be to explicitly deﬁne a weight dimension and use pattern matching to
+determine the weights of rules:
+
+[ weight : 1] # p .
+[ weight : 2] # p .
+
+? - [ weight : X ] ? p
+
+X = 1 ;
+X = 2.
+
+An anonymous could then do weight-based predicate selection. This would further simplify the
+matching rules and the dispatcher. However, one problem is that in our example both variants
+are executed.
+In our case this is not desirable, but there might be cases in which we want
+to match on dimensions and on arguments of the predicate. Experiments have to provide an
+answer which approach is practical.
+
+• Extending the mop
+
+The meta-object protocol we presented is far from complete. For example, we can enrich mop
+with syntactical sugar for deﬁning OOP-style properties and context-oriented visibility modi-
+ﬁers. Also, the syntax for matching subtypes is a bit verbose, i.e., [rcvr: OID, OID < Subtype]
+can be shortened to [OID < Subtype] (like in Korz). Modifying mop accordingly is straightfor-
+ward.
+
+• Restructuring Prolog Libraries
+
+mdp gives us many new ways to structure Prolog code and much incentive to restructure existing
+code bases. For example, the ordsets-library provides special predicates for manipulating and
+querying data types in ordered sets such as ord intersection/3 or ord memberchk/2. With mdp
+we can give the programmer a more consistent experience and have overloaded predicate names
+such as member and, depending on the context, dynamically choose the predicates to deal with
+special data types.
+Another interesting experiment would be to rewrite XPCE [WA02], a GUI framework for SWI-
+Prolog, using the techniques we have presented in this paper.
+
+• Correctness
+
+Currently, mdp is an experimental stage, so bugs are to be expected even though we have made
+sure that the presented examples work. To make mdp ready for production systems, rigorous
+testing has to be applied along with formal veriﬁcation, where we will take advantage of Prolog’s
+well-deﬁned language semantics.
+
+We welcome suggestions, bug reports and improvements to the implementation which can be
+
+obtained at: https://bitbucket.org/nexialist/mdp.
+
+References
+
+[CUS95] Bay-Wei Chang, David Ungar, , and Randall B. Smith. Getting Close to Objects: Object-
+Focused Programming Environments. In Visual Object-Oriented Programming, Margaret
+Burnett, Adele Goldberg, and Ted Lewis, eds., Prentice-Hall, 1995.
+
+[HO93] William Harrison and Harold Ossher. Subject-oriented programming: A critique of pure
+
+objects. SIGPLAN Not., 28(10):411–428, October 1993.
+
+[LRN11] Daniel Langone, Jorge Ressia, and Oscar Nierstrasz. Unifying subjectivity. In Objects, Mod-
+els, Components, Patterns - 49th International Conference, TOOLS 2011, Zurich, Switzer-
+land, June 28-30, 2011. Proceedings, pages 115–130, 2011.
+
+16
+
+[UOK14] David Ungar, Harold Ossher, and Doug Kimelman. Korz: Simple, symmetric, subjective,
+context-oriented programming. In Proceedings of the 2014 ACM International Symposium
+on New Ideas, New Paradigms, and Reﬂections on Programming & Software, Onward!
+2014, pages 113–131, New York, NY, USA, 2014. ACM.
+
+[US87]
+
+David Ungar and Randall B. Smith. Self: The power of simplicity. In Conference Proceed-
+ings on Object-oriented Programming Systems, Languages and Applications, OOPSLA ’87,
+pages 227–242, New York, NY, USA, 1987. ACM.
+
+[WA02]
+
+Jan Wielemaker and Anjo Anjewierden. Programming in XPCE/Prolog, 2002. Available
+online: http://info.ee.pw.edu.pl/Prolog/Download/userguide.pdf, Accessed: 07.03.2016.
+
+17
+
+

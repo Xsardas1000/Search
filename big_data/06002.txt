@@ -1,0 +1,2749 @@
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+8
+1
+
+ 
+ 
+]
+S
+D
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+2
+0
+0
+6
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+A Message Passing Algorithm for the Problem of
+
+Path Packing in Graphs
+
+Patrick Eschenfeldt and David Gamarnik
+
+March 22, 2016
+
+Abstract
+
+We consider the problem of packing node-disjoint directed paths in
+a directed graph. We consider a variant of this problem where each
+path starts within a ﬁxed subset of root nodes, subject to a given
+bound on the length of paths. This problem is motivated by the so-
+called kidney exchange problem, but has potential other applications
+and is interesting in its own right.
+
+We propose a new algorithm for this problem based on the message
+passing/belief propagation technique. A priori this problem does not
+have an associated graphical model, so in order to apply a belief prop-
+agation algorithm we provide a novel representation of the problem
+as a graphical model. Standard belief propagation on this model has
+poor scaling behavior, so we provide an eﬃcient implementation that
+signiﬁcantly decreases the complexity. We provide numerical results
+comparing the performance of our algorithm on both artiﬁcially cre-
+ated graphs and real world networks to several alternative algorithms,
+including algorithms based on integer programming (IP) techniques.
+These comparisons show that our algorithm scales better to large in-
+stances than IP-based algorithms and often ﬁnds better solutions than
+a simple algorithm that greedily selects the longest path from each
+root node. In some cases it also ﬁnds better solutions than the ones
+found by IP-based algorithms even when the latter are allowed to run
+signiﬁcantly longer than our algorithm.
+
+1 Introduction.
+
+In this paper we consider the problem of packing node-disjoint di-
+rected paths into a directed graph, with each path starting within a
+designated subset of “root” nodes. For a given maximum path length,
+our objective is to include as many nodes as possible in paths. This
+
+1
+
+problem is motivated by the kidney exchange problem (KEP) stud-
+ied in [2], in which donors and recipients must be matched together to
+maximize the number of donations. In some situations these donations
+are performed in chains starting from a lone donor, and logistical con-
+cerns encourage limiting the length of chains. This problem also has
+other potential applications such as coordinating chained transactions,
+and is an interesting and hard combinatorial optimization problem in
+general.
+
+We present a new algorithm for this problem based on the message
+passing/belief propagation technique (BP for short). This algorithm
+depends on a new representation of the problem that allows us to cre-
+ate a graphical model which embeds the optimization problem. After
+describing this representation we will show that a direct application of
+standard BP results in poor scaling, so we provide an eﬃcient imple-
+mentation that provides signiﬁcant scaling advantages. Letting n be
+the number of nodes in the graph, K be the maximum path length,
+and ∆ be the maximum degree, the eﬃcient implementation can per-
+form a full iteration of the algorithm in O (n∆K) computations, while
+
+a direct implementation of belief propagation requires O(cid:0)n2∆6K 2(cid:1).
+
+We compare our algorithm to several alternatives and show that it
+consistently scales well and often ﬁnds better solutions than other fast
+algorithms. In particular, we compare our eﬃciently implemented BP
+to a simple greedy algorithm, called Greedy from now on for simplic-
+ity, and an existing Integer Programming (IP) algorithm used in [2]
+which we call KEP. The Greedy algorithm which we consider makes
+greedy selections only between constructed paths and not during the
+construction of individual paths, as at every root node it searches ex-
+haustively for the longest path which can be added to the solution
+starting from that node. We also use our new representation of the
+problem to derive a secondary novel algorithm based on IP, which we
+call Parent-Child-Depth (PCD). Comparisons are made on a variety
+of randomly created graphs as well as on several real world networks.
+Our random graphs are generated with each edge existing indepen-
+dently with probability c/n for various values of c. We ﬁnd that for
+n = 1000 and n = 10000 with a path length bound of 5 nodes, with
+10% to 25% of nodes designated as root nodes, and c between 2 and
+5, our message passing algorithm consistently ﬁnds more nodes than
+Greedy while running in comparable time.
+In many cases BP and
+Greedy run signiﬁcantly faster than the IP algorithms, which are cut
+oﬀ after a time limit if they have not yet found the optimal solution,
+and in several of these cases BP also ﬁnds solutions with more nodes
+than any other algorithm. We ﬁnd that BP also performs well relative
+to alternative algorithms when the path length bound is increased to
+10 or 15 nodes.
+In the regime where paths as long as 15 nodes are
+allowed, PCD often ﬁnds the optimal solution in reasonable time while
+
+2
+
+KEP almost never does. We also provide numerical results for real
+world networks, with sizes ranging from 5518 nodes to 260982 nodes.
+In all but the smallest network the IP algorithms produce no useful
+results, and in most graphs BP ﬁnds better solutions on average with
+respect to a random choice of root nodes than Greedy, while running
+in comparable time.
+
+Our approach to this problem is motivated by previous work ap-
+plying message passing techniques to the problem of prize-collecting
+Steiner trees (PCST) done by Bayati, et. al. [4] (also used by Bailly,
+et. al. [3]). In particular, the PCST problem does not have a natural
+representation as a graphical model so the authors in [4] design a new
+representation of the problem that leads to a graphical model and then
+show how to implement BP on that model. This paper uses a similar
+approach for the path packing problem.
+
+In another relevant paper, Altarelli, et. al. [1] apply message pass-
+ing techniques to edge-disjoint paths. They directly derive a message
+passing algorithm for general graphs from an iterative cost calculation
+scheme valid for trees and apply it to locally tree-like graphs and ﬁnd
+that their algorithm performs better in terms of paths found than var-
+ious alternatives. Unlike this work, in our model paths may end at any
+non-root node (as we do not consider a lone root node to constitute a
+path in itself, every path must include at least one edge and thus one
+non-root node).
+
+Another example of applying a message passing approach while
+making major modiﬁcations to standard methods is [5]. The authors
+introduce a new type of graphical model, called a memory factor net-
+work, along with a message passing style algorithm to perform infer-
+ence on such a model. Designing the message passing algorithm to
+match the structure of the problem provides eﬃciency advantages over
+variants of belief propagation and also provides convergence guaran-
+tees.
+
+The remainder of this paper is organized as follows: In section 2
+we describe the problem formulation, in section 3 we detail the core
+of our message passing algorithm, in section 4 we detail our method
+for eﬃciently implementing this algorithm, in section 5 we discuss how
+to translate the result of the message passing into a solution to the
+original problem, in section 6 we discuss alternative algorithms, and
+in section 7 we provide numerical results comparing our algorithm to
+these alternatives.
+
+2 Problem setup.
+
+The problem description consists of a directed graph G with node set
+[n] = {1, 2, . . . , n}, an edge set E, and a positive integer K. Let E ′ be
+
+3
+
+the undirected version of the edge set of G. We assume that G contains
+no isolated nodes, so for every i ∈ [n] there exists some j ∈ [n] such
+that (i, j) ∈ E ′. The nodes [n] are partitioned into subsets U and V ,
+and the edges are elements of U × V and V × V only. In particular,
+no edges start in V and end in U . We deﬁne a directed simple path
+in a directed graph as a sequence of distinct nodes {i1, i2, . . . , ik} such
+that (il, il+1) ∈ E for all l = 1, . . . , k − 1. All paths considered in this
+paper will be directed simple paths. For a path P = {i1, . . . , ik} we
+deﬁne the length of P , denoted |P |, to be the number of nodes in the
+path, namely k. Our goal is to ﬁnd a collection P = {P1, . . . , Pk} of
+node-disjoint paths with each path Pj starting with a node in U and
+each having length at most K. Speciﬁcally, we deﬁne
+
+v(P) = XP ∈P
+
+|P |
+
+to be the count of the nodes in a collection of paths. Let Π be the set
+of feasible collections P. Then our problem is
+
+max
+P∈Π
+
+v(P).
+
+(1)
+
+We now introduce a formalization for the problem (1) that is conducive
+to message passing.
+
+We will use special symbols ∗ and • to represent certain relation-
+ships to be described below. We will also introduce the notation ∂i
+to represent the set of nodes adjacent to the node i in the undirected
+version of the graph G. That is, ∂i is the set of nodes j ∈ [n] such that
+(i, j) ∈ E or (j, i) ∈ E. We also let ∂X i = ∂i ∩ X and let ∂i \ j stand
+for the more formally correct ∂i \ {j}.
+
+For each node i ∈ [n], we introduce variables (di, pi, ci) where di ∈
+[K] ∪ {∗}, pi ∈ ∂i ∪ {∗, •}, ci ∈ ∂V i ∪ {∗, •}. These variables intend to
+represent the depth of the node (di), its parent (pi), and its child (ci)
+in a given solution. The special value ∗ indicates that the node does
+not participate in a path, in which case we will have di = pi = ci = ∗.
+The special value • indicates that the node is at one end of a path.
+Thus if pi = • this means node i does not have a parent and thus starts
+a path, whereas if ci = • node i does not have a child and thus ends a
+path. Note that if ci is a node it must be a node in V because nodes
+in U must either act as the root of a path or not participate in a path.
+To formulate the optimization problem, we need to deﬁne a feasible
+set and an objective function. We begin with the feasible set. We ﬁrst
+deﬁne a function that acts as an indicator for the consistency of the
+variables (di, pi, ci) at a single node i. For i ∈ [n], di ∈ [K] ∪ {∗},
+
+4
+
+pi ∈ ∂i ∪ {∗, •}, ci ∈ ∂V i ∪ {∗, •}, let
+
+fi(di, pi, ci)
+
+△
+= 1{di = ci = pi = ∗}
+
++ 1{pi = •, ci 6∈ {∗, •}, di = 1, i ∈ U }
++ 1{pi 6∈ {∗, •}, ci 6∈ {∗, pi}, di 6∈ {∗, 1}, i ∈ V }.
+
+(2)
+
+(3)
+(4)
+
+Term (2) is the case in which node i does not participate, term (3) is
+the case in which node i is the root of a path, and term (4) is all cases
+where node i participates in a path but is not the root. Note that
+these three cases are mutually exclusive, so fi is an indicator function.
+It is equal to zero if the variables at node i are not consistent with
+any global conﬁguration (d, p, c) = (dj , pj, cj)j∈[n] representing a set of
+valid paths for the graph G, and equal to one otherwise.
+
+For each pair of nodes i and j that are adjacent in the undirected
+version of G, we deﬁne a function gij(di, pi, ci, dj, pj, cj) of the variables
+(di, pi, ci, dj, pj, cj) for the nodes i and j which is an indicator that
+these variables are consistent with each other and the existence or
+nonexistence of the edges (i, j) and (j, i). Namely, they correspond to
+a locally valid conﬁguration, so if, e.g., node i reports that its parent is
+node j, then the edge (j, i) exists, node j reports that its child is node
+i, and we have di = dj + 1. Formally, for i ∈ [n], j ∈ ∂i, di ∈ [K] ∪ {∗},
+pi ∈ ∂i ∪ {∗, •}, ci ∈ ∂V i ∪ {∗, •}, dj ∈ [K] ∪ {∗}, pj ∈ ∂j ∪ {∗, •},
+cj ∈ ∂V j ∪ {∗, •}, let
+
+gij(di, pi, ci, dj, pj, cj)
+
+△
+=
+
+1{pi = j, cj = i, pj 6= i, ci 6= j, (j, i) ∈ E, di = dj + 1}
++ 1{pj = i, ci = j, pi 6= j, cj 6= i, (i, j) ∈ E, dj = di + 1}
++ 1{pi 6= j, cj 6= i, pj 6= i, ci 6= j}.
+
+(5)
+
+(6)
+
+(7)
+
+Lines (5) and (6) capture the cases where j is the parent of i and i is
+the parent of j, respectively, and enforce the relationships that must
+occur in those cases. Line (7) captures all cases where there is no
+direct connection between nodes i and j. All three cases are mutually
+disjoint, so gij is an indicator function. In summary, gij is equal to
+one if parent/child relationships agree, the edges (i, j) and (j, i) are
+used only in the appropriate directions, and depth relationships are
+consistent.
+
+Finally we deﬁne a indicator function for variable consistency at
+both the node and edge level, which we deﬁne for each i ∈ [n], j ∈ ∂i
+as
+
+hij(di, pi, ci, dj, pj, cj)
+
+△
+= gij(di, pi, ci, dj, pj, cj)fi(di, pi, ci)fj(dj , pj, cj).
+(8)
+
+With this deﬁnition of hij , we can deﬁne the set
+
+M
+
+△
+
+=(cid:8)(d, p, c) : hij(di, pi, ci, dj, pj, cj) = 1 ∀ i ∈ [n], j ∈ ∂i(cid:9)
+
+(9)
+
+5
+
+which will serve as the feasible set for our optimization.
+
+Note that each collection P ∈ Π of node disjoint paths is associated
+with a unique assignment of variables {(di, pi, ci)}i∈[n], which we will
+denote by (d(P), p(P), c(P)). In fact the converse is also true:
+
+Proposition 1. For every (d, p, c) ∈ M there exists a unique P ∈ Π
+such that (d, p, c) = (d(P), p(P), c(P)).
+
+Proof. Given a set of variables (d, p, c) ∈ M , recall that for every i ∈ [n]
+we have fi(di, pi, ci) = 1 and for every j ∈ ∂i we have gij(di, pi, ci, dj, pj, cj) =
+1.
+
+We will construct a feasible set of node-disjoint paths by the fol-
+lowing procedure. Find the set of nodes i such that di = 1, which we
+denote R.
+
+If R is empty then for every i ∈ U we must be in case (2) because
+case (3) is excluded. Thus di = pi = ci = ∗. For i ∈ V , by (2) and
+(4) we either have di = ∗ or di > 1. But by (5) di = 2 only if dj = 1
+for some j ∈ ∂i. This implies that di 6= 2 for any i ∈ V . Repeating
+this argument implies di 6= l for any l ∈ [K], so we conclude di = ∗.
+Then (2) implies pi = ci = ∗. Thus for every node i ∈ [n] we have
+di = pi = ci = ∗, so we let P = ∅ because di(∅) = pi(∅) = ci(∅) = ∗ for
+all i ∈ [n].
+
+Otherwise, if R is nonempty, we will construct one path for each
+i ∈ R. Consider some i1 ∈ [n] such that di1 = 1. By (3) we must have
+i1 ∈ U , so it will be valid to start a path at i1. Again by (3) we know
+ci1 6= ∗, •, so ci1 = i2 for some i2 ∈ ∂V i. By (6) with i = ii and j = i2
+we have di2 = di1 + 1 = 2, (i1, i2) ∈ E, pi2 = i1 and ci2 6= i1. Thus it is
+valid to start our path with the node sequence {i1, i2}. If ci2 = • then
+we end this path and add P = {i1, i2} to P. If ci2 6= • then by di2 = 2
+and (4) we have ci2 = i3 for some i3 ∈ ∂V i2. By (6) with i = i2 and
+j = i3 we have di3 = 3, (i2, i3) ∈ E, pi3 = i2, and ci3 6= i2. Thus it is
+valid to start our path with the node sequence {i1, i2, i3}. If ci3 = • we
+end this path and add it to P. Otherwise we iterate, because (4) implies
+ci3 = i4 for some i4 ∈ ∂V i3. In the generic step, we are considering
+cil−1 = il for some il ∈ ∂V il−1 and we have dil−1 = l − 1. Then (6)
+for i = il−1 and j = il implies dil = l, (il−1, il) ∈ E, pil = il−1 and
+cil 6= il−1. If cil = • we terminate the path and add P = {i1, i2, . . . , il}
+to P. Otherwise there exists some il+1 ∈ ∂V il such that cil = il+1 so
+we iterate. This process is guaranteed to terminate because dil = l and
+dil ≤ K. Once we have added the path starting at node i1 we repeat
+the process for each node i with di = 1.
+
+To see that (d(P), p(P), c(P)) = (d, p, c) after this process, ﬁrst
+consider a node j which does not participate in any path in P. We
+have dj(P) = pj(P) = cj(P) = ∗ so we want to show dj = pj = cj = ∗.
+Because every node i with di = 1 starts a path in the above procedure,
+we must have dj 6= 1. Suppose dj = l for some l ∈ {2, . . . , K}. Then
+
+6
+
+(4) implies pj 6= {∗, •} so there exists some i ∈ ∂j such that pj = i
+and (6) implies di = l − 1. If i participates in a path in P then our
+above procedure would also include j. If i does not participate then
+we have found a non-participating node with depth l − 1. Thus if there
+are were any non-participating j with dj ∈ [K] there would be a non-
+participating j with dj = 1, but we have already shown there is no
+such j. We conclude that dj = ∗ for all non-participating dj . Then (2)
+implies pj = cj = ∗, as desired.
+
+Next consider a node il which participates in a path in P at depth l.
+If l = 1 then il starts a path and has no parent and (by the above proce-
+dure) has child cil . Thus we have dil (P) = 1, pil(P) = •, and cil (P) =
+cil. The only nodes il that start paths are those with dil = 1 and (3)
+implies pil = •, so we have (dil (P), pil (P), cil (P)) = (dil , pil, cil ), as de-
+sired. If l > 1 then il has dl = l, parent il−1 = pil (as noted during the
+procedure above) and either ends the path or has a child il+1 = cil . By
+the procedure the path ends only if cil = •, so we have cil (P) = • = cil .
+Thus we have (dil (P), pil (P), cil(P)) = (dil , pil , cil), as desired. If the
+path continues it continues to il+1 = cil so cil (P) = cil, and again we
+have (dil (P), pil (P), cil(P)) = (dil , pil, cil ), as desired.
+
+Because we have a bijection between feasible collections of node-
+disjoint paths in G and the set M , we can treat M as the feasible region
+for our optimization problem.
+
+To deﬁne our objective, we deﬁne the function
+
+η(di, pi, ci)
+
+△
+
+= (0 di = pi = ci = ∗
+
+otw
+
+1
+
+(10)
+
+which assigns value 0 to the case where the node i does not participate
+in a path and value 1 to all other cases. We further deﬁne the function
+
+H(d, p, c)
+
+△
+
+= Xi∈[n]
+
+η(di, pi, ci)
+
+(11)
+
+that sums the value of each node across the entire graph. Note that
+when applied to a valid (d, p, c), i.e. an element of the feasible set M ,
+H simply counts the number of nodes of the graph which participate
+in some path.
+
+Thus we can reformulate the optimization problem (1) as
+
+max
+
+(d,p,c)∈M
+
+H(d, p, c).
+
+(12)
+
+3 Algorithm.
+
+Belief propagation algorithms are used to estimate either the marginal
+distributions of variables or the solution to the maximum a posteriori
+
+7
+
+(MAP) problem in graphical models. We will use the framework cor-
+responding to the latter option. The MAP solution for a probability
+distribution is the most likely joint assignment of all the variables in
+the distribution. To utilize this approach, we transform the optimiza-
+tion problem (12) into a problem of ﬁnding a MAP assignment for a
+probability distribution. To achieve this transformation we introduce a
+corresponding undirected graphical model. A maximum likelihood as-
+signment of all variables in this distribution will be an optimal solution
+to (12).
+
+To create our undirected graphical model, we introduce node po-
+
+tentials
+
+φi(di, pi, ci) =(e−β
+
+1
+
+di = pi = ci = ∗
+otw
+
+(13)
+
+where β > 0 is a system parameter to be chosen. We use hij as deﬁned
+in (8) as our edge potentials. Together these deﬁne the probability
+distribution P
+
+P(d, p, c) ∝ Yi∈[n]
+
+φi(di, pi, ci) Y(i,j)∈E ′
+
+hij(di, pi, ci, dj, pj, cj).
+
+This probability distribution assigns zero probability to any global con-
+ﬁguration (d, p, c) which does not correspond to an element of M , and
+among positive probability conﬁgurations it assigns higher probability
+to those which include more nodes.
+
+We can now solve our original optimization problem by solving the
+MAP problem on this undirected graphical model. Note that we may
+have multiple solutions.
+
+The core component of the algorithm is the set of messages, which
+we deﬁne for each ordered pair (j, i) with j ∈ [n] and i ∈ ∂j, rep-
+resenting the message from node j to node i. Thus each undirected
+edge (i, j) ∈ E ′ is associated with two sets of messages, representing
+the information sent from i to j and from j to i, respectively. The
+message from j to i is denoted bj→i(di, pi, ci) for all values of di, pi,
+and ci in the previously speciﬁed ranges di ∈ [K] ∪ {∗}, pi ∈ ∂i ∪ {∗, •},
+ci ∈ ∂V i ∪ {∗, •}. Our approach to this problem will be to implement
+parallel belief propagation in the standard Min-Sum form (which can
+be derived from the Max-Product form by taking the negative log of
+all messages; see, e.g., [6] or [8]), with messages sent according to the
+update rule
+
+bj→i(di, pi, ci) = min
+
+(dj ,pj ,cj )(cid:18) − log φj (dj, pj, cj)
+
+− log hij(di, pi, ci, dj, pj, cj)
+
+(14)
+
++ Xk∈∂j\i
+
+bk→j(dj , pj, cj)(cid:19).
+
+8
+
+We use the convention − log(0) = ∞. In other words, if hij = 0 for
+some conﬁguration then that conﬁguration will not be included in the
+minimization. Otherwise the log(hij) term contributes log(1) = 0.
+
+Because our graphical model potentially has cycles, we must com-
+pute these messages iteratively from some starting values, which we set
+to be bj→i(di, pi, ci) = 1 for all j ∈ [n], i ∈ ∂j and all values of di, pi, ci,
+with the goal of ﬁnding a ﬁxed point solution. From the messages we
+can compute the max-marginals at each node as
+
+¯pi(di, pi, ci) = exp log φi(di, pi, ci) − Xk∈∂i
+
+bk→i(di, pi, ci).! (15)
+
+These max-marginals are, according to the Belief Propagation ap-
+proach, intended to approximate the probability of a maximum-probability
+conﬁguration of the whole system given the arguments di, pi, ci are
+ﬁxed. As such, they can be used in reconstructing the maximum global
+conﬁguration. The non-uniqueness of solutions to (12) complicates
+this, however, which we discuss below in section 5.
+
+The update rule (14) and max-marginal equation (15) characterize
+the entirety of our algorithm. For some a priori maximum number of
+iterations T and initial messages b0
+j→i(di, pi, ci) = 1 for all j ∈ [n],
+i ∈ ∂j and all values of di, pi, ci we compute bt from bt−1 according
+to (14) for t ∈ [T ]. If the messages reach a ﬁxed point, i.e. bt = bt+1
+for some t < T , we halt iterations at that point. Furthermore, for
+any 0 < t ≤ T we can use bt and (15) to compute estimates of the
+max-marginals for any node in any conﬁguration at that step of the
+algorithm.
+
+∆i = |∂i| is the degree of node i in the undirected graph.
+Indeed,
+for each node i ∈ [n] there are ∆i incoming messages, and for each
+
+In this form, the number of messages is O(cid:16)KPi∈[n] ∆3
+message there are K choices of di and O(cid:0)∆2
+
+i(cid:17) where
+i(cid:1) choices of (pi, ci) that
+
+deﬁne messages. For ∆ = maxi∈[n] ∆i the number of messages is
+
+At each iteration of the algorithm a message from j to i must be
+
+O(cid:0)n∆3K(cid:1) .
+
+(16)
+
+updated by computing a minimization over all O(cid:0)K∆2
+
+the variables (dj, pj, cj). The argument of the minimization includes
+a sum over the neighbors of j, which can be performed once for each
+j ∈ [n] for a total computational cost O (n) per iteration. Thus a
+
+j(cid:1) choices of
+
+full iteration of all messages requires O(cid:16)nK 2Pi∈[n](cid:16)∆3
+
+computations. For ∆ = maxi∈[n] ∆i, the number of computations is
+
+j(cid:17)(cid:17)
+i Pj∈∂i ∆2
+
+O(cid:0)n2∆6K 2(cid:1) .
+
+9
+
+(17)
+
+Rather than implementing this scheme directly we will instead intro-
+duce a more eﬃcient representation of the messages, which is described
+in the next section.
+
+4 Eﬃcient representation.
+
+In this section we introduce a more eﬃcient representation of the mes-
+sage passing algorithm described above. This representation will re-
+
+description (14), and will require O (nK∆) computations to be per-
+
+quire only O (nK∆) messages compared to O(cid:0)nK∆3(cid:1) for the original
+formed per iteration compared to O(cid:0)n2K 2∆6(cid:1) computations for the
+
+original representation.
+
+Before deﬁning the messages for the new representation, we now
+introduce an intermediate set of messages and rewrite (14) as two steps,
+with
+
+bj→i(di, pi, ci) =
+
+min
+
+dj ,pj ,cj s.t.
+
+hij (di,pi,ci,dj ,pj ,cj )=1
+
+ψj→i(dj , pj, cj),
+
+(18)
+
+ψj→i(dj , pj, cj) = − log φj(dj , pj, cj) + Xk∈∂j\i
+
+bk→j (dj, pj, cj).
+
+(19)
+
+If the set over which we are minimizing in (18) is empty we deﬁne the
+minimum to be ∞. The messages bj→i(di, pi, ci) evolve exactly as they
+do in (14).
+
+We will deﬁne a collection of messages in terms of ψ and b, intended
+as an eﬃcient representation of the message passing algorithm, which
+we call the A-H form. After deﬁning the messages we will provide
+the rules by which these messages are updated. We will also obtain
+algorithmic complexity bounds for our representation, which are sum-
+marized in Theorem 1. Then we will demonstrate in Theorem 2 the
+equivalence of the A-H form algorithm to the original description (14)
+by showing that iterating the A-H form allows us to compute the max-
+marginals (15) as if we had done the iterations in the original form
+(14). This theorem will be proved in two parts, with Lemma 1 estab-
+lishing a way to write all original messages bj→i(di, pi, ci) in terms of
+A-H form messages and Lemma 2 establishing how to update the A-H
+form messages.
+
+4.1 Message deﬁnitions.
+
+The messages to be deﬁned fall into three categories based on the type
+of the node which sends the message, and the type of the node which
+receives it. We ﬁrst deﬁne messages sent from a non-root node j ∈ V
+to another non-root node i ∈ V . Next we will describe messages sent
+
+10
+
+from a non-root node j ∈ V to a root node u ∈ U , and ﬁnally we
+describe messages sent from a root node u ∈ U to a non-root node
+i ∈ V .
+
+For (i, j) ∈ E ′, we deﬁne
+
+δi→j
+
+△
+
+= (∞ (i, j) 6∈ E
+
+(i, j) ∈ E.
+
+0
+
+Fix (i, j) ∈ E ′ such that i, j ∈ V .
+
+• For 3 ≤ d ≤ K, let
+
+Ad
+
+j→i
+
+△
+= δi→j + min
+cj 6=∗,i
+
+ψj→i(d, i, cj)
+
+= δi→j + min
+
+cj6=∗,i Xk∈∂j\i
+
+bk→j(d, i, cj).
+
+(20)
+
+(21)
+
+Note that − log φj (d, i, cj) = 0 for cj 6= ∗, so ψj→i(d, i, cj) =
+
+Pk∈∂j\i bk→j (d, i, cj).
+
+• For 2 ≤ d ≤ K − 1, let
+
+Bd
+
+j→i
+
+△
+= δj→i + min
+
+pj 6=∗,i,•
+
+ψj→i(d, pj, i)
+
+= δj→i + min
+
+pj 6=∗,i,• Xk∈∂j\i
+
+bk→j (d, pj, i).
+
+• For 2 ≤ d ≤ K, let
+
+F d
+
+j→i
+
+△
+= min
+
+pj 6=∗,i,•
+cj 6=∗,i
+pj 6=cj
+
+ψj→i(d, pj , cj)
+
+(22)
+
+= min
+
+pj 6=∗,i,•
+cj6=∗,i
+pj 6=cj
+
+Xk∈∂j\i
+
+bk→j (d, pj, cj).
+
+• Let
+
+• Let
+
+Gj→i
+
+△
+= ψj→i(∗, ∗, ∗)
+
+= β + Xk∈∂j\i
+
+bk→j (∗, ∗, ∗).
+
+Hj→i
+
+△
+
+= min(cid:26)Gj→i, min
+
+2≤d≤K
+
+F d
+
+j→i(cid:27) .
+
+(23)
+
+(24)
+
+Fix (j, u) ∈ E ′ such that j ∈ V and u ∈ U .
+
+11
+
+• Let
+
+Aj→u
+
+△
+= min
+cj 6=u,∗
+
+ψj→u(2, u, cj)
+
+= min
+
+cj6=u,∗ Xk∈∂j\u
+
+bk→j (2, u, cj).
+
+• For 2 ≤ d ≤ K, let
+
+F d
+
+j→u
+
+△
+= min
+
+pj 6=∗,u,•
+cj 6=∗,u
+pj 6=cj
+
+ψj→u(d, pj, cj)
+
+= min
+
+pj 6=∗,u,•
+cj6=∗,u
+pj 6=cj
+
+Xk∈∂j\u
+
+bk→j(d, pj, cj).
+
+Gj→u
+
+△
+= ψj→u(∗, ∗, ∗)
+
+= β + Xk∈∂j\u
+= min(cid:26)Gj→u, min
+
+△
+
+Hj→u
+
+bk→j(∗, ∗, ∗).
+
+2≤d≤K
+
+F d
+
+j→u(cid:27) .
+
+• Let
+
+• Let
+
+Fix (u, i) ∈ E ′ such that u ∈ U and i ∈ V .
+
+• Let
+
+• Let
+
+• Let
+
+Bu→i
+
+△
+= ψu→i(1, •, i)
+
+bk→u(1, •, i).
+
+= Xk∈∂u\i
+
+Fu→i
+
+△
+= min
+
+cu6=i,∗,•
+
+ψu→i(1, •, cu)
+
+= min
+
+cu6=i,∗,• Xk∈∂u\i
+
+bk→u(1, •, cu).
+
+Gu→i
+
+△
+= ψu→i(∗, ∗, ∗)
+
+= β + Xk∈∂u\i
+
+bk→u(∗, ∗, ∗).
+
+12
+
+• Let
+
+Hu→i
+
+△
+= min {Gu→i, Fu→i}
+
+Note that when i ∈ U or j ∈ U there are diﬀerent numbers of
+messages in each direction. To refer to the set of messages from one
+node to another we deﬁne for (i, j) ∈ E ′
+
+j→i, . . . , AK
+
+j→i, B2
+j→i, . . . , F K
+
+(cid:0)A3
+(cid:0)Aj→i, F 2
+
+Xj→i =
+
+
+(Bj→i, Fj→i, Gj→i, Hj→i)
+
+j→i, Gj→i, Hj→i(cid:1)
+
+Note that in all cases the number of messages from i to j is O (K).
+
+j→i, . . . , BK−1
+
+j→i , F 2
+
+j→i, . . . , F K
+
+j→i, Gj→i, Hj→i(cid:1)
+
+i, j ∈ V
+j ∈ V, i ∈ U
+j ∈ U, i ∈ V.
+
+(25)
+
+4.2 Update rules and the complexity of the A-H
+form.
+
+The iteration update rules for these new messages are listed in Tables
+1-3. The derivation of these update rules from the deﬁnitions of the
+messages is given in the proof of Theorem 2. These update rules allow
+us to provide complexity bounds for the system:
+
+Theorem 1. The A-H form has a total of O (n∆K) messages per
+iteration. Each iteration requires a total of O (n∆K) computations to
+update the entire system.
+
+Remark. Recall from (16) that the original form (14) has a total of
+
+total messages.
+
+To perform an iteration of the system, the original form (14) re-
+
+O(cid:0)n∆3K(cid:1) messages, while by Theorem 1 the A-H form has O (n∆K)
+quires O(cid:0)n2∆6K 2(cid:1) computations by (17), while the A-H form requires
+
+only O (n∆K).
+
+Proof of Theorem 1. For each undirected edge, the A-H form has O (K)
+messages, so the total number of messages is O (|E ′|K) = O (n∆K), as
+desired.
+
+In performing an iteration of the A-H form we proceed node-by-
+node. As we will show below, at a node j we will perform O (K∆j)
+
+total computations. This implies that we require O(cid:16)KPj∈[n] ∆j(cid:17) =
+
+O (n∆K) total computations for a full iteration of the A-H form, as
+claimed.
+
+We now provide more detail on the computations required per node
+j. We consider the case j ∈ V ; if j ∈ U the analysis is similar. We
+will also focus our attention on the most complex message to compute,
+
+13
+
+Hk→j + min(cid:18)0, min
+
+k∈∂ V j\i(cid:16)Ad+1
+
+k→j − Hk→j(cid:17)(cid:19)
+
+Hk→j + min
+w∈∂U j
+
+(Bw→j − Hw→j)
+
+Hk→j + min
+
+k→j − Hk→j(cid:17)
+
+k∈∂ V j\i(cid:16)Bd−1
+(Bw→j − Hw→j) + min(cid:18)0, min
+l→j − Hl→j + min(cid:18)0, min
+l→j − Hl→j(cid:17)
+
+l∈∂ V j\i(cid:18)Bd−1
+l∈∂ V j\i(cid:16)BK−1
+
+k∈∂ V j\i(cid:0)A3
+k∈∂ V j\{i,l}(cid:16)Ad+1
+
+k→j − Hk→j(cid:1)(cid:19)
+k→j − Hk→j(cid:17)(cid:19)(cid:19)
+
+Hk→j
+
+B2
+
+Bd
+
+F 2
+
+Ad
+
+AK
+
+j→i = δi→j + Xk∈∂j\i
+j→i = δi→j + Xk∈∂j\i
+j→i = δj→i + Xk∈∂j\i
+j→i = δj→i + Xk∈∂j\i
+j→i = Xk∈∂j\i
+j→i = Xk∈∂j\i
+j→i = Xk∈∂j\i
+Gj→i = β + Xk∈∂j\i
+Hj→i = min(cid:18)Gj→i, min
+
+Hk→j
+
+F K
+
+F d
+
+Hk→j + min
+w∈∂U j
+
+Hk→j + min
+
+Hk→j + min
+
+2≤d≤K
+
+F d
+
+j→i(cid:19)
+
+Table 1: Messages from j ∈ V to i ∈ V , for (i, j) ∈ E ′ and 3 ≤ d ≤ K − 1
+
+14
+
+Hk→j + min(cid:18)0, min
+
+k∈∂ V j
+
+A3
+
+k→j − Hk→j(cid:19)
+
+Hk→j + min
+
+w∈∂U j\u
+
+(Bw→j − Hw→j) + min(cid:18)0, min
+l→j − Hl→j + min(cid:18)0, min
+l→j − Hl→j(cid:17)
+
+k∈∂ V j(cid:0)A3
+k∈∂ V j\l(cid:16)Ad+1
+
+l∈∂ V j(cid:18)Bd−1
+l∈∂ V j(cid:16)BK−1
+
+k→j − Hk→j(cid:1)(cid:19)
+k→j − Hk→j(cid:17)(cid:19)(cid:19)
+
+Hk→j + min
+
+F 2
+
+F d
+
+Aj→u = Xk∈∂j\u
+j→u = Xk∈∂j\u
+j→u = Xk∈∂j\u
+j→u = Xk∈∂j\u
+Gj→u = β + Xk∈∂j\u
+Hj→u = min(cid:18)Gj→u, min
+
+Hk→j
+
+F K
+
+2≤d≤K
+
+Hk→j + min
+
+F d
+
+j→u(cid:19)
+
+Table 2: Messages from j ∈ V to u ∈ U , for (u, j) ∈ E ′ and 3 ≤ d ≤ K − 1
+
+Hk→u
+
+Bu→i = Xk∈∂u\i
+Fu→i = Xk∈∂u\i
+Gu→i = β + Xk∈∂u\i
+
+Hk→u
+
+Hk→u + min
+k∈∂u\i
+
+(Ak→u − Hk→u)
+
+Hu→i = min (Gu→i, Fu→i)
+
+Table 3: Messages from u ∈ U to i ∈ V , for (u, i) ∈ E ′
+
+15
+
+which is F d
+j→i for 3 ≤ d ≤ K − 1. We will require O (∆j ) computations
+to compute this for all i ∈ ∂j and thus O (K∆j) computations for all
+messages sent from j because there are O (K) messages from j → i for
+each i ∈ ∂j.
+
+To compute F d
+
+j→i it is necessary to compute two values:
+
+and
+
+Hk→j ,
+
+Xk∈∂j\i
+
+min
+
+l∈∂V j\i(cid:18)Bd−1
+
+l→j − Hl→j + min(cid:18)0, min
+
+k∈∂V j\{i,l}(cid:16)Ad+1
+
+k→j − Hk→j(cid:17)(cid:19)(cid:19) .
+
+(26)
+
+Rather than compute these directly for each i, we ﬁrst compute
+
+Hk→j ,
+
+Xk∈∂j
+
+select the three neighbors l ∈ ∂V j with the smallest values of
+
+Bd−1
+
+l→j − Hl→j,
+
+and select the three neighbors l ∈ ∂V j with the smallest values of
+
+Ad+1
+
+l→j − Hl→j.
+
+(27)
+
+(28)
+
+(29)
+
+We also record the values of (28) and (29) for the nodes we record.
+
+Once we have these quantities, for each i ∈ ∂j we can compute
+
+j→i in O (1) computations. To compute Pk∈∂j\i Hk→j we simply
+
+F d
+subtract Hi→j from (27). To compute (26) we pick l and k according
+to the minimum values we have recorded, subject to the constraints
+that l 6= i, k 6= i, and l 6= k. These constraints are the reason we
+record three minimizing values, as the ﬁrst two choices for either l or
+k may be eliminated by matching i or the other choice. For a given
+i ∈ ∂j we compute F d
+j→i in O (1) computations so computing all the
+F d messages sent out from j requires O (∆j) computations.
+
+All of the other messages are computed using similar patterns and
+there are O (K) of them so a total of O (K∆j) total computations are
+required to compute all the messages sent out from j.
+
+4.3
+
+Initialization and termination.
+
+The equations in Tables 1-3 collectively deﬁne update rules for our
+j→i = 1 for all (i, j) ∈ E ′,
+algorithm. To initialize the system we set X 0
+by which we mean we set each element of X 0
+j→i to 1.
+
+Given some a priori bound T on the number of iterations, we then
+compute X t from X t−1 for t ∈ [T ] according to the update rules in
+Tables 1-3. If the messages reach a ﬁxed point with X t = X t+1 for
+some t < T we halt the algorithm.
+
+16
+
+4.4 Validity of the A-H Form.
+
+Identities relating original form messages bj→i(di, pi, ci) to A-H form
+messages for various choices of di, pi, and ci are given in Tables 4-6. It
+can be checked that for any choice of (di, pi, ci) that does not appear
+in a table we have bj→i(di, pi, ci) = ∞ by (18) because no choice of
+(dj, pj, cj) can satisfy hij (di, pi, ci, dj, pj, cj) = 1. The validity of these
+identities given the deﬁnitions of the A-H form variables is proved in
+Lemma 1 below.
+
+To use the original form (14) to ﬁnd solutions to (12) we need to
+compute the max-marginals (15) for diﬀerent values of (di, pi, ci) from
+the messages bk→j(dj , pj, cj). Speciﬁcally, we need to ﬁnd the choices
+of (di, pi, ci) that maximize ¯pi(di, pi, ci). Thus to show that we can
+iterate the A-H form to ﬁnd the same approximate solutions we would
+ﬁnd by iterating the original form (14) we prove that the max-marginal
+can be computed from the A-H form. In particular, we deﬁne
+
+Deﬁnition 1. For node i ∈ [n], let ρi be any real function of A-
+H variables {Xj→i}j∈∂i deﬁned by substituting for bk→j(dj , pj, cj) in
+(15) according to the identities represented by Tables 4-6.
+
+We prove the following:
+
+Theorem 2. For all (j, i) ∈ E ′, let the original form be initialized with
+b0
+j→i(di, pi, ci) = 1 for all (di, pi, ci) and let the A-H form be initialized
+with X 0
+j→i = 1. Then for each i ∈ [n], di ∈ [K] ∪ {∗}, pi ∈ ∂i ∪ {∗, •},
+ci ∈ ∂V i ∪ {∗, •} and for 0 < t ≤ T ,
+
+¯pi(di, pi, ci) = ρi(cid:0){X t
+
+j→i}j∈∂i(cid:1)
+
+when both sides are computed with appropriate messages bt
+X t
+
+j→i updated t times according to (14) and Tables 1-3, respectively.
+
+j→i and
+
+We will use two lemmas to prove this theorem:
+
+Lemma 1. The identities described in Tables 4-6 hold.
+
+Proof. Fix i, j ∈ V .
+
+We focus on two representative messages, namely Ad
+
+j→i for 3 ≤
+d ≤ K − 1 and Hj→i.
+In the ﬁrst example we will prove the ﬁfth
+identity of Table 4 and in the second will prove the sixth. The other
+identities described in Table 4 and all identities described in Tables 5-6
+are proved similarly so we omit the details.
+
+We will ﬁrst show that the ﬁfth identity of Table 4 holds. Namely,
+
+for 3 ≤ d ≤ K − 1 and p ∈ ∂V i \ j we will show
+
+bj→i(d, p, j) = Ad+1
+j→i.
+
+(30)
+
+17
+
+di
+∗
+2
+2
+
+3 ≤ d ≤ K − 1
+3 ≤ d ≤ K − 1
+3 ≤ d ≤ K − 1
+
+K
+K
+
+pi
+∗
+
+p ∈ ∂U i
+p ∈ ∂U i
+
+j
+
+p ∈ ∂V i \ j
+p ∈ ∂V i \ j
+
+j
+
+p ∈ ∂V i \ j
+
+ci
+∗
+j
+
+c ∈(cid:0)∂V i \ j(cid:1) ∪ {•}
+c ∈(cid:0)∂V i \ j(cid:1) ∪ {•}
+c ∈(cid:0)∂V i \ j(cid:1) ∪ {•}
+
+j
+
+•
+•
+
+bj→i(di, pi, ci)
+
+Hj→i
+A3
+j→i
+Hj→i
+Bd−1
+j→i
+Ad+1
+j→i
+Hj→i
+BK−1
+j→i
+Hj→i
+
+Table 4: Classes of bj→i messages for i, j ∈ V .
+
+du
+∗
+1
+1
+
+pu
+∗
+•
+•
+
+bj→u(du, pu, cu)
+
+Hj→u
+Aj→u
+Hj→u
+
+cu
+∗
+j
+
+c ∈(cid:0)∂V u \ j(cid:1)
+
+Table 5: Classes of bj→u messages for j ∈ V , u ∈ U .
+
+di
+∗
+2
+2
+
+3 ≤ d ≤ K − 1
+
+K
+
+pi
+∗
+u
+
+p ∈ ∂U i \ u
+
+p ∈ ∂V i
+p ∈ ∂V i
+
+ci
+∗
+
+c ∈ ∂V i ∪ {•}
+
+c ∈(cid:0)∂V i(cid:1) ∪ {•}
+c ∈(cid:0)∂V i \ j(cid:1) ∪ {•}
+
+•
+
+bu→i(di, pi, ci)
+
+Hj→i
+Bu→i
+Hu→i
+Hu→i
+Hu→i
+
+Table 6: Classes of bu→i messages for u ∈ U , i ∈ V .
+
+18
+
+Plugging di = d, pi = p, and ci = j into (18) gives us
+
+bj→i(d, p, j) =
+
+min
+
+dj ,pj ,cj s.t.
+
+hij (d,p,j,dj ,pj ,cj)=1
+
+ψj→i(dj, pj, cj)
+
+(31)
+
+Suppose (i, j) 6∈ E. Then hij (d, p, j, dj, pj, cj) = 0 for any choice of
+j→i = ∞, so
+
+dj, pj, cj and thus bj→i(d, p, j) = ∞. By (20) we have Ad+1
+bj→i(d, p, c) = Ad+1
+
+j→i, as desired.
+
+Now suppose (i, j) ∈ E. We now use hij (d, p, j, dj, pj, cj) = 1 to
+infer information about dj, pj, cj. From (6) we must have dj = d + 1,
+pj = i, and cj 6= i. Then (4) further implies cj 6= ∗. Substituting these
+facts into (31) shows
+
+bj→i(d, p, j) = min
+cj 6=∗,i
+
+ψj→i(d + 1, i, cj).
+
+Observe that because δi→j = 0 the right hand is the deﬁnition of Ad+1
+j→i
+as given in (20), so we conclude
+
+bj→i(d, p, j) = Ad+1
+j→i,
+
+as desired.
+
+Now we will show the sixth identity of Table 4 holds. Namely, for
+
+3 ≤ d ≤ K − 1, p ∈ ∂V i \ j, and c ∈ (∂V i \ j) ∪ {•}, we will show
+
+bj→i(d, p, c) = Hj→i.
+
+Plugging di = d, pi = p, and ci = c into (18) gives us
+
+bj→i(d, p, c) =
+
+min
+
+dj ,pj ,cj s.t.
+
+hij (d,p,c,dj,pj ,cj)=1
+
+ψj→i(dj, pj, cj).
+
+We now want to break the minimization into cases based on how we
+satisfy hij(d, p, c, dj, pj, cj) = 1. First observe that p 6= j and c 6= j
+implies we must be in case (7), which implies pj 6= i and cj 6= i. Then
+there are two possible cases for how to satisfy fj(dj , pj, cj) = 1.
+
+First we can choose (2) and let dj = pj = cj = ∗. Otherwise we
+are in (4) so we have dj = d′ for some 2 ≤ d ≤ K, pj 6∈ {∗, •} and
+cj 6∈ {∗, pj}. Combining these cases implies
+
+bj→i(d, p, c) = min
+
+
+ψj→i(∗, ∗, ∗), min
+
+2≤d′≤K
+
+min
+
+pj 6=∗,i,•
+cj6=∗,i
+pj 6=cj
+
+ψj→i(d′, pj, cj)
+
+
+.
+
+Observe that the right hand side contains the deﬁnitions of Gj→i from
+(23) and F d′
+
+j→i from (22), so we have
+
+bj→i(d, p, c) = min(cid:26)Gj→i, min
+
+2≤d′≤K
+
+F d′
+
+j→i(cid:27) = Hj→i,
+
+(32)
+
+19
+
+as desired, where the last step is applying the deﬁnition of Hj→i from
+(24).
+
+Lemma 2. The relations in Tables 1-3 for updating A-H form mes-
+sages are valid.
+
+Proof. We will show how to derive one representative update equation,
+namely
+
+Ad
+
+j→i = δi→j + Xk∈∂j\i
+
+Hk→j +min(cid:26)0, min
+
+k∈∂V j\i(cid:16)Ad+1
+
+k→j − Hk→j(cid:17)(cid:27) , (33)
+
+for 3 ≤ d ≤ K −1, which is the ﬁrst equation of Table 1. The remainder
+of Table 1 is derived via similar methods, as are the relations in Tables
+2 and 3.
+
+Recall (21):
+
+Ad
+
+j→i = δi→j + min
+
+cj6=∗,i Xk∈∂j\i
+
+bk→j(d, i, cj).
+
+We can split this minimization into two cases, namely cj = • and
+cj ∈ ∂j \ i, which allows us to write
+
+Ad
+
+j→i = δi→j + min
+
+
+Xk∈∂j\i
+k∈∂j\i
+
+min
+
+bk→j (d, i, •),
+
+bk→j(d, i, k) + Xl∈∂j\{i,k}
+
+
+bl→j(d, i, k)
+
+
+
+We now replace each instance of bk→j with the appropriate value
+according to the identities in Tables 4 and 6. First note that for
+k ∈ ∂U j \ i we have bk→j (d, i, k) = ∞ because d ≥ 3 and k ∈ U
+implies hjk(d, i, k, dk, pk, ck) = 0 since gjk(d, i, k, dk, pk, ck) = 1 if and
+only if dk = d + 1 and if dk = d + 1 > 1 then fk(dk, pk, ck) = 0. Thus
+minimizing over k ∈ ∂j \ i is equivalent to minimizing over k ∈ ∂V j \ i
+so we can write
+
+Ad
+
+j→i = δi→j + min
+
+
+bk→j(d, i, •),
+
+Xk∈∂j\i
+k∈∂V j\i
+
+min
+
+bk→j (d, i, k) + Xl∈∂j\{i,k}
+
+bl→j(d, i, k)
+
+
+.
+
+
+
+
+We now replace these particular messages via bk→j (d, i, k) = Ad+1
+k→j
+from (30) (which is the ﬁfth line of Table 4) and bl→j(d, i, k) = Hl→j
+
+20
+
+and bk→j(d, i, •) = Hk→j from (32) (which is the sixth line of Table
+4), so we have
+
+Ad
+
+Hk→j , min
+
+j→i = δi→j + min
+k∈∂j\i
+Xk∈∂j\i
+
+Hk→j + min(cid:26)0, min
+= δi→j + Xk∈∂j\i
+
+Hl→j
+k→j + Xl∈∂j\{i,k}
+Ad+1
+
+k→j − Hk→j(cid:17)(cid:27) ,
+k∈∂j\i(cid:16)Ad+1
+
+
+
+
+where the second line simply extracts the sum from the minimization.
+This equation now matches (33).
+
+We are now prepared to prove Theorem 2.
+
+Proof of Theorem 2. Tables 4-6 directly provide the functions ρi re-
+quired to compute max-marginals. This substitution is valid after any
+number of iterations because it is valid from the original deﬁnitions
+of the A-H form variables by Lemma 1 and Lemma 2 proves the A-H
+variables are iterated by rules that follow directly from the iteration
+rules for the original form variables.
+
+5 Constructing solutions.
+
+Because we have no guarantee that messages will converge, or that
+if they converge they will converge to an optimal solution, we elect
+to compute a feasible solution at every iteration of the algorithm and
+return the best solution found over all iterations. In particular we run
+our algorithm for a ﬁxed number of iterations unless we converge to a
+ﬁxed point before this limit. Finding all these solutions comes at an
+additional computational cost, but it gives consistently better solutions
+than simply using the result at the end of the iterations.
+
+To initialize our solution construction algorithm, let A = V be
+the set of non-root nodes which we have not yet assigned to a path.
+Nodes will be removed from this set as we determine their role in
+our constructed solution. For each node u ∈ U , we will construct a
+(possibly empty) path Pu, and our full solution will be the collection
+of these paths. The ﬁrst step is to compute the max-marginals for
+the possible choices at node u, which are either “do not participate in
+a path” (in which case Pu = ∅) or “start a path by choosing a child
+from among available neighbors of u”. We want to maximize the max-
+marginal among these choices. Since our variables are in Min-Sum
+form we actually compute the negative log of the max-marginals and
+choose the minimizing conﬁguration. To choose a conﬁguration at the
+
+21
+
+node u, we use the functions ρi from Deﬁnition 1 to compute
+
+− log ¯pu(∗, ∗, ∗) = Xk∈∂u
+− log ¯pu(1, •, j) = Xk∈∂u
+
+Hk→u + β
+
+(34)
+
+Hk→u + Aj→u − Hj→u,
+
+j ∈ ∂V u ∩ A. (35)
+
+and ﬁnd the minimum value. If the minimum is (34), we let Pu = ∅
+and proceed to the next root node. If the minimum is (35) for some
+neighbor j, we initialize our new path as Pu = {u, j} and remove j
+from the set of available nodes by setting A = A \ {j}. Note that (35)
+considers only neighbors which are also elements of A insuring that
+Pu does not include any nodes used in a previous path. Further note
+that we must have (u, j) ∈ E so this is a valid start to a path because
+j ∈ ∂V u and E contains no edges in V × U . We next proceed to the
+node j to determine whether Pu should be extended or added to the
+solution as is.
+
+This process is essentially the same as that for u, involving choosing
+the optimal value of the max-marginal at j, but we are now constrained
+to conﬁgurations with parent u. This means that we are choosing
+whether to end the path at j or continue to one of j’s neighbors in V ,
+so we compute
+
+− log ¯pj(2, u, •) = Xk∈∂j
+− log ¯pj(2, u, i) = Xk∈∂j
+
+Hk→j + Bu→j − Hu→j
+
+(36)
+
+Hk→j + Bu→j − Hu→j + A3
+
+i→j − Hi→j ,
+
+i ∈ ∂V j ∩ A
+
+(37)
+
+and choose the minimum. If the minimum is (36) the path is termi-
+nated so we add Pu to our solution as is and proceed to the next root
+node. Otherwise the minimum is achieved by a particular choice i,
+so we set Pu = {u, j, i}, remove i from the set of available nodes by
+setting A = A \ {i}, and proceed to determine whether Pu should be
+extended or added to the solution as is. Note again that i ∈ A guaran-
+tees we have not previously selected i to participate in any other path.
+To conﬁrm that (j, i) ∈ E, note that the ﬁrst line of Table 1 implies
+A3
+i→j = ∞ if (j, i) 6∈ E, in which case (37) is inﬁnite for that choice
+of i. Such an i cannot be the chosen minimum value because (36) is
+always ﬁnite as can be seen from the last two lines of Table 1 and the
+ﬁrst line of Table 6. Thus if we choose i to continue the path we must
+have (j, i) ∈ E which guarantees this is a valid choice.
+
+After the ﬁrst two nodes of a path the process becomes more
+generic, so let us suppose we have some Pu such that |Pu| = d ≥ 3
+and the last two nodes of the path Pu are are p and j. We still need
+
+22
+
+to determine whether to extend the path Pu or add it to the solution
+as is. If d = K then we know that we cannot extend the path, so we
+add it to the solution and move on to the next root node. Otherwise,
+we compute
+
+− log ¯pj(d, p, •) = Xk∈∂j
+− log ¯pj(d, p, i) = Xk∈∂j
+
+Hk→j + Bd−1
+
+p→j − Hp→j
+
+Hk→j + Bd−1
+
+p→j − Hp→j + Ad+1
+
+i→j − Hi→j ,
+
+(38)
+
+i ∈ ∂V j ∩ A
+
+(39)
+
+and choose the minimum. If the minimum is (38) we leave Pu as is, add
+it to the solution and move on to the next root node. If the minimum
+is (39) for some i, then we append i to the end of Pu and remove
+i from A. We now have a path of length d + 1 and can repeat the
+above procedure until we terminate the path. As above, we restrict
+our attention to nodes in A to insure no node is assigned to multiple
+paths. Furthermore, for i ∈ ∂V j ∩ A if (j, i) 6∈ E then Ad+1
+i→j = ∞ but
+(38) is always ﬁnite because Hk→j is ﬁnite for any pair of nodes k and
+j and Bd−1
+p→j is ﬁnite because we are guaranteed to have (p, j) ∈ E by
+the fact that these are the last two nodes of the partially constructed
+path Pu. Thus if we choose to continue the path we do so along an
+edge with the correct direction to a node that is not participating in
+another already constructed path, and so the end result of this process
+is a feasible collection of node-disjoint directed paths.
+
+Notice, however, that the result depends on the order in which
+we process roots, so in practice we often repeat the procedure several
+times with diﬀerent orders and choose the best solution among those
+we ﬁnd.
+
+6 Alternative algorithms.
+
+Our numerical results in section 7 below will compare our eﬃcient
+BP algorithm to three alternatives: a Greedy algorithm, an IP based
+algorithm for KEP from [2], and a novel IP based algorithm. We now
+describe these algorithms.
+
+We propose the Greedy algorithm as a simple to implement ap-
+proximation algorithm with good scaling behavior. It is greedy in the
+sense of adding paths to the solution one at a time and adding the
+longest possible path at each step, but when adding a path the search
+for the longest path is exhaustive. Given an arbitrary ordering of root
+notes, the Greedy algorithm proceeds as follows. Let A = V be the
+set of non-root nodes that have not yet been added to a path. From
+a root node u ∈ U , all possible directed paths with length at most K
+
+23
+
+consisting of u and a collection of nodes in A are explored and the
+longest such path is chosen, with ties being broken arbitrarily. The
+longest possible path is found by recursively looking for the longest
+path from each neighbor, keeping track of the depth bound to insure
+a path longer than K is not chosen. The chosen path is then added
+to the solution and its nodes are removed from A. If the path consists
+only of the node u it is discarded. The algorithm now proceeds to the
+next root node in the given order.
+
+This algorithm is guaranteed to generate a feasible collection of
+directed paths, but the size of that collection is highly dependent on
+the order in which we consider root nodes, so we repeat the process
+for a large number of diﬀerent orderings of the root nodes, choosing
+the best solution. For the numerical results to follow we often used
+about 200 randomly generated orders. In most cases, the number of
+orderings is chosen so the running time of the Greedy algorithm is
+roughly equal to the message passing algorithm (which also includes a
+similar randomization step, as noted in section 5).
+
+The KEP algorithm from [2] is based on a Traveling Salesman IP
+formulation approach to the kidney exchange problem and can ﬁnd
+bounded length cycles as well as paths, which may be bounded or
+unbounded in length. For our comparisons we enforce our path length
+bound K and disallow all cycles.
+
+Finally we have implemented a simple IP formulation of the prob-
+lem based on the same description we used in the development of
+the message passing algorithm. We call this the Parent-Child-Depth
+(PCD) formulation. We let
+
+and
+
+∂+i
+
+△
+= {j ∈ ∂i : (i, j) ∈ E}
+
+∂−i
+
+△
+= {j ∈ ∂i : (j, i) ∈ E}.
+
+24
+
+The formulation is as follows:
+
+maximize Xi∈[n]
+
+s.t. xi = Xj∈∂−i
+Xj∈∂+i
+
+cij ≤ xi
+
+cij
+
+p•i ≤ Xj∈∂+i
+di = d•i + Xj∈∂−i
+
+0 ≤ di ≤ K
+d•i = p•i
+p•i = 0
+pji = cji
+dji = pji(dj + 1)
+
+pji + cij ≤ 1
+
+xi, p•i ∈ {0, 1},
+pji ∈ {0, 1},
+
+di, d•i ∈ Z
+dji ∈ Z
+
+cij ∈ {0, 1}
+
+xi
+
+(40)
+
+pji + p•i
+
+∀i ∈ [n]
+
+(41)
+
+∀i ∈ [n]
+
+(42)
+
+∀i ∈ [n]
+
+(43)
+
+dji
+
+∀i ∈ [n]
+
+(44)
+
+∀i ∈ [n]
+∀i ∈ [n]
+∀i ∈ V
+∀(j, i) ∈ E
+∀(j, i) ∈ E
+∀i ∈ [n], j ∈ ∂−i ∩ ∂+i
+∀i ∈ [n]
+∀i ∈ [n], j ∈ ∂−i
+∀i ∈ [n], j ∈ ∂+i
+
+(45)
+
+(46)
+(47)
+
+(48)
+(49)
+
+(50)
+(51)
+
+(52)
+
+(53)
+
+Proposition 2. There is a bijection between feasible solutions to the
+IP problem (40)-(53) and the set M deﬁned in (9) and an optimal
+solution to the IP problem maximizes the objective function H(d, p, c)
+deﬁned in (11).
+
+Remark. This proposition states that the IP problem (40)-(53) is in
+fact the same problem we deal with elsewhere in this paper. Before
+providing a formal proof, we provide some intuition for the formulation.
+The variable xi acts as an indicator for whether the node i participates
+in a path, with the various pji and p•i indicators representing each
+possible choice of parent for node i (including the possibility of starting
+a path). Similarly the cij variables represent the possible choices of
+child for the node i. The integer variable di represents the depth of i
+in the path. This depth variable is decomposed into variables dji and
+d•i which will be equal to di if the parent of i is j or i starts a path,
+respectively, and zero otherwise. Thus at most one of d•i and the dji
+will be nonzero, representing the actual choice of parent implied by the
+values of p•i and the pji. The various constraints serve to guarantee
+that this interpretation of these variables is accurate and all feasibility
+constraints for the feasible set M .
+
+25
+
+More speciﬁcally, constraint (41) insures that a node participates if
+and only if it has a parent or starts a path. The remaining constraints
+insure that each node has at most one parent and one child, and that
+all variables agree locally with each other. Note (43), which requires
+a root to have a child (so each path contains at least one edge). The
+depth bound is enforced by requiring di ≤ K and insuring that di
+accurately represents the depth of i. Note in particular (49), which
+insures that depth increases from parent to child. This constraint is
+quadratic.
+
+Proof of Proposition 2. Given (d′, p′, c′) ∈ M , we can construct IP
+variables (x, d, p, c) node-by-node. For each i ∈ [n] there are three
+possible cases, represented by (2)-(4) because fi(d′
+i) = 1 is guar-
+anteed by (d′, p′, c′) ∈ M :
+
+i, p′
+
+i, c′
+
+• If d′
+
+i = p′
+
+i = c′
+
+i = ∗, then the node i does not participate in a path,
+so we let xi = p•i = di• = 0, for j ∈ ∂−i we let pji = dji = 0,
+and for j ∈ ∂+i we let cij = 0.
+
+• If p′
+
+i = •, then the node i starts a path, so we let xi = p•i = 1,
+di = d•i = 1, and for each j ∈ ∂−i we let pij = dij = 0. By (3)
+we know i has a child c′
+= 1 and for
+j ∈ ∂+i \ c′
+i = 1,
+so we have di = d′
+i.
+
+i we let cij = 0. Note that we must also have d′
+
+i ∈ ∂+i, so we can let cic′
+
+i
+
+• If p′
+
+i 6∈ {∗, •} then the node i has a parent p′
+
+ii = 1 and let p•i = 0 and for j ∈ ∂−i \ p′
+ii = d′
+
+xi = pp′
+(4) we have 2 ≤ d′
+and for j ∈ ∂−i \ p′
+j ∈ ∂+i because i has no child. Otherwise we let cic′
+all j ∈ ∂+i \ c′
+
+i ≤ K, so we let di = dp′
+
+i let dji = 0. If c′
+
+i ∈ ∂−i, so we let
+i let pji = 0. By
+i and let d•i = 0
+i = • we let cij = 0 for all
+= 1 and for
+
+i let cij = 0.
+
+i
+
+With variables constructed in this way it is straightforward to check
+that all of the constraints are satisﬁed, so we omit the details.
+
+Now suppose we have a feasible set of IP variables (x, d, p, c). We
+will construct (d′, p′, c′) as described in Section 2 and show that it is
+an element of the set M . We proceed node-by-node. For i ∈ [n]:
+
+• If xi = 0, let d′
+• If xi = 1 and p•i = 1, let d′
+
+i = p′
+
+i = c′
+
+i = ∗.
+
+i = 1, p′
+
+i = •. By (43) there is some
+
+j ∈ ∂+i such that cij = 1. Let c′
+
+i = j.
+
+• If xi = 1 and p•i = 0, by (41) there exists some j ∈ ∂−i such that
+pji = 1. Let p′
+i = di. If cik = 0 for all k ∈ ∂+i, let
+c′
+i = •. Otherwise (42) implies there is exactly one k ∈ ∂+i such
+that cik = 1, so we let c′
+
+i = j, and let d′
+
+i = k.
+We will now show (d′, p′, c′) ∈ M .
+
+For i ∈ [n] the three cases above correspond exactly to the cases
+i) = 1. Note in particular that (47)
+
+(2)-(4) to guarantee fi(d′
+
+i, p′
+
+i, c′
+
+26
+
+guarantees i ∈ U for any i with p′
+i ∈ V because p′
+assumption ∂−i = ∅ for i ∈ U .
+
+i 6∈ {∗, •} then we have
+i = j if and only if pji = 1 for some j ∈ ∂−i but by
+
+i = •. If p′
+
+For i ∈ [n], j ∈ ∂i, we have three cases. If p′
+
+pji = 1 and j ∈ ∂−i, so (48) implies cji = 1 and thus c′
+j 6= i and c′
+guarantees p′
+guarantees d′
+i = d′
+(48) guarantees c′
+cases (5)-(7), so gij(d′
+
+i = j then we know
+j = 1. (50)
+i 6= j. j ∈ ∂−i guarantees (j, i) ∈ E and (49)
+j 6= i
+j 6= i. Thus we are always in one of the
+j, p′
+
+j + 1. The case p′
+i 6= j and c′
+i, d′
+
+j = i is similar. If p′
+
+i 6= j and p′
+
+i, p′
+
+i, c′
+
+j, c′
+
+j) = 1.
+
+Thus we conclude (d′, p′, c′) ∈ M , so we have established a bijection
+
+between the feasible set of the IP and the set M .
+
+xi = 1 if and only if p′
+
+To see that the optimization is the same, we need only note that
+i, d′
+i)
+i) =
+H(d, p, c). In other words, both are simply measuring the number of
+nodes that participate in a path.
+
+for all i ∈ [n] and so by (11) we have Pi∈[n] xi =Pi∈[n] η(d′
+
+i 6= ∗. Thus by (10) we have xi = ηi(p′
+i, p′
+
+i, c′
+i, c′
+
+Note that this formulation is polynomial in n, both in the number
+of variables and in the number of constraints, and is therefore simple
+to implement. As we will see below, for a number of instances, with
+n = 1000 and K = 15, PCD produces optimal solutions in more than
+50% of tested graphs (see Table 9), while KEP does not ﬁnd optimal
+solutions in the same allowed time.
+
+7 Numerical results.
+
+We compare the performance of our algorithm, which we call BP, to the
+three alternative algorithms described in section 6. Note that the two
+IP-based algorithms (KEP and PCD) allow us to solve the problem to
+optimality given suﬃcient time, whereas the Greedy and BP algorithms
+have no optimality guarantees.
+
+When running the BP algorithm we use the value β = 0.01 for
+the parameter deﬁned in (13). Informal testing of diﬀerent values of
+β indicated that this value had, in some cases, a small advantage of
+about 1% in the size of solutions over larger β values while smaller β
+values resulted in signiﬁcantly worse solutions. When this advantage
+was not present the value of β had no noticeable eﬀect on the solution
+size.
+
+For all cases except the three largest real networks we use 200 orders
+of root nodes for the Greedy algorithm and 5 orders of root nodes for
+each iteration of BP. For the largest graphs these are decreased to
+50 and 2, respectively. In all instances BP is run for a maximum of
+T = 50 iterations, terminating earlier only if it has converged to a
+ﬁxed point or exceeded a preset time limit. In most cases BP did not
+
+27
+
+Nodes in solution
+
+Root% c KEP Greedy
+364.4
+446.4
+480.4
+554.6
+685.9
+763.1
+600.3
+726.6
+801.3
+
+384.9
+460.8
+426.4
+641.6
+813.6
+721.8
+700.7
+893.7
+818.7
+
+10
+10
+10
+20
+20
+20
+25
+25
+25
+
+2
+3
+4
+2
+3
+4
+2
+3
+4
+
+BP
+376.6
+457.8
+469.2
+603.4
+746.3
+769.0
+654.5
+787.0
+834.9
+
+Running Time (s)
+KEP Greedy BP
+2.2
+3.0
+16.2
+4.5
+4.0
+63.5
+2.6
+3.3
+3.8
+63.5
+63.3
+2.1
+2.4
+2.9
+3.9
+56.4
+63.9
+2.5
+
+0.6
+0.9
+0.9
+0.9
+1.3
+1.8
+1.0
+1.7
+2.3
+
+Table 7: Random graphs on n = 1000 nodes with maximum path
+length K = 5 and edge probability c/n.
+100 samples were run
+for each row, with β = 0.01 for BP. Dark shaded KEP results
+are
+sam-
+ples. BP results are labeled by ﬁnding more nodes than Greedy and
+
+cases where KEP was
+
+99% of
+
+optimal
+
+in at
+
+least
+
+ﬁnding the most nodes of any method .
+
+consistently converge, though it did converge somewhat more often for
+smaller graphs with n = 1000 and for longer allowed paths with K =
+15. We have not seen a signiﬁcant correlation between instances where
+BP converges and those where it ﬁnds signiﬁcantly better solutions,
+but convergence does improve running time simply by allowing the
+algorithm to terminate earlier.
+
+7.1 Random graph comparisons.
+
+We report our results on random graphs constructed as follows. We
+let each ordered pair of nodes in V × V and U × V have an edge
+independently with probability p. We set p = c/n and vary c. Thus
+for every pair (i, j) ∈ U ∪ V × V the directed edge (i, j) is present with
+probability c/n and absent with probability 1 − c/n.
+
+Table 1 shows results for some varieties of random graphs. The col-
+umn “Root%” indicates the percentage of nodes which are in the set
+U , namely |U |/n. The column “c” indicates the value of the parameter
+c for the graphs tested. The remaining columns summarize the results
+of testing the algorithms on 100 random graphs, ﬁrst showing the av-
+erage number of nodes in the returned solution and then showing the
+average running time in seconds. For the IP based algorithms a time
+limit of 60 seconds was implemented by the IP solver and if the opti-
+mal solution was not found within that time the best feasible solution
+
+28
+
+identiﬁed by the solver was used. While in many cases KEP returned
+a nontrivial feasible solution, if PCD did not ﬁnd the optimal solution
+it almost always returned the trivial feasible solution zero. For the
+cases represented in Table 7 PCD never returned a nontrivial feasible
+solution so we omit PCD from the table. It does, however, appear in
+other cases below and performs well in some ranges outside those that
+appear in tables, as will be discussed later.
+
+Testing over a wide range of parameter values we ﬁnd that in many
+instances one or both of the IP algorithms runs to termination in time
+comparable to BP or Greedy.
+In these cases Greedy and BP both
+generally return suboptimal solutions, with both algorithms having
+ranges of parameters where they enjoy a small advantage over the
+other. This advantage ranges from Greedy ﬁnding about 5% more
+nodes than BP to BP ﬁnding around 10% more nodes than Greedy.
+Table 7 shows results for random graphs with 1000 nodes and a variety
+of percentages of root nodes. The algorithms were run with path length
+bound K = 5 and edge probability c/n for c = 2, 3, 4. For c = 2 KEP
+is optimal in every sample and has a running time comparable to BP.
+BP ﬁnds feasible solutions with 93%-98% of the nodes of the optimal
+solution, whereas the Greedy solutions have 85%-95%. As we increase
+c, KEP ﬁnds fewer optimal solutions, though it is still optimal in all
+but 1 of our 100 samples when 10% of the nodes of the graph are roots
+for c = 3. In most cases BP ﬁnds more nodes than Greedy does while
+falling short of even the suboptimal KEP solutions, but for c = 4 with
+20% and 25% root nodes, BP performs the best among the compared
+algorithms, ﬁnding the most nodes in time comparable to Greedy and
+signiﬁcantly shorter than KEP.
+
+While we do not show full results here, we can provide some sense
+of the behavior of the algorithms for graphs just outside the regimes
+in Table 7.
+If the root percentage is decreased below 10% KEP is
+generally optimal and both BP and Greedy often ﬁnd this optimal
+solution, likely because the scarcity of roots leads to less interaction
+between paths in feasible solutions. If the root percentage is increased
+above 25% BP still ﬁnds more nodes than Greedy but signiﬁcantly
+fewer than KEP, which generally ﬁnds optimal solutions. Though PCD
+did not ﬁnd nontrivial solutions for the cases in Table 7, it is often
+optimal for these cases with many roots. If the root percentage is kept
+in the 10%-25% range but c is decreased to 1, both KEP and PCD are
+always optimal, with Greedy missing a small percentage of nodes and
+BP slightly behind Greedy. If c is increased above 4, both Greedy and
+BP ﬁnd signiﬁcantly (10%-20%) more nodes than KEP, which is never
+optimal, and Greedy usually has a small (1%-3%) advantage over BP.
+In this regime PCD ﬁnds no nontrivial solutions.
+
+Table 8 shows tests over some of the same parameters as Table 7
+on larger graphs, with 10,000 nodes. For these larger graphs the time
+
+29
+
+Nodes in solution
+
+Running Time (s)
+
+c
+2
+3
+4
+
+KEP
+6426.0
+6792.8
+7199.9
+
+Greedy
+5371.5
+6640.2
+7413.1
+
+BP
+
+5973.7
+7332.5
+7492.0
+
+KEP Greedy BP
+42.6
+150.3
+1229.4
+65.8
+48.6
+1250.4
+
+39.3
+60.0
+87.3
+
+Table 8: Random graphs on n = 10000 nodes with 20% root nodes, maxi-
+mum path length K = 5, and edge probability c/n. 100 samples were run
+for each row, with β = 0.01 for BP. Dark shaded KEP results were optimal
+in all samples. BP results are labeled by ﬁnding more nodes than Greedy
+
+and ﬁnding the most nodes of any method .
+
+limit for KEP and PCD is increased to 20 minutes, and again PCD
+is omitted because it never ﬁnds nontrivial solutions within the time
+limit. Most general trends remain the same, with KEP always ﬁnding
+optimal solutions within the time limit for c = 2 but BP performing
+better for c = 3 and c = 4. Speciﬁcally, BP now has an advantage over
+KEP for c = 3. Another factor to note is that BP has a signiﬁcant
+advantage over Greedy in running time in the c = 4 case, which we
+can credit to the fact that BP converged in all samples for that case,
+running an average of 19 iterations as compared to 50 for the other
+cases.
+
+In Table 9 we provide summary results for problems with longer
+allowed paths; that is with K = 10 and K = 15. Here KEP is almost
+never optimal, though it does often provide a feasible solution with
+more nodes than BP or Greedy, albeit at the cost of running to the
+cutoﬀ time rather than terminating in a few seconds.
+In all cases
+for this regime BP ﬁnds more solutions than Greedy while running in
+comparable time, and in two of these cases it also on average ﬁnds more
+nodes than any other tested algorithm. In some cases the solution size
+advantage over Greedy is signiﬁcant, with BP solutions more than 10%
+larger than Greedy solutions. Note that PCD performs rather well for
+K = 15, often ﬁnding the optimal solution, though the average size of
+the solution is reduced by the fact that PCD rarely returns a nontrivial
+feasible solution, generally either returning the optimal solution or an
+empty solution. PCD found the optimal solution in at least 50% of
+samples for all the K = 15 cases, while KEP only found any for c = 2,
+for which it was optimal in only 6% of cases. Thus there is an advantage
+to PCD over KEP for all K = 15 cases as it much more regularly ﬁnds
+the optimal solution. When it does ﬁnd the optimal solution it is also
+relatively fast, with an average runtime of 23 seconds for cases across
+all 4 values of c in which PCD found the optimal solution. BP and
+
+30
+
+K c KEP
+656.1
+10
+10
+784.3
+830.2
+10
+841.2
+10
+686.3
+15
+15
+868.0
+921.0
+15
+15
+938.0
+
+2
+3
+4
+5
+2
+3
+4
+5
+
+Nodes in solution
+PCD Greedy
+571.3
+418.3
+9.0
+715.9
+796.5
+0
+845.5
+0
+584.9
+728.6
+806.6
+855.0
+
+709.9
+779.7
+760.2
+693.8
+
+BP
+671.7
+758.2
+812.6
+852.6
+684.7
+789.7
+835.6
+869.6
+
+Running Time (s)
+
+KEP PCD Greedy BP
+3.7
+63.0
+67.8
+3.3
+2.6
+69.1
+2.7
+72.6
+3.6
+63.1
+68.4
+3.7
+3.0
+69.3
+72.2
+3.1
+
+59.9
+60.2
+60.2
+60.2
+10.0
+34.1
+40.1
+47.4
+
+1.4
+1.8
+2.3
+2.8
+1.3
+2.0
+2.7
+3.2
+
+Table 9: Random graphs on n = 1000 nodes with 15% root nodes, maximum
+path length K, and edge probability c/n. 100 samples were run for each
+row, with β = 0.01 for BP. Shaded PCD results were optimal in 96% of
+samples, and in the other K = 15 cases PCD was optimal in at least 50%
+of samples. BP results are labeled by ﬁnding more nodes than Greedy and
+
+ﬁnding the most nodes of any method .
+
+Greedy both remain signiﬁcantly faster, and BP does on average ﬁnd
+better solutions than either PCD or Greedy.
+
+For similar graphs just outside the regime presented in Table 9
+we have a couple situations. As in the case of a shorter path bound,
+decreasing c to 1 makes KEP and PCD optimal in all cases, with
+Greedy missing a small percentage of nodes and BP slightly behind
+Greedy. Increasing c above 5 leads to Greedy and BP having essentially
+identical performance, both generally better than KEP and PCD. PCD
+still ﬁnds optimal solutions in a reasonable percentage of K = 15 cases,
+however. If the path length bound is kept as long as 15 or increased up
+to 25, PCD performs very well over a wide variety of c values and root
+percentages from 15% to 30%, generally ﬁnding the optimal solution.
+In many of these cases KEP also ﬁnds an optimal solution but does
+not terminate and conﬁrm that the solution is optimal so PCD has a
+signiﬁcant advantage in running time in those cases. BP and Greedy
+are suboptimal in these high-K cases, both ﬁnding 80%-90% of the
+nodes in the optimal solution.
+
+7.2 Computational results for real world networks.
+
+We compared the performance of KEP, PCD, Greedy, and BP algo-
+rithms on several real world networks taken from the Stanford Large
+Network Dataset collection [7]. We chose directed graphs and ran-
+domly selected a subset of nodes to act as roots (discarding directed
+
+31
+
+edges pointing in to roots and discarding isolated nodes). We present
+performance comparisons for ﬁve networks, which are as follows:
+
+• Epinions: this network is drawn from the website Epinions.com
+and represents “trust” relationships between users, in which each
+user can indicate whether they trust the opinions of each other
+user. Thus an edge from i to j indicates that user i trusts user j.
+
+• Gnutella: a snapshot of the Gnutella peer-to-peer ﬁle sharing
+network, with nodes representing hosts and edges representing
+the connections between those hosts.
+
+• Slashdot: users of the technology news site Slashdot were allowed
+to tag other users as friends or foes; our network has users as
+nodes and tags as directed edges, drawn from a snapshot in 2008.
+
+• Wiki-vote: A record of votes on administration positions for
+Wikipedia, in which administrators vote on the promotion of
+other potential administrators. Nodes are wikipedia users and a
+directed edge from node i to node j represents that user i voted
+on user j.
+
+• Amazon: product co-purchasing on Amazon.com, based on the
+“customers who bought this item also bought feature”. A di-
+rected edge from product i to product j indicates that j appears
+on the page for i as a frequently co-purchased item. The data is
+a snapshot from March 2003.
+
+The results of our tests on the full graphs are summarized in Table
+10. The “Nodes” column indicates the size of the given graph, which
+is given as an average over the ﬁve tests because the selection of root
+nodes results in a diﬀerent number of nodes becoming isolated and
+being dropped in each test. The column “∆” is the average degree of
+the graph, which is also averaged across the choices of root nodes for
+each trial. Remaining columns show the number of nodes in the average
+solution and the running time in minutes for each algorithm. With the
+exception of the graph Gnutella, KEP in all cases crashed rather than
+running to the stopping time and so provided no solution, which we
+indicate by “-”. We believe these crashes resulted from KEP exceeding
+the available memory. They also caused the running times for KEP to
+be erratic, with the algorithm crashing before the time limit in most
+cases. The extreme running time for Amazon, the largest graph, can
+be explained by the external software we used failing to adhere to
+the requested time limits before crashing. In all cases PCD failed to
+return a nontrivial solution, so it is omitted from the table. For all
+graphs except Slashdot, BP enjoys an advantage in solution size over
+Greedy, ﬁnding 4%-15% more nodes while running only slightly longer
+on average. On Slashdot Greedy has an advantage in both solution
+size and running time. We also note that even on the graph Gnutella,
+
+32
+
+Graph
+
+Epinions
+Gnutella
+Slashdot
+Wiki-vote
+Amazon
+
+Graph
+
+Epinions
+Gnutella
+Slashdot
+Wiki-vote
+Amazon
+
+Nodes
+68507
+5518
+74893
+6439
+260982
+
+Nodes
+68507
+5518
+74893
+6439
+260982
+
+∆
+6.0
+3.0
+9.7
+12.9
+3.8
+
+∆
+6.0
+3.0
+9.7
+12.9
+3.8
+
+Nodes in solution
+
+KEP
+
+-
+
+1,889.6
+
+-
+-
+-
+
+Greedy
+21,219.4
+1,610.8
+36,770.8
+2,045.0
+174,035.8
+
+BP
+
+24,347.4
+1,708.2
+31,266.8
+2,173.0
+180,902.6
+
+Running Time (min)
+
+KEP
+56.5
+150.3
+58.9
+75.5
+
+1,042.8
+
+Greedy
+
+9.8
+0.2
+5.1
+0.8
+182.0
+
+BP
+17.9
+0.4
+20.5
+1.5
+259.9
+
+Table 10: Real world networks with 20% root nodes (randomly selected) and
+maximum path length K = 5. We use β = 0.01 for BP. ∆ is the average
+degree of the sampled graph. 5 samples were run for each graph, with −
+representing graphs for which KEP crashed without returning any solution.
+Shaded cells represent the best solutions, with lighter shading for the case
+when BP provides a better solution than Greedy.
+
+33
+
+the one case where KEP returned feasible solutions, BP has a huge
+advantage in running time for a solution with 90% of the nodes of that
+returned by KEP.
+
+References
+
+[1] F. Altarelli, A. Braunstein, L. Dall’Asta, C. De Bacco, and
+S. Franz. The edge-disjoint path problem on random graphs by
+message-passing. ArXiv e-prints, March 2015.
+
+[2] Ross Anderson, Itai Ashlagi, David Gamarnik, and Alvin E. Roth.
+Finding long chains in kidney exchange using the traveling sales-
+man problem. Proceedings of the National Academy of Sciences,
+112(3):663–668, 2015.
+
+[3] M. Bailly-Bechet, C. Borgs, A. Braunstein,
+
+J. Chayes,
+A. Dagkessamanskaia, J.-M. Franois, and R. Zecchina. Finding un-
+detected protein associations in cell signaling by belief propagation.
+Proceedings of the National Academy of Sciences, 108(2):882–887,
+2011.
+
+[4] M. Bayati, C. Borgs, A. Braunstein, J. Chayes, A. Ramezanpour,
+and R. Zecchina. Statistical mechanics of steiner trees. Phys. Rev.
+Lett., 101:037208, Jul 2008.
+
+[5] P. Eschenfeldt, D. Schmidt, S. Draper, and J. Yedidia. Proactive
+Message Passing on Memory Factor Networks. ArXiv e-prints, Jan-
+uary 2016. Submitted to Journal of Machine Learning Research.
+
+[6] D Koller and N Friedman. Probabilistic Graphical Models: Princi-
+
+ples and Techniques. MIT Press, 2009.
+
+[7] Jure Leskovec and Andrej Krevl. SNAP Datasets: Stanford large
+http://snap.stanford.edu/data,
+
+network dataset collection.
+June 2014.
+
+[8] Jonathan S. Yedidia, William T. Freeman, and Yair Weiss. Ex-
+ploring artiﬁcial intelligence in the new millennium. chapter Un-
+derstanding Belief Propagation and Its Generalizations, pages 239–
+269. Morgan Kaufmann Publishers Inc., San Francisco, CA, USA,
+2003.
+
+34
+
+

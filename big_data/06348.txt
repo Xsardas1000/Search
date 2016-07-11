@@ -1,0 +1,1396 @@
+Learning Dexterous Manipulation for a Soft Robotic Hand from
+
+Human Demonstrations
+
+Abhishek Gupta1
+
+Clemens Eppner2
+
+Sergey Levine1
+
+Pieter Abbeel1
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+1
+2
+
+ 
+ 
+]
+
+G
+L
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+8
+4
+3
+6
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Abstract— Dexterous multi-ﬁngered hands can accomplish
+ﬁne manipulation behaviors that are infeasible with simple
+robotic grippers. However, sophisticated multi-ﬁngered hands
+are often expensive and fragile. Low-cost soft hands offer
+an appealing alternative to more conventional devices, but
+present considerable challenges in sensing and actuation, mak-
+ing them difﬁcult to apply to more complex manipulation
+tasks. In this paper, we describe an approach to learning from
+demonstration that can be used to train soft robotic hands
+to perform dexterous manipulation tasks. Our method uses
+object-centric demonstrations, where a human demonstrates
+the desired motion of manipulated objects with their own
+hands, and the robot autonomously learns to imitate these
+demonstrations using reinforcement learning. We propose a
+novel algorithm that allows us to blend and select a subset
+of the most feasible demonstrations to learn to imitate on
+the hardware, which we use with an extension of the guided
+policy search framework to use multiple demonstrations to
+learn generalizable neural network policies. We demonstrate
+our approach on the RBO Hand 2, with learned motor skills
+for turning a valve, manipulating an abacus, and grasping.
+
+I. INTRODUCTION
+
+Dexterous multi-ﬁngered hands can accomplish ﬁne ma-
+nipulation behaviors that are infeasible with simple robotic
+grippers. However, control of multi-ﬁngered hands for such
+complex manipulation skills is exceedingly difﬁcult, due to
+the complex dynamics of the hand, the challenges of nonpre-
+hensile manipulation, and under-actuation. Furthermore, the
+mechanical design of multi-ﬁnger hands tends to be complex
+and delicate. Although a number of different hand designs
+have been proposed in the past [1], [2], [3], many of these
+hands are expensive and fragile.
+
+In this work, we address the problem of autonomously
+learning dexterous manipulation skills with an inexpensive
+and highly compliant multi-ﬁngered hand — the RBO
+Hand 2 [4]. This hand (see Fig. 1) is actuated by inﬂating air-
+ﬁlled chambers. Lack of sensing and precise actuation makes
+standard control methods difﬁcult to apply directly to devices
+like this. Instead, we use an approach based on learning from
+demonstrations (LfD) and reinforcement learning (RL).
+
+In LfD, the robot observes a human teacher solving a
+task and learns how to perform the demonstrated task and
+apply it to new situations. Demonstrations are typically given
+visually, by kinesthetic teaching, or through teleoperation.
+
+1Department of Electrical Engineering and Computer Sciences, Univer-
+sity of California at Berkeley, CA, USA. {abhigupta, svlevine,
+pabbeel}@berkeley.edu
+
+Universit¨at
+Berlin, Germany. The
+ﬁnancial
+support by the European Commission (SOMA, H2020-ICT-645599).
+clemens.eppner@tu-berlin.de
+
+Technische
+acknowledges
+
+Laboratory,
+gratefully
+
+author
+
+2Robotics
+
+and
+
+Biology
+
+Fig. 1. The RBO Hand 2 manipulating an abacus.
+
+However, these techniques are difﬁcult in case of the RBO
+Hand 2. A demonstrator cannot manually move all of the
+ﬁngers of the hand for kinesthetic teaching, and the hand
+lacks position sensing to store such demonstrations. Even
+direct teleoperation via intuitive interfaces, such as gloves
+or motion capture, is non-trivial, because although the RBO
+Hand 2 is anthropomorphic in design, its degrees of freedom
+do not match those of the human hand well enough to enable
+direct mapping of human hand motion.
+
+However, the goal of most dexterous manipulation is to
+manipulate the poses of objects in the world, and a task can
+often be fully deﬁned by demonstrating the motion of these
+objects. These kinds of “object-centric” demonstrations are
+intuitive and easy to provide, but because the robot does not
+directly control the degrees of freedom of moving objects in
+the world, they cannot be imitated directly. Instead, we use
+reinforcement learning to construct controllers that reproduce
+object-centric demonstrations.
+
+One crucial challenge that we must address to utilize
+object-centric demonstrations is to account for the mismatch
+between the morphology of the human expert and the robot.
+Since the robot cannot always reproduce all object-centric
+demonstrations, we propose a novel algorithm that automat-
+ically selects and blends those demonstrations that the robot
+can follow most closely, while ignoring irrelevant demonstra-
+tions that cannot be reproduced. This algorithm interleaves
+assignment of demonstrations to individual trajectory-centric
+controllers with reinforcement learning to optimize these
+controllers, such that they imitate their assigned demonstra-
+tions. We formulate the objective for trajectory-centric RL in
+terms of the Kullback-Leibler(KL) divergence between the
+
+trajectory distribution of each controller and the correspond-
+ing demonstrations.
+
+Our goal
+
+is to ﬁnd a uniﬁed control policy that can
+generalize to a variety of initial states. To achieve gener-
+alization, we train a single nonlinear neural network pol-
+icy to reproduce the behavior of multiple object-centric
+demonstrations. This approach follows the framework of
+guided policy search (GPS [5]), where multiple trajectory-
+centric controllers are uniﬁed into a single high-dimensional
+policy. However, unlike standard GPS, our approach requires
+only a set of object-centric demonstrations from a human
+expert to learn a new skill, rather than hand-speciﬁed cost
+functions. High dimensional neural network policies can
+represent highly complex behaviors, but are often extremely
+hard to train, and policy search in this space is an extremely
+challenging task.
+
+The contributions of this paper are:
+1) We propose a novel algorithm for learning from object-
+centric demonstrations. This algorithm enables com-
+plex dexterous manipulators to learn from multiple
+human demonstrations, selecting the most suitable
+demonstration to imitate for each initial state dur-
+ing training. The algorithm alternates between softly
+assigning demonstrations to individual controllers,
+and optimizing those controllers with an efﬁcient
+trajectory-centric reinforcement learning algorithm.
+
+2) We demonstrate that a single generalizable policy can
+be learned from this collection of trajectory-centric
+controllers by extending the guided policy search al-
+gorithm to learning from demonstrations.
+
+3) We evaluate our approach by learning a variety of
+dexterous manipulation skills with the RBO Hand 2,
+showing that our method can effectively acquire com-
+plex behaviors for soft robots with limited sensing and
+challenging actuation mechanisms.
+
+II. RELATED WORK
+
+We will relate our approach to work that
+
+tackles the
+problem of dexterous manipulation with multi-ﬁngered hands
+in general, work that uses the concept of reinforcement learn-
+ing, and ﬁnally to work that exploits human demonstrations.
+
+A. Dexterous Manipulation using Planning
+
+A variety of methods for generating manipulation behavior
+with multi-ﬁngered hands are based on planning. These
+approaches assume a detailed model of the hand and object
+to be available a priori. They generate open-loop trajectories
+that can be executed on real hardware to fulﬁl the manipula-
+tion task. There exist planners that integrate contact kinemat-
+ics, nonholonomic motion constraints, and grasp stability to
+come up with manipulation plans based on ﬁnger gaits [6],
+rolling and sliding ﬁngertip motions [7], or nonprehensile
+actions involving only the palm [8]. Optimization-based
+techniques [9] have also been used for in-hand manipulation
+tasks. Apart from purely planning-based methods, reactive
+control methods [10], [11] have been proposed. All of
+these approaches rely on detailed models, or else make
+
+simplifying assumptions such as rigid bodies, point contacts,
+etc. Modelling the behavior of a soft hand like the RBO
+Hand 2 is computationally expensive, since it requires ﬁnite-
+element method models [12] to achieve accuracy. Moreover,
+it is extremely hard to build an accurate model of hands
+like the RBO Hand 2. In order to tackle this problem, our
+approach does not rely on detailed a priori models but learns
+the task-speciﬁc consequences of actions from interactions of
+the real hardware with the environment, during a task.
+
+B. Reinforcement Learning for Manipulation
+
+In order to avoid planning with ﬁxed handcrafted models,
+control policies that solve continuous manipulation problems
+can be found using reinforcement learning. A widely used
+approach is to learn the parameters of a dynamic motor prim-
+itive [13] (DMP) with relative entropy policy search [14] or
+PI2 [15]. This has been used to learn striking movements [16]
+and bi-manual transportation tasks [17]. Although DMPs
+are often used to describe the kinematic state of a system,
+they can be used to generate compliant behavior for picking
+up small objects or opening doors [18]. However, DMP’s
+typically require either a model of the system or the ability
+to control kinematic state, neither of which is straightforward
+on a soft hand that lacks position sensing.
+
+Controllers for reaching and grasping have been learned
+by approximating the Q-function with a multilayer percep-
+tron [19]. Policy search methods have succeeded in training
+neural network controllers to solve contact-rich peg-in-hole-
+like tasks [20] based on positional or visual feedback [21].
+Although most RL methods for manipulation have been
+applied to whole-arm manipulators, some works have also
+addressed in-hand manipulation. Van Hoof et al. [22] learn a
+policy based on tactile feedback which lets an under-actuated
+hand slide cylindrical objects horizontally while being rolled
+between two ﬁngers. Similar to our work is the learning
+method for an in-hand rotation tasks by Kumar et al. [23].
+In contrast, we learn global policies that aim to generalize
+local solutions.
+
+C. Exploiting Human Demonstrations for Learning Manip-
+ulation Skills
+
+Learning from demonstrations has been effective in teach-
+ing robots to perform manipulation tasks with a limited
+amount of human supervision. By building statistical models
+of human demonstrations, gestures [24] and dual-arm manip-
+ulations [25] have been reproduced on robotic systems. Pure
+LfD can lead to suboptimal behavior when demonstrator and
+imitator do not share the same embodiment. To circumvent
+this problem the learning objective is often extended with
+additional feedback. This can be provided by a human, e.g. in
+the case of iteratively improving grasp adaptation [26]. Alter-
+natively, demonstrations can provide the coarse structure of a
+solution, while the details are iteratively reﬁned and learned
+by the imitator itself. This has been shown for dexterous
+manipulation [27] where an in-hand manipulation is broken
+down into a sequence of canonical grasps. In combination
+with reinforcement learning, demonstrations often serve as
+
+an initial policy rollout or they constrain the search space by
+providing building blocks. This has been applied to reaching
+motions [28] and dynamic manipulation tasks, such as ball-
+in-a-cup [29] or pancake-ﬂipping [30].
+
+III. ALGORITHM OVERVIEW
+
+To ﬁnd manipulation strategies for the RBO Hand 2
+that solve different manipulation tasks, we take advantage
+of two general concepts: imitating human demonstrations
+and reinforcement learning. In order to learn from human
+demonstrations, we exploit task-speciﬁc information offered
+by human demonstrators using object-centric demonstrations,
+i.e. we only capture the motion of the object being manip-
+ulated, not hand-speciﬁc information. We use reinforcement
+learning to learn a policy which imitates these object centric
+demonstrations. However, due to kinematic and dynamic
+differences between the human hand and the RBO Hand 2,
+following some of these demonstrations might not be possi-
+ble, and hence trying to imitate them closely is undesirable.
+We describe a novel demonstration selection algorithm that
+selects which demonstration should be imitated, and use a
+reinforcement learning method to solve the problem of how
+to imitate.
+
+We deﬁne our learning problem as optimizing a policy πθ
+to perform the demonstrated task by learning from demon-
+strations. In order to learn this policy, we ﬁrst train multiple
+trajectory centric controllers starting from various initial
+states, to imitate the most closely achievable demonstration
+from their respective initial states. This involves solving the
+joint problem of selecting the appropriate demo to imitate
+and using reinforcement learning to train each trajectory-
+centric controller to imitate its chosen demonstration. By
+modelling the objective as a minimization of KL divergence
+between a distribution of controllers and a mixture of demon-
+strations modelled as Gaussians, as shown in Section IV, this
+joint problem reduces to an alternating optimization between
+computing correspondence weights assigning a demonstra-
+tion to each trajectory centric controller, and optimizing
+each controller using an optimal control algorithm. We can
+additionally use supervised learning to train a neural network
+policy πθ to generalize over the learned trajectory-centric
+controllers, as described by the framework of BADMM-
+based guided policy search [21]. Although we utilize ideas
+from the guided policy search framework, we propose a novel
+learning from demonstrations algorithm which consists of
+three major phases, as described in sections IV, V, and VI:
+1) Perform a weight assignment which computes soft cor-
+respondences assigning demonstrations to individual
+controllers, as described in Section IV
+
+2) With the soft correspondences ﬁxed, solve an optimal
+control problem to optimize an objective based on
+the correspondences and deviations from individual
+demonstrations as described in V.
+
+3) Perform supervised learning over the trajectory-centric
+distributions learned from the optimal control problem,
+by using the framework of BADMM-guided policy
+search as described in Section VI.
+
+Algorithm 1 Guided policy search with demonstration se-
+lection
+1: for iteration k = 1 to K do
+2:
+
+Generate samples {τ j} from each controller p j(ut|xt ) by
+Compute soft correspondence weights ai j assigning demon-
+Estimate system dynamics p(xt+1|xt ,ut ) from {τ j}
+for iteration inner = 1 to n do
+
+running it on the soft hand.
+
+strations to controllers.
+
+Perform optimal control to optimize weight maximum
+
+entropy objective deﬁned in Section IV
+
+3:
+
+4:
+5:
+6:
+
+7:
+
+Perform supervised learning to match πθ with the sam-
+ples from the trajectory-centric controllers learned via trajectory
+optimization
+
+8: return θ
+
+(cid:46) the optimized policy parameters
+
+The complete method is described in Algorithm (1).
+
+IV. LEARNING TRAJECTORY-CENTRIC CONTROLLERS
+
+FROM MULTIPLE DEMONSTRATIONS
+
+As the ﬁrst step to generalizing dexterous manipulation
+skills, we learn a collection of trajectory-centric controllers
+starting from different
+initial conditions, such that each
+controller imitates the demonstration which is most closely
+achievable. This problem can be cast as minimizing the
+divergence between two distributions: one corresponding to
+the demonstrated trajectories, and one to the controllers.
+
+For our given dynamical system, we deﬁne the states to
+be xt, and the actions to be ut at every time step t. Each
+controller p j is a distribution over trajectories τ, which are
+deﬁned as τ = x1,u1, ...,xT ,uT , where T is the length of
+an episode. Hence p j
+is referred to as a trajectory cen-
+tric controller. These controllers encode action conditionals
+p j(ut|xt ).
+
+i vidi. Each di
+
+j=1 w j p j where w j = 1
+
+Let p be a uniform mixture of C trajectory-centric con-
+trollers p j, such that p = ∑C
+C for all
+C. The distribution over D demonstrations is also modeled
+as a mixture, given by d = ∑D
+is deﬁned
+as a multivariate gaussian, constructed according to di =
+N (µi,Σi), where µi is a demonstrated trajectory, and Σi is
+a parameter of the algorithm. This parameter can be thought
+of as a noise constant. When it
+the
+assignments are very close to hard assignments, while a large
+value for Σi, allows for more fuzziness in the assignment.
+In our derivation, we omit C and D for brevity, using j to
+index controllers and i to index demonstrations. The number
+of demonstrations and trajectory-centric controllers do not
+have to be the same.
+
+to be small,
+
+is set
+
+Since demonstrating the motion of the ﬁngers for a soft
+hand is challenging, our demonstrations do not include all of
+the entries in the state xt. Instead, the demonstrated motions
+µi only contain the poses of the manipulated objects – i.e. the
+demonstrations are object-centric. Both p j and di therefore
+correspond to sequences of object poses, not including the
+actuator commands or the state of the hand.
+
+Our goal is to match the distribution of demonstrations
+with the distribution of controllers, which we formalize as the
+following KL-divergence objective: minp DKL(p||d). Due to
+
+the mode seeking behavior of the KL divergence, this brings
+each controller p j to match the closest achievable demonstra-
+tion. However, the KL divergence between mixtures cannot
+be evaluated analytically. Methods such as MCMC sampling
+can be used to estimate it, but we ﬁnd a variational upper
+bound [31] to be the most suitable for our formulation. In
+order to simplify our objective, we decompose each mixture
+weight w j and vi into individual variational parameters ai j
+and bi j, such that ∑i ai j = w j and ∑ j bi j = vi. We can rewrite
+
+DKL(p||d) =
+
+p
+plog
+d
+−plog
+(cid:90)
+
+∑i, j bi jdi
+
+p
+bi jdiai j p j
+ai j p j p .
+
+plog∑
+
+i, j
+
+(cid:90)
+(cid:90)
+
+=
+= −
+
+i, j
+
+p∑
+(cid:90)
+(cid:90)
+
+(cid:90)
+
+From Jensen’s inequality we get an upper bound as follows:
+
+DKL(p||d) ≤ −
+
+ai j p j
+
+p
+
+log
+
+bi jdi
+ai j p j
+
+i, j
+
+(cid:35)
+
+p jai j log
+
+= −∑
+(cid:34)
+∑
+ai j
+=
+ai jDKL(p j||di) + DKL(a||b)
+= ∑
+
+bi jdi
+ai j p j
+p j
+−
+di
+
+(cid:34)
+∑
+
+p j log
+
+i, j
+
+i, j
+
+ai j log
+
+(cid:35)
+
+bi j
+ai j
+
+i, j
+
+Thus, our optimization problem becomes
+
+ai jDKL(p j||di) + DKL(a||b).
+
+(1)
+
+p j,a,b∑
+min
+
+i, j
+
+While the ﬁrst term ∑i, j ai jDKL(p j||di) depends on the indi-
+vidual controllers p j, the second term DKL(a||b) depends on
+the mixing components ai j and bi j but is independent of the
+controller distributions p j.
+We can optimize the controllers p j and the weights in two
+alternating steps, where we ﬁrst optimize DKL(p||d) with
+respect to a, b, followed by an optimization of DKL(p||d)
+to p, giving us a block coordinate descent
+with respect
+algorithm in {a,b} and p.
+
+Intuitively, the ﬁrst optimization with respect to a,b is
+a weight assignment with the correspondence weight ai j
+proportional to the importance of assigning demonstration
+i to controller j. The second optimization with respect to p,
+keeps the correspondence parameters a, b ﬁxed, and ﬁnds
+optimal trajectory-centric controllers p j using an optimal
+control algorithm to minimize DKL(p||d).
+1) Weight assignment phase: The objective function
+DKL(p||q) is convex in both a and b, so we can optimize
+it by keeping one variable ﬁxed while optimizing the other,
+and vice versa. We refer the reader to [31] for further details
+on this optimization. This yields the following closed form
+solutions:
+
+bi j =
+
+viai j
+∑ j(cid:48) ai j(cid:48)
+
+and
+
+ai j =
+
+w jbi je−DKL(p j||qi)
+∑i(cid:48) bi(cid:48) je−DKL(p j||qi(cid:48) )
+
+.
+
+In order to compute the optimal a and b, we alternate
+between these updates for a and b until convergence.
+
+2) Controller optimization phase: Once the optimal val-
+ues for a and b have been computed, we ﬁx these as
+correspondences between demonstrations and controllers and
+optimize Eq. 1 to recover the optimal p. As a and b are
+ﬁxed, DKL(a||b) is independent of p. Hence, our optimization
+becomes:
+p ∑
+min
+
+ai jDKL(p j||di) = ∑
+= ∑
+
+i, j
+
+ai j(−Ep j [logdi])− H(p j))
+−w jH(p j)−∑
+
+ai jEp j [logdi].
+
+i, j
+
+j
+
+i, j
+
+ai jEp j [logdi] =−w j
+
+(cid:32)
+H(p j)+∑
+
+Factorizing independently over each of the controller distri-
+butions p j, for each controller, we optimize:
+−w jH(p j)−∑
+
+Ep j [logdi]
+(2)
+In practice, the weight assignment is performed indepen-
+dently per time step, as the controllers we consider are time
+varying.
+
+ai j
+w j
+
+i
+
+i
+
+(cid:33)
+
+V. CONTROLLER OPTIMIZATION WITH AN LFD
+
+OBJECTIVE
+
+While the controller optimization phase could be per-
+formed with a variety of optimal control and reinforcement
+learning methods, we choose a simple trajectory-centric
+reinforcement learning algorithm that allows us to control
+systems with unknown dynamics, such as soft hands. Build-
+ing on prior work, we learn time-varying linear Gaussian
+controllers by using iteratively reﬁtted time-varying local
+linear models [5]. We present the method in this section
+for completeness. The derivation follows prior work, but is
+presented here for the speciﬁc case of our LfD objective.
+Time-varying linear-Gaussian controllers are given by
+
+p j(ut|xt ) = N (Kjtxt + k jt + c jt ,Cjt )
+
+where Kjt is a feedback term and k jt is an open loop term.
+Given this form, the maximum entropy objective (Eq. 2), can
+be optimized using differential dynamic programming [32],
+[33]. As di is a multivariate Gaussian N (µi,Σi), we can
+rewrite Eq. 2 as
+ai j
+
+(cid:20)1
+
+(cid:21)
+
+(x− µi)T Σ−1
+
+(x− µi)
+
+i
+
+− H(p j)
+
+∑i(cid:48) ai(cid:48) j
+
+Ex∼p j
+
+2
+
+p j ∑
+min
+
+i
+
+ai j
+
+In this maximum entropy objective, the cost function deﬁned
+as the expectation of a sum of l2 distances of trajectory
+samples to each demonstration, weighted by the normalized
+. Under linearized dynamics,
+correspondence weights
+this objective can be locally optimized using LQG [34].
+However, for robots like the RBO Hand 2, the dynamics
+are complex and difﬁcult to model analytically. Instead, we
+can ﬁt a time-varying locally linear model of the dynamics,
+of the form p(xt+1|xt ,ut ) = N ( fxtxt + futut|Cd), to samples
+obtained by running the physical system in the real world.
+
+∑i(cid:48) ai(cid:48) j
+
+The dynamics matrices fxt and fut can then be used in
+place of the system linearization to optimize the controller
+objective using LQG. For details on the LQG algorithm, we
+refer the reader to prior work [34], [5].
+
+One issue with optimizing a controller using ﬁtted local
+dynamics models is that the model is only valid close to
+the previous controller. The new controller might visit very
+different states where the ﬁtted dynamics are no longer valid,
+potentially causing the algorithm to divergence. To avoid
+this, we bound the maximum amount the controller changes
+between iterations. This can be expressed as an additional
+constraint on the optimization:
+
+(∑
+
+i
+
+j
+
+ai j
+w j
+
+(x− µi)T Σ−1
+p ∑
+min
+s.t. DKL(p j(τ)|| ˆp j(τ)) < ε,
+
+Ex∼p j [
+
+1
+2
+
+(x− µi)]− H(p j))
+
+(3)
+
+i
+
+(4)
+where ˆp j(τ) is the previous trajectory distribution and p j(τ)
+the new one. As shown in [21], this constrained optimization
+problem can be formulated in the same maximum entropy
+form as Eq. 2, using Lagrange multipliers, and solved via
+dual gradient descent. We omit the full derivation and refer
+the reader to prior work for details [5], [21]. In practice, each
+iteration of this controller optimization algorithm involves
+generating N samples on the real physical system by running
+the previous controller ˆp j(ut|xt ), ﬁtting a time-varying linear
+dynamics model to these samples as in previous work [5],
+and optimizing a new controller p j by solving the problem
+in Equation (3) using dual gradient descent, with LQG used
+to optimize with respect to the primal variables Kjt, k jt,
+and Cjt. This can be viewed as an instance of model-based
+reinforcement learning.
+
+VI. SUPERVISED LEARNING USING GPS
+
+The multiple trajectory-centric controllers deﬁned in the
+previous section learn to imitate the most closely imitable
+demonstration from their individual starting positions. How-
+ever, given an unseen initial state, it is not clear which
+controller p j should be used. For effective and automated
+generalization, we need to obtain a single policy πθ (ut|xt )
+that will succeed under various conditions. To do this, we
+extend the framework of guided policy search [21] to distill
+the collection of controllers into a single nonlinear neural
+network policy.
+
+We learn parameters the parameters θ of a neural network
+πθ to match the behavior shown by the individual linear
+Gaussian controllers by regressing from the state xt to the
+actions ut taken by the controllers at each of the N samples
+generated on the physical system for dynamics ﬁtting. Sim-
+ply using supervised learning is not in general guaranteed
+to produce a policy with good long-horizon performance.
+In fact, supervised learning is effective only when the state
+distribution of πθ matches that of the controllers p j. To
+ensure this, we use the BADMM-based variant of guided
+policy search [21], which modiﬁes the cost function for
+the controllers to include a KL-divergence term to penalize
+deviation of the linear Gaussian controllers from the latest
+policy πθ at each iteration. This is illustrated in Algorithm
+
+Fig. 2.
+The RBO Hand 2 is an antropomorphic pneumatically actuated
+soft hand consisting of seven actuators. Three of them form the palm and
+thumb. The air chambers can be physically coupled or actuated separately.
+
+1, by ﬁrst assigning correspondences between demonstrations
+and controllers, then alternating between trajectory optimiza-
+tion and supervised learning at every iteration, eventually
+leading to a good neural network policy πθ . For further
+details on the guided policy search algorithm, we refer the
+reader to prior work [21]. Our overall algorithm formulates
+a novel optimization problem to learn from demonstrations
+by minimizing the KL divergence between controllers and
+demonstrations, and then uses elements of optimal control
+and supervised learning in order to effectively solve this op-
+timization problem and learn a generalizable neural network
+policy.
+
+VII. RBO HAND 2 AND SYSTEM SETUP
+
+The RBO Hand 2 is an inexpensive, compliant, under-
+actuated robotic hand which has been shown to be effective
+for a variety of grasping tasks [4]. The hand consists of a
+polyamide scaffold to which multiple pneumatic actuators
+are attached (see Fig. 2). The actuators are made of silicone
+rubber and reinforcing polyester ﬁbers. Each of the four
+ﬁngers is a single actuator, while the thumb consists of three
+independent pneumatic actuators. This makes the thumb the
+most dexterous part of the hand, achieving seven out of
+eight conﬁgurations of the Kapandji test. The actuators are
+controlled via external air valves and a separate air supply.
+Control is challenging since the air valves can only be either
+fully closed or open and have a switching time of ∼ 0.02s.
+Each actuator has a pressure sensor which is located close
+to the air valve. Due to its location, the sensor is prone to
+noise, especially during valve openings. The hand weighs
+178g and has a maximum payload of ∼ 500g, and is cheap,
+robust, and compliant.
+
+The hand is controlled by specifying valve opening dura-
+tions to either inﬂate or deﬂate a single actuator. We turn the
+discrete valve actions into a continuous control signal using
+pulse width modulation. Given a constant frequency of 5Hz,
+the control signal is interpreted as the duration the inﬂation
+(if it is positive) or deﬂation (negative) valve is opened during
+a single time step. To ensure that the control signal does not
+exceed the duration of a single time step we apply a sigmoid
+function to the commands from the learning algorithm.
+
+The positions and velocities of the manipulated objects
+are captured in real time with a PhaseSpace Impulse system,
+which relies on active LED markers. The state xt of our
+system is the concatenation of the seven pressure readings of
+the hand, their time derivatives, the 3D positions of markers
+
+Fig. 3. The three manipulation tasks used in our experiments: Turning a valve, pushing beads on an abacus, and grasping a bottle from a table.
+
+attached to the object (depending on the task) and their
+velocities, and joint angles of the robot arm (depending on
+the task). However, we placed no LED markers on the soft
+hand itself, and had them just on the object to record object-
+centric demonstrations.
+
+VIII. EXPERIMENTS
+
+We evaluated our algorithm on a variety of manipulation and
+grasping tasks. Our experiments aim to show that
+
+1) It is possible to perform ﬁne manipulation with the
+
+RBO Hand 2.
+
+2) Our algorithm can learn feedback policies from
+demonstrations that performs nearly as well as an
+oracle with the correct demonstrations assigned to
+controllers a priori.
+
+3) A single neural network policy learned from demon-
+stration with our method is able to generalize to
+different initial states.
+
+our
+
+learning
+
+approach
+
+on
+
+evaluate
+tasks:
+
+and grasping a bottle
+
+three
+turning a valve, pushing beads on
+(see Fig. 3). A
+the experiments can be found at http:
+
+We will
+different
+an abacus,
+video of
+//www.youtube.com/watch?v=XyZFkJWu0Q0.
+For the ﬁrst
+following:
+
+two tasks, we compare our method to the
+
+Hand designed baseline: A controller with a hand-designed
+open loop policy. In the case of the abacus task, we evaluate
+the performance of two different strategies for simple hand-
+designed baselines.
+Single Demo baseline: A single trajectory-centric con-
+troller trained to imitate a single demonstration. We use
+two separate baselines which are trained to follow different
+demonstrations.
+Oracle: A manual assignment of the correct achievable
+demonstrations to controllers. This is an upper bound on our
+demonstration selection algorithm.
+
+A. Turning a valve
+
+1) Experimental setup: Rotating a gas valve is a challeng-
+ing task since it involves coordinating multiple ﬁngers. In our
+experimental setup, the valve consists of a blue horizontal
+lever in order to allow it to turn further across multiple
+positions, as seen in Fig 3. As the position of the wrist along
+the lever is varied, different ﬁnger motions are required to
+rotate it.
+
+Our setup of the valve rotation task has the soft hand
+mounted on a PR2 robot arm, with the objective to rotate
+the valve away from the initial center position in either
+direction, using just its ﬁngers. The arm is kept stationary
+for each episode, but changes positions between the training
+of different trajectory-centric controllers. The joint angles
+are noted as part of the state, in order to determine relative
+position of the hand with respect to the valve for each initial
+position.
+
+A human demonstrator demonstrated three different valve
+rotations with their own hand, which were tracked by motion
+capture markers on the valve lever. Two demonstrations were
+of the valve rotating clockwise and anti-clockwise at the
+same position, and a third demonstration with the valve
+placed at a different position and rotated anticlockwise.
+Our algorithm trained three individual trajectory-centric con-
+trollers and a single neural network policy to generalize over
+them.
+
+2) Results and Discussion: During evaluation, the policy
+learned by each the methods was sampled ten times at four
+positions of the hand relative to the valve.
+
+to turn the valve signiﬁcantly in at
+
+The results in Fig. 4 show that our method generates
+the most robust policy compared with the baselines, which
+each fail
+least one
+position, and does nearly as well as the oracle, for which
+demonstrations are assigned to controllers manually. The
+plots in Fig. 4 represent a comparison between our method,
+two single demonstration baselines, hand designed baselines
+and the oracle. Single demonstration baseline 1 & 2 in Fig. 4,
+represent controllers trained to follow single demonstrations
+at two different initial positions of the hand. While learning
+the correspondence weights and the individual controller
+policies, our method determines which of the demonstra-
+tion it can actually perform from its initial positions, and
+disregards distant unachievable demonstrations.
+
+Our method is able to learn to display distinctly different
+behavior at various test positions. At position 1, the policy
+pushes the lever using its last two ﬁngers, with support given
+by the thumb. At position 2, the policy uses the thumb
+to rotate the valve by pushing the lever as the ﬁngers are
+blocked. At position 3, our policy extends the thumb out of
+the way and pushes strongly with the index ﬁnger to rotate
+the valve.
+
+Simple open loop hand-designed strategies and the base-
+lines learned from a single demonstration don’t learn this
+distinctly different behavior needed to generalize to different
+positions along the valve lever. By learning that different
+
+Fig. 4. Comparison of the different policies for the valve task: the red line indicates the demonstrated rotation of the valve by ≈ 35deg. On average our
+method learns the most general feedback strategy. The boxes in the box plot for each test position are our method, single demo baseline 1, single demo
+baseline 2, hand-designed baseline and oracle plotted from left to right. Although the baselines do well in some positions, the only methods which do
+consistently well across all positions are our method and the oracle.
+
+Bead Target
+1
+2
+3
+
+8.4
+0
+0
+
+Bead Target
+1
+2
+3
+
+8.4
+0
+0
+
+Bead Target
+1
+2
+3
+
+8.4
+0
+0
+
+Ours
+
+7.49 ± 0.47
+0.14 ± 0.18
+0.89 ± 1.00
+
+Ours
+
+7.95 ± 0.19
+0.10 ± 0.10
+0.00 ± 0.00
+
+Ours
+
+7.21 ± 0.69
+0.00 ± 0.00
+0.00 ± 0.00
+
+SingleDemo1
+7.02 ± 0.50
+0.60 ± 0.69
+0.28 ± 0.18
+SingleDemo1
+1.04 ± 2.15
+0.85 ± 1.21
+0.00 ± 0.00
+SingleDemo1
+2.47 ± 2.22
+0.00 ± 0.00
+0.00 ± 0.00
+
+SingleDemo2
+6.33 ± 2.15
+7.08 ± 1.04
+1.23 ± 2.20
+SingleDemo2
+7.27 ± 0.65
+0.19 ± 0.14
+0.00 ± 0.00
+SingleDemo2
+3.39 ± 1.98
+0.00 ± 0.00
+0.00 ± 0.00
+
+Oracle
+
+7.66 ± 0.23
+0.27 ± 0.42
+1.08 ± 0.72
+
+Oracle
+
+7.52 ± 0.66
+0.09 ± 0.11
+0.00 ± 0.00
+
+Oracle
+
+7.74 ± 0.23
+0.00 ± 0.00
+0.00 ± 0.00
+
+0 ± 0
+0 ± 0
+
+HandDesign1 HandDesign2
+8.38 ± 0.04
+
+0 ± 0
+6.5 ± 0
+8.43 ± 0.29
+HandDesign1 HandDesign2
+8.38 ± 0.08
+0.00 ± 0.00
+0.00 ± 0.00
+8.40 ± 0.00
+0.00 ± 0.00
+0.00 ± 0.00
+HandDesign1 HandDesign2
+8.38 ± 0.05
+0.00 ± 0.00
+0.00 ± 0.00
+0.00 ± 0.00
+0.00 ± 0.00
+0.00 ± 0.00
+
+Fig. 5. Comparison of the distance moved by the various beads in cm using different policies for the abacus task, at 3 different positions, namely Positions
+1, 2 and 3 going downwards. The target column in each table indicates the demonstrated movement of the three beads, and the other columns indicate the
+mean and standard deviation of other methods. On average our method learns the most general feedback strategy besides the oracle
+
+joint angles of the arm require different behaviors to be
+performed, our method is able to perform the task in various
+positions.
+
+B. Pushing the beads of an abacus
+
+1) Experimental setup: Our second task involves using
+the soft hand to push particular beads on an abacus while
+leaving other beads stationary. This task is challenging as
+it requires precise individual motion of the ﬁngers to push
+only the desired beads. In our setup as shown in Fig 3, the
+hand is mounted on a stationary arm, while the abacus is
+moved to several positions. The beads of relevance in this
+setup are the central yellow, orange and red ones. As the
+position of the abacus with respect to the hand changes,
+different ﬁngers need to be used. Our demonstrations involve
+a human demonstrator pushing only the yellow beads along
+their spindle at each of the three positions shown in Fig 3.
+A marker was attached to each of the three beads using the
+wooden sticks shown in the ﬁgure. As shown in Fig 3, when
+the hand has different ﬁngers aligned with the valid beads, it
+needs to use a different ﬁnger to push just the desired yellow
+beads.
+
+2) Results and Discussion: We evaluated ten samples of
+each policy at each of the three positions and recorded
+the distances that each bead moved. The results are shown
+in Fig. 5. Our method shows better performance than the
+single demonstration and hand designed baselines for all
+the test positions. Only the oracle policy produces equally
+good performance. By interleaving selection of the right
+demonstration to imitate, with optimal control and supervised
+learning, our algorithm is able to learn a policy which uses
+discretely different ﬁngers depending on the positions of the
+abacus relative to the hand.
+
+On the other hand, the hand-designed baselines being open
+loop can never learn different behaviors for different ﬁngers.
+The controller trained at a single position fails because it has
+no notion of generalization.
+
+C. Grasping a bottle
+
+1) Experimental setup: This task involves using the soft
+hand mounted on a moving arm, to grasp a deodorant bottle
+placed on a table. The arm has a scripted motion of moving
+up a predetermined amount after 8 seconds, and we use
+reinforcement learning to learn the behavior of the ﬁngers
+
+010203040degreesTest Position 0methodourssingledemo_pos1singledemo_pos3hand_designoracle010203040degreesTest Position 1010203040degreesTest Position 2010203040degreesTest Position 3Fig. 6. Execution of a policy learned with our method to grasp a bottle. Our method learns to grasp the bottle tightly and performs as well as the hand
+designed baseline.
+
+to go with this arm motion. The objective of the task is
+to grasp the bottle before the arm starts moving and keep it
+grasped until the end of the episode at the ﬁnal arm location.
+As grasping tasks for several objects largely succeed in
+open loop, our aim is to demonstrate that we can match the
+performance of a hand-designed baseline with a trajectory-
+centric controller
+learned from a human demonstration
+through optimal control. This experiment is challenging for
+reinforcement learning algorithms due to the discontinuous
+nature of the reward signal in grasping.
+
+We provide a demonstration of the bottle being lifted by
+a human, and use it to deﬁne the cost function for trajectory
+optimization as the l2 distance of trajectory samples from
+the provided demonstration. We also apply a Gaussian ﬁlter
+to the noise generated in the controllers to have more tem-
+porally coherent noise signals, which allows tight grasping.
+The resulting learned trajectory-centric control policy is then
+tested on 10 sample trajectories in order to evaluate whether
+a successful grasp has occurred where the objected is lifted
+and kept at the maximum arm height.
+
+2) Results and Discussion: We ﬁnd that on the grasping
+task, the control policy learned through optimal control does
+just as well as a hand-designed policy on ten samples of
+grasping the bottle. Both the hand-designed policy and the
+learned policy were able to grasp the bottle for all 10 test
+samples.
+
+This indicates that the learning has comparable results to a
+hand-designed baseline, despite not having prior information
+besides a human-provided demonstration. This demonstrates
+the ability of the RBO softhand 2 to learn to perform robust,
+meaningful grasping using optimal control based trajectory
+optimization algorithms.
+
+D. Limitations
+
+Although the algorithm shows good performance on the
+tasks demonstrated with the RBO Hand 2, there are several
+directions for future work. Improving upon the currently used
+motion capture system to track object behavior, we aim to use
+better computer vision techniques such as deep convolutional
+nets to track trajectories of relevant feature points instead of
+object poses. Extending the neural network policy to learn
+policies dependent on simply the pressure sensors in the
+ﬁngers, rather than using the motion capture markers, would
+be an exciting future direction.
+
+IX. CONCLUSIONS
+
+We presented an algorithm for learning dexterous manipu-
+lation skills with a soft hand from object-centric demonstra-
+tions. Unlike standard learning from demonstration methods,
+our approach only requires the human expert to demonstrate
+the desired behaviors with their own hand. Our method then
+automatically determines the most relevant demonstrations to
+track, using reinforcement learning to optimize a collection
+of controllers together with controller to demonstration cor-
+respondences. To generalize the demonstrations to new initial
+conditions, we extend the framework of guided policy search
+to train nonlinear neural network policies that combine the
+capabilities of all of the controllers. We evaluate our method
+on the RBO Hand 2, and show that it is capable of learning
+a variety of dexterous manipulation skills, including valve
+turning, moving beads on an abacus, and grasping.
+
+REFERENCES
+
+[1] T. Mouri, H. Kawasaki, K. Yoshikawa, J. Takai, and S. Ito, “Anthropo-
+morphic robot hand: Gifu hand iii,” in Proc. Int. Conf. ICCAS, 2002.
+hand.”
+
+[2] “Shadow robot
+
+shadow dexterous
+
+company.
+
+the
+
+http://www.shadowrobot.com/products/dexterous-hand/.
+
+[3] M. Grebenstein, A. Albu-Sch¨affer, T. Bahls, M. Chalon, O. Eiberger,
+W. Friedl, R. Gruber, S. Haddadin, U. Hagn, R. Haslinger et al., “The
+dlr hand arm system,” in ICRA 2011.
+
+IEEE, 2011.
+
+[4] R. Deimel and O. Brock, “A novel type of compliant and underactuated
+robotic hand for dexterous grasping,” The International Journal of
+Robotics Research, vol. 35, no. 1-3, pp. 161–185, March 2016.
+
+[5] S. Levine and P. Abbeel, “Learning neural network policies with
+guided policy search under unknown dynamics,” in Advances in Neural
+Information Processing Systems, 2014.
+
+[6] L. Han and J. C. Trinkle, “Dextrous manipulation by rolling and ﬁnger
+gaiting,” in Robotics and Automation, 1998. Proceedings. 1998 IEEE
+International Conference on, vol. 1.
+
+IEEE, 1998.
+
+[7] M. Cherif and K. K. Gupta, “Planning quasi-static ﬁngertip manip-
+ulations for reconﬁguring objects,” Robotics and Automation, IEEE
+Transactions on, vol. 15, no. 5, pp. 837–848, 1999.
+
+[8] Y. Bai and C. K. Liu, “Dexterous manipulation using both palm and
+
+ﬁngers,” in ICRA 2014.
+
+IEEE, 2014.
+
+[9] I. Mordatch, Z. Popovi´c, and E. Todorov, “Contact-invariant opti-
+mization for hand manipulation,” in Proceedings of the ACM SIG-
+GRAPH/Eurographics symposium on computer animation.
+Euro-
+graphics Association, 2012.
+
+[10] K. Tahara, S. Arimoto, and M. Yoshida, “Dynamic object manipulation
+using a virtual frame by a triple soft-ﬁngered robotic hand,” in ICRA
+2010, May 2010.
+
+[11] Q. Li, M. Meier, R. Haschke, H. Ritter, and B. Bolder, “Rotary
+object dexterous manipulation in hand: a feedback-based method,”
+International Journal of Mechatronics and Automation, vol. 3, no. 1,
+pp. 36–47, 2013.
+
+[12] P. Polygerinos, Z. Wang, J. T. B. Overvelde, K. C. Galloway, R. J.
+Wood, K. Bertoldi, and C. J. Walsh, “Modeling of soft ﬁber-reinforced
+bending actuators,” IEEE Transactions on Robotics, vol. 31, no. 3, pp.
+778–789, June 2015.
+
+[13] A. J. Ijspeert, J. Nakanishi, and S. Schaal, “Learning attractor land-
+
+scapes for learning motor primitives,” Tech. Rep., 2002.
+
+[14] J. Peters, K. M¨ulling, and Y. Altun, “Relative entropy policy search.”
+
+in AAAI. Atlanta, 2010.
+
+[15] E. Theodorou, J. Buchli, and S. Schaal, “A generalized path integral
+learning,” Journal of Machine
+control approach to reinforcement
+Learning Research, vol. 11, pp. 3137–3181, 2010. [Online]. Available:
+http://portal.acm.org/citation.cfm?id=1953033
+
+[16] K. M¨ulling, J. Kober, O. Kroemer, and J. Peters, “Learning to select
+and generalize striking movements in robot table tennis,” IJRR, vol. 32,
+no. 3, pp. 263–279, 2013.
+
+[17] O. Kroemer, C. Daniel, G. Neumann, H. van Hoof, and J. Peters,
+“Towards learning hierarchical skills for multi-phase manipulation
+tasks,” in ICRA.
+
+IEEE, 2015.
+
+[18] M. Kalakrishnan, L. Righetti, P. Pastor, and S. Schaal, “Learning
+force control policies for compliant manipulation,” in International
+Conference on Intelligent Robots and Systems (IROS).
+IEEE, 2011.
+[19] T. Lampe and M. Riedmiller, “Acquiring visual servoing reaching and
+grasping skills using neural reinforcement learning,” in IJCNN 2013.
+IEEE, 2013.
+
+[20] S. Levine, N. Wagener, and P. Abbeel, “Learning contact-rich manip-
+ulation skills with guided policy search,” in Robotics and Automation
+(ICRA), 2015 IEEE International Conference on.
+
+IEEE, 2015.
+
+[21] S. Levine, C. Finn, T. Darrell, and P. Abbeel, “End-to-end training of
+
+deep visuomotor policies,” arXiv preprint arXiv:1504.00702, 2015.
+
+[22] H. van Hoof, T. Hermans, G. Neumann, and J. Peters, “Learning
+robot in-hand manipulation with tactile features,” in Humanoid Robots
+(Humanoids).
+
+IEEE, 2015.
+
+[23] V. Kumar, E. Todorov, and S. Levine, “Optimal control with learned
+
+local models: Application to dexterous manipulation.”
+
+[24] S. Calinon and A. Billard, “Incremental
+
+learning of gestures by
+imitation in a humanoid robot,” in Proceedings of the ACM/IEEE
+international conference on Human-robot interaction. ACM, 2007.
+[25] T. Asfour, P. Azad, F. Gyarfas, and R. Dillmann, “Imitation learning
+of dual-arm manipulation tasks in humanoid robots,” International
+Journal of Humanoid Robotics, vol. 5, no. 02, pp. 183–202, 2008.
+
+[26] E. L. Sauser, B. D. Argall, G. Metta, and A. G. Billard, “Iterative
+learning of grasp adaptation through human corrections,” Robotics and
+Autonomous Systems, vol. 60, no. 1, pp. 55–71, 2012.
+
+[27] U. Prieur, V. Perdereau, and A. Bernardino, “Modeling and planning
+high-level in-hand manipulation actions from human knowledge and
+active learning from demonstration,” in IROS.
+
+IEEE, 2012.
+
+[28] F. Guenter, M. Hersch, S. Calinon, and A. Billard, “Reinforcement
+learning for imitating constrained reaching movements,” Advanced
+Robotics, vol. 21, no. 13, pp. 1521–1544, 2007.
+
+[29] J. Kober and J. R. Peters, “Policy search for motor primitives in
+robotics,” in Advances in neural information processing systems, 2009.
+[30] P. Kormushev, S. Calinon, and D. G. Caldwell, “Robot motor skill
+IEEE,
+
+coordination with em-based reinforcement learning,” in IROS.
+2010.
+
+[31] J. Hershey and P. Olsen, “Approximating the Kullback Leibler diver-
+gence between Gaussian mixture models,” in Acoustics, Speech and
+Signal Processing, 2007. ICASSP 2007. IEEE International Confer-
+ence on, vol. 4, April 2007, pp. IV–317–IV–320.
+
+[32] D. H. Jacobson and D. Q. Mayne, Differential dynamic programming,
+ser. Modern analytic and computational methods in science and
+mathematics. New York: Elsevier, 1970.
+
+[33] S. Levine and V. Koltun, “Guided policy search,” in Proceedings of
+
+The 30th International Conference on Machine Learning, 2013.
+
+[34] W. Li and E. Todorov, “Iterative linear quadratic regulator design for
+
+nonlinear biological movement systems.” in ICINCO (1), 2004.
+
+

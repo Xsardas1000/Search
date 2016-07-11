@@ -1,0 +1,1502 @@
+Accelerating Deep Neural Network Training with
+
+Inconsistent Stochastic Gradient Descent
+
+Linnan Wang*¶ Yi Yang¶ Martin Renqiang Min¶ Srimat Chakradhar¶
+
+* Georgia Institute of Technology
+
+¶ NEC Laboratories, USA
+linnan.wang@gatech.edu
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+M
+8
+1
+
+ 
+ 
+]
+
+G
+L
+.
+s
+c
+[
+ 
+ 
+
+2
+v
+4
+4
+5
+5
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+ABSTRACT
+The growth of training datasets into enormity has fostered
+the development of deeper and wider Convolutional Neural
+Networks (CNN). This has imposed great computation chal-
+lenges in training CNN at a large scale. SGD is the widely
+adopted method to train CNN. Conceptually it approxi-
+mates the population with a randomly sampled batch; then
+it evenly trains batches by conducting a gradient update on
+every batch in an epoch.
+In this paper, we demonstrate
+Sampling Bias, Intrinsic Image Diﬀerence and Fixed Cycle
+Pseudo Random Sampling diﬀerentiate batches in training,
+which then aﬀect learning speeds on them. Because of this,
+the unbiased treatment of batches involved in SGD creates
+improper load balancing. To address this issue, we present
+Inconsistent Stochastic Gradient Descent (ISGD) to dynam-
+ically vary training eﬀort according to learning statuses on
+batches. Speciﬁcally ISGD leverages techniques in Statisti-
+cal Process Control to identify a undertrained batch. Once
+a batch is undertrained, ISGD solves a new subproblem, a
+chasing logic plus a conservative constraint, to accelerate the
+training on the batch while avoid drastic parameter changes.
+Extensive experiments on a variety of datasets demonstrate
+ISGD converges faster than SGD. In training AlexNet, ISGD
+is 21.05% faster than SGD to reach 56% top1 accuracy under
+the exactly same experiment setup. We also extend ISGD
+to work on multiGPU or heterogeneous distributed system
+based on data parallelism, enabling the batch size to be the
+key to scalability. Then we present the study of ISGD batch
+size to the learning rate, parallelism, synchronization cost,
+system saturation and scalability. We conclude the optimal
+ISGD batch size is machine dependent. Various experiments
+on a multiGPU system validate our claim.
+In particular,
+ISGD trains AlexNet to 56.3% top1 and 80.1% top5 accu-
+racy in 11.5 hours with 4 NVIDIA TITAN X at the batch
+size of 1536.
+
+Keywords
+SGD, Batch Size, MultiGPU, Distributed Computing
+
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed
+for proﬁt or commercial advantage and that copies bear this notice and the full cita-
+tion on the ﬁrst page. Copyrights for components of this work owned by others than
+ACM must be honored. Abstracting with credit is permitted. To copy otherwise, or re-
+publish, to post on servers or to redistribute to lists, requires prior speciﬁc permission
+and/or a fee. Request permissions from permissions@acm.org.
+
+c(cid:13) 2016 ACM. ISBN 978-1-4503-2138-9.
+DOI: 10.1145/1235
+
+1.
+
+INTRODUCTION
+
+The accessible TFLOPS brought forth by accelerator tech-
+nologies bolster the booming development in Machine Learn-
+ing. In particular, Deep Neural Network (DNN) has drasti-
+cally improved state of art visual systems by training toward
+large scale datasets such as ImageNet. Other applications
+in Natural Language Processing (NLP) [1], Video Motion
+Analysis [2], Recommender Systems [3] have also seen ben-
+eﬁts from the large scale. In this work, we focus on acceler-
+ating the Deep Neural Network training.
+
+SGD evenly trains a batch once in an epoch. Whereas
+we consider this as a problem by demonstrating that Sam-
+pling Bias, Intrinsic Images Diﬀerences, and Fixed Cycle
+Pseudo Random (FCPR) Sampling result in diﬀerent learn-
+ing speeds on batches. First, Sampling Bias represents some
+members of a population are unevenly distributed in a batch.
+For example, a batch may contain 105 images from subpop-
+ulation A and 95 images from subpopulation B. Cases such
+as imperfect data shuﬄing lead to Sampling Bias. Second,
+Intrinsic Image Diﬀerences indicate that batches are still dif-
+ferent at the pixel level. In this case, two diﬀerent images
+from the same category are distinct due to the dissimilar-
+ity at pixels. Third, the recurring batch retrieval pattern
+in FCPR Sampling propagates aforementioned diﬀerences,
+resulting in diﬀerent learning rates on batches. Besides we
+demonstrate the additional training on a fully trained batch
+has little contribution to the learning. Subsequently the
+problem of SGD is failling to consider these learning dy-
+namics on batches.
+
+In this paper, we present Inconsistent Stochastic Gradient
+Descent (ISGD) that rebalances training eﬀort for batches.
+The inconsistency is reﬂected by nonuniform gradient up-
+dates on batches. ISGD measures the training status of a
+batch by the associated loss. At any iteration t, ISGD traces
+the losses in iterations [t − nb, t] where nb is the number of
+distinct batches. These losses assist in constructing a up-
+per limit, mean + 3×standard deviation, to identify a under
+trained batch. If a batch is undertrained, ISGD solves a new
+subproblem with a chasing logic plus a conservative penalty
+(avoid dramatic parameters changes from the previous step)
+to accelerate the training on this particular batch. Other-
+wise ISGD behaves exactly same as SGD. ISGD converges
+faster than SGD as it rebalances the training eﬀort. For ex-
+ample, ISGD does more gradient updates than SGD on the
+slow batches.
+
+To fully exploit ISGD, we also study the eﬀects of ISGD
+batch size on the parallelism, synchronization cost, system
+saturation and scalability. Theoretically increasing batch
+
+size slows down the convergence [4]. Thereby a small batch
+is favored on the single node training. Whereas the multin-
+ode training entails excessive communication and the lim-
+ited parallelism, all of which oﬀset convergence beneﬁts. In
+this case, the advantages of increasing batch size are: 1)
+increasing batch batch size enables less iterations to con-
+verge; thereby less communication, ; 2) the gradient is more
+accurate enabling us to choose a large learning rate; 3) it
+improves system saturation and occupancy; However a un-
+wieldy batch size is not desired; because it reduces the total
+number of gradient updates in a ﬁxed time. We demonstrate
+the optimal batch size of ISGD is system dependent.
+
+In summary, the novelties of this work are:
+• we consider learning dynamics on batches; and demon-
+strate Sampling Bias, Intrinsic Image Diﬀerence and
+FCPR Sampling diﬀerentiate batches in training.
+
+• we present ISGD that rebalances training eﬀort on
+
+batches with respect to their learning statuses.
+
+• we study the ISGD batch size, concluding the optimal
+
+batch size is system dependent.
+
+2. PROBLEM STATEMENT
+
+We consider the SGD unbiased treatment on batches as
+a problem. Speciﬁcally SGD evenly trains every batch once
+in an epoch. Our claim is based on two facts. First, the
+additional training on a fully trained batch has little con-
+tribution to the learning. Second, batches are subjected to
+various learning speeds.
+
+In this section, we demonstrate Intrinsic Image Diﬀer-
+ences and Sampling Bias as two major factors that diﬀer-
+entiate batches in training. The FCPR Sampling, widely
+integrated with SGD, propagates the diﬀerence resulting in
+diﬀerent learning speed on batches. First, we present the
+cross entropy loss is a good indicator of learning status of
+a batch. Second, we substantiate Intrinsic Image Diﬀer-
+ences and Sampling Bias are contributing factors to batch-
+wise diﬀerences with a set of controlled experiments. Then
+we demonstrate the FCPR Sampling is necessary to SGD in
+terms of system eﬃciency; but the recurring batch retrieval
+pattern in it fosters various learning speed. In the end, we
+explain why the contribution of a fully trained batch is lit-
+tle. The problem of SGD, therefore, is neglecting the fact of
+aforementioned learning dynamics.
+2.1 A Recap of CNN Training
+
+We formulate the CNN training as the following optimiza-
+tion problem. Let ψ be a loss function with weight vector w
+as function parameters, which takes images d as the input.
+The objective of CNN training is to ﬁnd an approximate
+solution of following optimization problem:
+
+min
+
+w
+
+ψw(d)
+
+(1)
+
+A typical training iteration of CNN consists of a Forward
+and Backward pass. Forward pass yields a loss that mea-
+sures the discrepancy between the current predictions and
+the expected; Backward pass calculates the gradient, the
+negative of which points to the steepest descent direction.
+Gradient Descent updates the w as follows:
+wt = wt−1 − ηt∇ψw(d)
+
+(2)
+
+Whereas evaluating the gradient over the entire dataset is
+extremely expensive especially for large datasets such as Im-
+ageNet. To resolve this issue, Stochastic Gradient Descent
+(SGD) is proposed to approximate the entire dataset with a
+small randomly drawn sample dt. The upside of SGD is the
+eﬃciency of evaluating a small sample in the gradient calcu-
+lation; while the downside is abundant iterations caused by
+noisy gradients due to sampling. Let’s deﬁne a sample space
+Ω. If ψw(dt) is a random variable deﬁned on a probability
+space (Ω, Σ, P ), the new objective function is
+
+(cid:90)
+
+E{ψw(dt)} =
+
+min
+
+w
+
+ψw(dt)dP
+
+Ω
+
+the update rule changes to
+
+wt = wt−1 − ηt∇ψw(dt)
+
+and the following holds if dt is properly sampled,
+
+E{∇ψw(dt)} = ∇ψw(d)
+
+(3)
+
+(4)
+
+(5)
+
+2.2 Measure Learning Status by Loss
+
+A convolutional neural network is a function of Rn → R,
+the last layer of which is a softmax loss function calculating
+the cross entropy between the true prediction probabilities,
+p(x), and the estimated prediction probabilities ˆp(x). The
+cross entropy between p(x) and ˆp(x) of a batch at iteration
+t is as follows [7]:
+
+p(x) log ˆp(x)
+
+(6)
+
+(cid:88)
+
+x
+
+ψwt−1 (dt) = − nb(cid:88)
+(cid:88)
+
+ψwt−1 (dt) = − nb(cid:88)
+
+i
+
+i
+
+x
+
+If Weight Decay is applied, the loss function turns out to be:
+
+p(x) log ˆp(x) +
+
+λ (cid:107) w(cid:107)2
+
+2
+
+1
+2
+
+(7)
+
+where λ is a small constant (normally around 10−4). Hence
+the loss cannot be zero with Weight Decay. If a batch is fully
+trained, the loss of it tends to be a very small ﬂoat with a
+little ﬂuctuation through the rest of training progression.
+
+The loss produced by the cross entropy is a good indica-
+tor of model’s learning status on a batch. Given a batch
+dt, a small cross entropy ψwt−1 (dt) implies the estimated
+probabilities are close to the truth. Please note the cross
+entropy not only measures the possibility of correct predic-
+tions, but also the possibilites of making false predictions.
+In addition, the cross entropy yields reliable gradients to so-
+lidify the learning when the existing predictions are correct
+yet not sound. Hence we use the cross-entropy loss to assess
+the model’s learning status on a batch dt. For example, a
+large loss indicates the current model underlearns the batch;
+and the model needs to continue training on the batch. The
+term learning speed and the loss degeneration speed are used
+interchangeably in this paper.
+2.3 Factors Differentiate Batches in Learning
+
+Sampling Bias
+
+2.3.1
+First, Sampling Bias is a bias in which a sample is col-
+lected in such a way that some members of the intended
+population are less likely to be included than others. As-
+suming batches dt and dt+1 are the perfect representative
+of the entire dataset d, we expect losses of two consecutive
+
+(a) independent identically distributed (i.i.d) batches
+
+Figure 1: The loss traces of 10 i.i.d and single class batches in two controlled experiments. It is obvious that the losses of
+batches degrade at separate rates.
+
+(b) single class batches
+
+iterations follows
+
+ψwt−1 (dt) − ψwt (dt+1) (cid:62) 0
+
+given proper learning rates ηt and ηt+1. Whereas the equa-
+tion barely holds in practice. One explanation is Sampling
+Bias. For example, training a batch of cat images has lit-
+tle eﬀects on recognizing dogs. If prior iterations are over-
+trained by cat images, a subsequent batch of dogs will yield
+a large loss. Existing datasets such as Places [8], ImageNet
+[9] contain uneven number of images in each category, poten-
+tially resulting in the disproportional distribution of images
+in a batch. Insuﬃcient shuﬄing on the dataset is another
+factor contributing to Sampling Bias. The imprefect ran-
+domization results in the clusters of subpopulations within
+a batch.
+
+To justify Sampling Bias diﬀerentiates batches in learning,
+we synthesized 10 single-class batches each of which is ran-
+domly drawn from an exclusive image category in CIFAR-10
+(total categories are also 10). Therefore each batch repre-
+sents a unique CIFAR-10 category. Fig.1b demonstrates the
+loss traces of single-class batches using an exemplary convo-
+lutional neural network provided by Caﬀe. It is interesting
+to see 10 loss traces degrades independently; and each loss
+trace degrades at own speed. For example, batch 3, 4, 5,
+9 are obviously slower than others. Since these batches are
+fully saturated with Sampling Bias, we conclude Sampling
+Bias contributes to various learning dynamics on batches.
+
+Intrinsic Image Difference
+
+2.3.2
+Second, Intrinsic Image Diﬀerence also prompts distinct
+learning speed on batches. Intrinsic Image Diﬀerence indi-
+cates images from the same subpopulation are also diﬀerent
+at pixels. To substantiate Intrinsic Image Diﬀerence diﬀer-
+entiates batches in learning, we conduct another controlled
+experiment on 10 synthetic CIFAR-10 batches of size 1000;
+each batch contains 100 images from category 0, 100 im-
+
+ages from category 1, ... , 100 images from category 9. This
+sequence is ﬁxed for every batch so as to eliminate the poten-
+tial ordering inﬂuence. Therefore, we consider the batch is
+independent identically distributed. We adopt the same con-
+volutional neural network used in the Sampling Bias experi-
+ment. Fig.1a demonstrates the loss traces of aforementioned
+i.i.d batches. A strong variation of losses persists through
+the training progression, which indicates a strong correla-
+tion among batches. However, it is still clear the losses of
+i.i.d batches degrade at separate speed. Particularly the
+loss of batch 4 (green) is around 0.5 while batch 3 (purple)
+is around 1.3 at the epoch 400. Please note these batches
+are i.i.d; and they are supposed to be approximately iden-
+tical to the original dataset. Whereas the learning speed of
+each batches are still, though correlated, diﬀerent through
+the training progression. As the only diﬀerence among these
+batches are pixels, we conclude Intrinsic Image Diﬀerence is
+another factor that diﬀerentiates batches.
+2.3.3 Fixed Cycle Pseudo Random (FCPR) Sampling
+Finally the cyclic batch retrieval pattern of FCPR Sam-
+pling propagates the diﬀerence on batches through the train-
+ing progression resulting in the distinctive learning speed.
+SGD relies on a key operation, uniformly drawing a batch
+from the entire dataset. It is simple in math but nontrivial
+in the system implementation. ImageNet, ILSVRC2012 for
+example, contains 1431167 256×256 high resolution RGB
+images accounting for approximately 256 GB in total size.
+Uniformly drawing a random batch from the 256 GB bi-
+nary ﬁle involves signiﬁcant overhead such as TLB misses or
+random Disk I/O operations. In addition the drastic speed
+gap between Processor and Disk further deteriorates the is-
+sue. Existing deep learning frameworks, such as Caﬀe [10] or
+Torch [11], alleviates the issue by pre-permuting the entire
+dataset before slicing into batches:
+
+P ermute{d} → d = {d0, d1, ..., dn−1, dn} = Ω
+
+Epoch0500100015002000Loss00.511.5b0b1b2b3b4b5b6b7b8b9expected loss of a fully trained batch (0.001)Epoch02004006008001000120014001600Loss00.511.52b0b1b2b3b4b5b6b7b8b9expected loss of a fully trained batch (0.001)During the training, each iteration fetches a batch from the
+permuted dataset in a consecutive manner d0 → dn; and
+restart fetching from the beginning d0 after one epoch, cre-
+ating a ﬁxed circle batch retrieval pattern. We refer to this
+sampling method as Fixed Circle Pseudo Random Sampling.
+The random reads are subsequently reduced to sequential
+reads on Disk. Therefore FCPR Sampling is widely adopted
+by SGD.
+
+The problem of FCPR Sampling is the limited sample
+space and the recurring batch retrieval pattern. Let nd to
+be the size of a dataset and ndi to be the batch size. The
+size of sample space is nd/ ndi ; and the batch being assigned
+to iteration j is dt, where
+
+(cid:24) nd
+
+(cid:25)
+
+ndi
+
+t = j mod
+
+The model knows the upcoming batch at iteration t. And
+the batch will ﬂow into the model again at iteration t + 1 ·
+epoch, ..., t + n · epcoh. Experiments in Sampling Bias and
+Intrinsic Image Diﬀerence demonstrate training on a batch
+has limited correlative eﬀects on others. If the learning of
+a batch is dominated by the training on itself, the loss of
+this batch is predominately reduced at iteration t, t + 1 ∗
+epoch, t + 2 ∗ epoch, ... tending to degrade at own pace.
+2.4 Learning After Fully Trained
+
+There is little learning progress made on the batch once
+it’s fully trained. We identify a batch as fully trained if its
+loss remains around zero. The loss ﬂuctuates around a near-
+zero ﬂoat due to Weight Decay, the value of which depends
+on the size of a model (Eq.7). The ﬂuctuation is caused by
+the correlation eﬀects from the training on other batches.
+Fig.1a demonstrates the i.i.d batch 2 and 9 (yellow) is fully
+trained after the epoch 1600. Whereas other i.i.d batches,
+batch 7 (blue) for example, still requires additional training.
+All batches are fully trained after the 2100 epoch. Batches
+2 and 9 (yellow) always stay fully trained in epoch [1600,
+2100] indicating the same training intense is unnecessary on
+them. The single class batch in Fig.1b also demonstrate
+the same fact. Batch 8 (yellow) and 9 (orange) are fully
+trained around 1400 while batch 6 (dark blue), 7 (purple)
+and the rest are still under trained. Batch 6 and 7, in to-
+gether with batch 8 and 9, are subsequently fully trained
+around 1600 epoch. Although batch 8 and 9 exhibit high
+variation in epoch [1400 1600], it only takes a small portion
+of their total training time to counteract the correlation ef-
+fects. Therefore, most training on them are useless.
+
+3.
+
+INCONSISTENT SGD
+
+Some batches are fast to learn while some are slow. Thereby
+
+a new variant of SGD that rebalances training iterations
+with respect to a batch’s learning status will improve the
+computational eﬃciency. In this section, we present Incon-
+sistent Stochastic Gradient Descent that achieves this goal.
+The inconsistency is reﬂected by the inconsistent training
+eﬀort spent on each batches. The ﬁrst question is how to
+identify a slow or undertrained batch during the training.
+We adopt the control chart to monitor the training process.
+If the loss of a batch exceeds the upper control limit, it is
+identiﬁed as a undertrained batch at the moment. The sec-
+ond question is how to accelerate a undertrained batch. We
+solve a new optimization on the batch, the objective of which
+is to reduce the discrepancy between the undertrained batch
+
+Figure 2: Using statistical process control to supervise the
+training of AlexNet. The dots above the limit are under-
+trained batches; ISGD subsequently accelerate these batches
+by solving a new optimization on them.
+
+and others without drastic parameters changes. Finally, we
+study the eﬀects of ISGD batch size toward the convergence
+rate, parallelism and synchronization cost. We conclude the
+optimal ISGD batch size is machine dependent.
+
+3.1
+
+Identifying Undertrained Batch
+
+ISGD adopt concepts in Statistical Process Control to
+identify a undertrained batch. We assume the normal dis-
+tribution on the loss of each batch. The training is regarded
+as gradually reducing the mean of population tile the model
+converges. At any iteration t, ISGD keeps a loss queue track-
+ing the losses produced by iterations in [t − nb, t] where nb
+is the size of sample space (or the number of batches in
+an epoch). The queue calculates two descriptive statistics,
+which are the average loss ¯ψ and the standard deviation σψ.
+The calculation is as follows:
+
+ψwt−1−i (dt−i)
+
+ne(cid:88)
+ne(cid:88)
+[ψwt−1−i (dt−i) − ¯ψ]2
+
+i=1
+
+i=1
+
+¯ψ =
+
+1
+ne
+
+(cid:118)(cid:117)(cid:117)(cid:116) 1
+
+ne
+
+σψ =
+
+(8)
+
+(9)
+
+(10)
+
+limit = ¯ψ + 3σψ
+
+The 3σ control limit is a popular method to identify ab-
+normalities. Since the objective is to reduce losses, ISGD
+uses the upper control limit as a bar to diﬀerentiate a un-
+dertrained batch. Fig.2 demonstrates the loss distribution
+of batches per epoch. The red line is the control limit calcu-
+lated with Eq.10. Please note ISGD calculates the limit per
+iteration instead of epoch. If the loss of current iteration t
+
+ψwt−1 (dt) > limit
+
+dt is a undertrained batch.
+
+3.2
+
+Inconsistent Training on Batches
+
+The core concept of our algorithm is to accelerate a un-
+dertrained batch by solving a new optimization problem, the
+goal of which is to reduce the loss discrepancy between a un-
+dertrained batch and the average without drastic parameter
+changes. If a batch is undertrained, ISGD stays on the batch
+
+epoch5060708090100loss0.80.911.11.21.31.41.51.61.7meanlimitAlgorithm 1: Inconsistent Stochastic Gradient Descent
+
+Data: d , w
+Result: w(cid:48)
+
+1 begin
+2
+
+iter = 0
+n = ntraining
+nbatch
+ψ = 0
+σψ = 0
+limit = 0
+lossqueue ← ∅
+while not converge do
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+
+11
+
+12
+
+13
+
+14
+
+15
+
+16
+
+17
+
+18
+
+19
+
+20
+
+21
+
+22
+
+23
+
+24
+
+broadcast(w)
+[ψ,∇ψ] = F orwardBackward(dt)
+reduce(ψ)
+reduce(∇ψ)
+if iter < n then
+
+lossqueue.push(ψ)
+ψ = ψ·iter+ψ
+
+iter+1
+
+else
+
+l = lossqueue.dequeue()
+σψ = ST D(lossqueue)
+ψ = ψ·n−l+ψ
+limit = ψ + 3 ∗ σψ
+
+n
+
+w = w − η · ∇ψ
+if ψ > limit and iter > n then
+
+minimize Eq.11 with Alg.2
+
+iter++
+
+tile solving the following optimization problem:
+(cid:107) ψw(dt) − limit(cid:107)2
+(cid:107) w − wt−1(cid:107)2
+
+φw(dt) =
+
+min
+
+1
+2
+
++
+
+2
+
+2
+
+w
+
+1
+
+2nw
+
+(11)
+
+where nw is the number of weight parameters in the net-
+work. The ﬁrst term minimizes the diﬀerences between the
+loss of current undertrained batch dt and the control limit
+to accelerate the training on it. The second term is a conser-
+vative constraint avoiding drastic weight changes that may
+deviate the current model. Then the ﬁrst order derivative
+of Eq.11 is:
+
+∇φw(dt) =[ψw(dt) − limit]∇ψw(dt)
+
+w − wt−1
+
+nw
+
++
+
+(12)
+
+Please note limit, wt−1 and dt are constants. Solving Eq.11
+precisely incurs the signiﬁcant computation and communi-
+cation overhead, which oﬀsets the beneﬁt of it. In practice,
+we approximate the solution to the new subproblem, Eq.11,
+with early stopping. This avoids the huge searching time
+wasted on hovering around the optimal solution. A few it-
+erations, 5 for example, is good enough to achieve the accel-
+eration eﬀects. Thereby we recommend approximating the
+solution by early stopping.
+
+Alg.1 demonstrates the details of ISGD. Since the learning
+status of a batch is measured by the loss, ISGD identiﬁes a
+
+Algorithm 2: Solving the conservative subproblem to
+accelerate a undertrained batch
+Data: dt, w, wt−1, stop, limit
+Result: w
+
+1 begin
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+iter = 0
+while iter < stop and ψ > limit do
+[ψ,∇ψ] = F orwardBackward(dt)
+reduce(ψ)
+reduce(∇ψ)
+w = w− ζ{[ψw(dt)− limit]∇ψw(dt) + w−wt−1
+broadcast(w)
+iter++
+
+nw
+
+}
+
+batch as undertrained if the loss is larger than the control
+limit ψ + 3 ∗ σψ (Line 20). A stringent limit imposes a
+tight control triggering Eq.11 more frequently. This leads
+increasing computation latency spent on a batch. Therefore
+the stringent limit decreases distinctive batches ﬂowing into
+a model in a ﬁxed time, which is unwanted. A soft mar-
+gin, 2 or 3 σψ, is preferred in practice; and this margin is
+also widely applied in Statistical Process Control to detect
+abnormalities in a process. We recommend users adjusting
+the margin according to the speciﬁc problem. ISGD adopts
+a loss queue to dynamically track the losses in an epoch so
+that the average loss, ψ, is calculated in O(1) time (line 17).
+The loss queue tracks iterations in the last epoch; the length
+of it equals to the length one epoch. Therefore, calculating
+σψ is also in O(1) time (line 18). We do not initiate the
+conservative problem until after the ﬁrst epoch to build up
+a reliable limit (line 22 condition iter > n).
+
+Alg.2 outlines the procedures to solve the conservative
+subproblem on a undertrained batch. The conservative sub-
+problem intends to accelerate the undertrained batch with-
+out drastic weight changes; The update equation in line 7
+corresponds to Eq.12. [ψw(dt) − limit]∇ψw(dt) is the gra-
+2 (cid:107) ψw(dt) − limit(cid:107)2
+dient of 1
+2 to accelerate the training of
+(w − wt−1), is
+a undertrained batch; the second term,
+the gradient of (cid:107)w − wt−1(cid:107)2
+2 bounding signiﬁcant weight
+changes. The limit is the same upper control threshold in
+Alg.1. stop speciﬁes the maximal approximate iterations,
+which is usually around 5; stop also prevents the excessive
+training improving computation eﬃciency. ζ is a another
+small constant learning rate.
+
+1
+nw
+
+ISGD also intends to scale on the distributed or multi-
+GPU system using the data parallelism scheme. Let’s as-
+sume there are n computing nodes, each of which is a GPU
+or a server in a cluster. Each node contains a model dupli-
+cate. A node fetches an independent segment of the original
+batch referred to as the subbatch. Subsequently all nodes
+simultaneously calculate sub-gradients and sub-losses with
+the assigned sub-batches. Once the calculation is done, the
+algorithm reduces sub-gradients and sub-losses (Line 10-12)
+to a master node so as to acquire a global gradient and loss.
+Then the master node updates network weights (line 21) and
+broadcasts the latest weights to each node. Therefore, ISGD
+separates the algorithm from the system conﬁgurations by
+using MPI style broadcast and reduce. Since MPI is an in-
+dustrial and academia standard, ISGD is highly portable on
+various heterogeneous distributed system.
+
+3.3 Guide Learning Rate By Loss
+
+Training a Neural Network needs to reduce the learning
+rate to ensure convergences [6]. SGD decreases the learning
+rate based on the training iterations as the time spent on
+an iteration is identical. Whereas iterations of ISGD is in-
+consistent requiring a new method to decrease the learning
+rate. ISGD guides the learning rate with the average loss of
+entire dataset. The loss is a better indicator than iterations
+as it directly reﬂects the training status of the model. Cal-
+culating the average loss of a dataset is expensive. Since the
+average loss in Eq.8 is from the lastest scan of dataset (or
+losses in an epoch), it is approximately same to the average
+loss of dataset at any iteration t. Hence we decrement the
+learning rate with respect to this average loss. For example,
+we used the average loss 2 as a learning rate turning point in
+training AlexNet. Please note the average loss may ﬂuctuate
+around 2. Our experiments indicate a irreversible learning
+rate policy improves the performance.
+
+3.4
+
+ISGD Batch Size
+
+Batch size is the key factor to the parallelism of ISGD.
+As operations on a batch is independent, scaling ISGD on
+systems with massive computing power prefers a suﬃciently
+large batch. In this section, we present the optimal batch
+size is machine dependent. First, we demonstrates a large
+batch converges faster than a small batch using iterations
+as the metric. Although increasing the batch size incurs the
+additional computation, it does not necessarily cost more
+time per iteration. This is contingent upon system conﬁg-
+urations. Since ISGD is a variant of SGD, we assume both
+have the same convergence properties. Then we analyze the
+convergence rate with respect to time by incorporating two
+system factors network and image processing speed. The re-
+sult indicates neither an extremely small nor extremely large
+batch is optimal to a system of the ﬁxed processing power
+and network latency. The optimal batch size is a tradeoﬀ
+between the batch exploitation and exploration.
+
+3.4.1 Effects of Batch Size
+The beneﬁt of using a sample to approximate the pop-
+ulation is the signiﬁcantly less computation per iteration;
+while the downside is the noisy gradient. Please note the
+convergence rate in this section is measured by iterations.
+To analyze the dynamics inside an iteration, we need deﬁne
+a Lyapunov process
+
+ht =(cid:107) wt − w
+
+∗ (cid:107)2
+
+2
+
+(13)
+
+that measures the distance between the current solution wt
+and the optimal solution w∗. ht is a random variable. Hence
+the convergence rate of SGD can be derived using Eq.4 and
+Eq.13:
+
+ht+1 − ht = −2ηt(wt − w
+
+∗
+
+)∇ψw(dt) + η2
+
+t (∇ψw(dt))2 (14)
+
+dt is a random sample of d in sample space Ω; and ht+1− ht
+is a random variable that depends on the drawn sample dt
+and learning rate ηt. Therefore the expectation of Eq.14
+yields the average convergence rate at the precision of an
+
+iteration
+
+E{ht+1 − ht} = −2ηt(wt − w
++η2
+= −2ηt(wt − w
+
+)E{∇ψw(dt)}
+∗
+t E{(∇ψw(dt))2}
+)E{∇ψw(dt)}
+∗
+t (E{∇ψw(dt)})2 + VAR{∇ψw(dt)}
+
++η2
+
+(15)
+
+To simplify the analysis of Eq.15, let’s assume convexity on
+ψw(dt) implying that
+
+ht+1 − ht < 0
+
+(16)
+
+− (wt − w
+
+∗
+
+)E{∇ψw(dt)} < 0.
+
+(17)
+Our goal is to minimize E{ht+1 − ht} so that each iteration
+reduces the discrepancy between the current step and the
+optimal. Statistically E{∇ψw(dt)} is the unbiased estimate
+of E{∇ψw(dt)} leaving VAR{∇ψw(dt)} being the key to
+improve the convergence rate.
+First, increasing the batch size reduces VAR{∇ψw(dt)}.
+Bienayme formula [5] indicates VAR{∇ψw(dt)} is inverse
+proportional to the batch size. A large batch is less suscep-
+tible to be the insuﬃcient representation of entire dataset.
+According to Law of large numbers, increasing batch size
+improves the estimation of E{∇ψw}.
+
+Second, enlarging batch size expedites the training with a
+better learning rate. The learning rate is a critical factor to
+decide the convergence speed. The gradient essentially pro-
+vides the descent direction; and the learning rate provides
+the step length in that direction. Whereas the learning rate
+ηt needs to satisfy the following condition [6] due to the high
+sampling variance in an insuﬃciently representative batch:
+
+n(cid:88)
+
+t < ∞
+η2
+
+(18)
+
+i=1
+
+As batch size increases, the improving VAR{∇ψw(dt)} leads
+Eq.18 less strict enabling us to use a better learning rate.
+3.4.2 Batch Size is Machine Dependent
+A unwieldy large batch size, however, is unwanted under
+the limited computing budget. Existing convergence rate
+analysis use iterations as the performance metric. The prob-
+lem is an iterationwise faster algorithm may cost more time
+than the slower counterpart. Hence it is practical if we ex-
+tend the analysis to be time based.
+
+Let’s assume the maximal processing capability of a sys-
+tem is C1 images per second, and the network cost for broad-
+cast and all-reduce is C2 seconds. Network cost is a constant
+because it is model dependent instead of batch size. Then a
+gradient update (not iteration) essentially costs:
+
+titer = tcomp + tcomm
+
+=
+
+nb
+C1
+
++ C2
+
+(19)
+
+where nb is the batch size. Given ﬁxed time t, the number
+of gradient updates can be computed on this system is
+
+T =
+
+t
+
+titer
+
+After T gradient updates, the loss is bounded by [15]
+
+ψ (cid:54) 1√
+
+nbT
+
++
+
+1
+T
+
+(20)
+
+(21)
+
+Table 1: The dataset and networks used in experiments.
+
+dataset
+MNIST
+
+network
+LeNet
+
+CIFAR-10 Caﬀe-Quick
+ImageNet
+
+AlexNet
+
+weight size
+1.72 MB
+0.58 MB
+243.86 MB
+
+system by replacing the reduce and broadcast operations.
+Caﬀe adopts the tree-reduction [12] to implement the reduce
+and broadcast operation. This implementation needs log(n)
+communication steps, where n is the computing nodes. The
+algorithm only works well with a few GPUs; however, future
+eﬀort to implement eﬃcient reduce and broadcast operations
+is necessary.
+
+5. EXPERIMENTS
+
+In this section, we demonstrate the performance of ISGD
+against SGD using several convolutional neural networks on
+a variety of datasets including MNIST, CIFAR-10 and Im-
+ageNet. First, we present ISGD consistently outperforms
+SGD under various scenarios. Second, we demonstrate the
+scalability of ISGD at diﬀerent batches. In particular, ISGD
+gets AlexNet trained to 56.5% top1 accuracy in 11.5 hours
+with 4 TITAN X GPU, 15.35% faster than the NVIDIA’s
+claim.
+5.1 Data Sets and Networks Architectures
+
+We benchmark on 3 widely recognized image datasets:
+MNIST [13], CIFAR-10 [14], and ImageNet [9]. MNIST has
+60000 handwritten digits ranging from 0 to 9. CIFAR-10
+has 60000 32×32 RGB images categorized in 10 classes. Im-
+ageNet, ILSVRC 2012, has 1431167 256 ×256 RGB images
+depicting 1000 object categories. We adopt LeNet, Caﬀe
+CIFAR-10 Quick, and AlexNet to train on MNIST, CIFAR-
+10, and ImageNet respectively. The complexity of networks
+is proportional to the size of datasets. Therefore, our bench-
+marks cover the small, middle, and large scale CNN train-
+ing. Table 1 presents network details for each datasets, the
+architecture of which is available in Caﬀe 1.
+5.2 Performance Evaluation
+
+The experimental setups of ISGD and SGD are ensured to
+be same. The learning rate for MNIST and CIFAR are con-
+stant 0.01 and 0.001 during the training. While the learning
+rate for ImageNet has 3 possibilities, lr = 0.015 when Aver-
+age Loss (AL) in [2.0, +∞]; lr = 0.0015 when AL in [1.2, 2.0);
+and lr = 0.00015 when AL in [0, 1.2). The batch size is same
+for both ISGD and SGD in the 3 test cases. Particularly
+the batch size for ImageNet is 1000. Since an iteration of
+ISGD is inconsistent, we conduct testing every other 2, 6,
+900 seconds (only count training time, excluding test time)
+on MNIST, CIFAR and ImageNet respectively. Besides, the
+machine was exclusively owned by us during the benchmark
+to ensure the fairness. The bechmark results is the average
+of 3 runs to eliminate other random factors. Therefore, this
+is a single factor experiment between ISGD v.s SGD.
+
+ISGD consistently outperforms SGD in all test cases. The
+complexity of recognition tasks on these datasets are MNIST
+< CIFAR < ImageNet. In the ImageNet test case, ISGD
+demonstrates superior convergence advantages to SGD. For
+
+1https://github.com/BVLC/caﬀe
+
+Figure 3: Expected training time calculated by Eq.22 at
+diﬀerent batch sizes.
+
+Figure 4: The data parallelism scheme in Caﬀe
+
+Let’s assume equality in Eq.21 and substitute Eq.20 into it.
+Subsequently we get the relationship among loss, ψ, time t
+and system conﬁgurations:
+
+(cid:114) nb + C1C2
+
+nbC1
+
+√
+t
+
+ψt =
+
++
+
+nb
+C1
+
++ C2
+
+(22)
+
+Fig.3 presents the training time calculated by Eq.22 with
+respect to diﬀerent batch sizes, nb ∈ (0, 3000). By ﬁxing ψ,
+the equation approximates the total training time under dif-
+ferent batches. Each line represents a system conﬁguration.
+We assume the ﬁrst system processes up to 2000 images per
+second, C1, and the network cost C2 is 0.3 seconds; the sec-
+ond system processes up to 1000 images per second having
+the same network cost. The ﬁgure demonstrates the opti-
+mal batch size of the ﬁrst and second system are 500 and
+1000 respectively. In this case, a faster system needs a large
+batch conforming to our proposition. Then performance of
+both systems deteriorate afterwards. The ﬁgure clearly in-
+dicates the optimal batch size is contingent upon the system
+conﬁguration.
+
+4.
+
+IMPLEMENTATIONS
+
+We implement ISGD in Caﬀe [10], which already provides
+the data parallelism on multiGPUs. Fig.4 demonstrates the
+data parallelization scheme of Caﬀe. It divides a batch into
+n even sub-batches, where n is the GPU count. Each GPU
+has a model duplicate; and a GPU fetches a sub-batch to
+compute a sub-gradient and a sub-loss by doing an inde-
+pendent forward and backward propagation. Subsequently
+GPUs reduce sub-gradients and sub-losses to a global gra-
+dient and loss that tie to the original batch. A barrier is
+placed after the reduce to ensure the mathematical rigor-
+ousness. Then the master GPU updates the weight vector;
+and broadcast the latest weight to others. We can also easily
+migrate the algorithm to work for distributed heterogeneous
+
+Batch050010001500200025003000Normalized Time0.040.060.080.1C1 = 2000, C2 = 0.3C1 = 1000, C2 = 0.3(a) MNIST Test Accuracy
+
+(b) CIFAR Test Accuracy
+
+(c) ImageNet Top 1 Accuracy
+
+(d) MNIST Train Error
+
+(e) CIFAR Train Error
+
+(f) ImageNet Top 5 Accuracy
+
+Figure 5: The validation accuracy of LeNet, Caﬀe-Quick, AlexNet on MNIST, CIFAR and ImageNet. ISGD consistently
+outperforms SGD. The detailed training setup is available in the log ﬁles at https://github.com/linnanwang/ISGD logs.
+
+(a) MNIST
+
+(b) CIFAR
+
+(c) ImageNet
+
+Figure 6: The eﬀect of batch size toward the total training time.
+Initially the scalability increases along with the batch
+size due to the enhancing parallelism; then it degrades due to the decreasing number of gradient updates. The single
+GPU training is using the exemplary model provided in Caﬀe. For the conﬁgurations of multiGPU training, please refer to
+https://github.com/linnanwang/ISGD logs.
+
+example, SGD takes 23.75 hours to reach the 80.9% top 5
+accuracy (Please note the reported highest top 1 and 5 ac-
+curacy of AlexNet in Caﬀe is 56.9% and 80.01% [16]); while
+ISGD only takes 18.75 hours demonstrating 21.05% perfor-
+mance gain. In the CIFAR test case, the validation accuracy
+of ISGD is consistently higher than SGD. The expected top
+accuracy of CIFAR-Quick is 75%. After 392 seconds, the
+test accuracy of SGD is steadily above 75%. The number
+for ISGD is 287 seconds demonstrating 26.79% performance
+gain. Although ISGD is slightly faster than SGD in the
+MNIST test case, ISGD tends to be more robust than SGD.
+Particularly SGD has a dent around the 25th testing.
+
+ISGD is more eﬃcient than SGD. To substantiate this
+point, we use the training dataset to train and test. Since
+the training set of ImageNet 256 GB is too large to be tested,
+we conduct the experiments on MNIST and CIFAR. Both
+Fig.5d and Fig.5e demonstrate ISGD yields a lower train-
+ing error than SGD in a ﬁxed time, which also explains
+the higher accuracy of ISGD. The advantages of ISGD arise
+from the inconsistent training, which spares more training
+
+eﬀort on undertrained batches. Whereas SGD treats a un-
+dertrained batch as same as those fully trained resulting in
+the poor load balancing in training.
+
+5.3 Scalability W.R.T Batch Size
+
+The batch size is the predominant factor for the ISGD
+scalability. We claim that the optimal batch size is system
+dependent; and it is neither too large nor too small. We
+conduct the experiments on the same machine used in the
+performance benchmark. Figure 6 demonstrates the eﬀect of
+batch size to the scalability on the datasets MNIST, CIFAR
+and ImageNet.
+In these experiments, we also empirically
+increase the learning rate along with the batch size. The
+ﬁgures reﬂect the following conclusions. First, a suﬃcient
+large batch is necessary to the multiGPU training. The sin-
+gle GPU training only has tcomp; while the multiGPU train-
+ing has the additional term tcomm for synchronization. The
+batch size of single GPU training is small to frequently con-
+duct gradient updates. If keep using such a small batch size
+in multiGPU training, tcomm and the poor device satura-
+
+Testing #051015202530Validation Accuracy0.970.9750.980.9850.990.995SGDISGDTesting #01020304050607080Validation Accuracy0.720.730.740.750.760.770.78SGDISGDTesting #020406080Top 1 Accuracy0.40.420.440.460.480.50.520.540.560.58SGDISGDTesting #100101Training Error10-410-310-210-1SGDISGDTesting #100101102Training Error10-210-1SGDISGDTesting #020406080Top 5 Accuracy0.70.720.740.760.780.80.82SGDISGDSeconds050100150200Validation Accuracy0.960.9650.970.9750.980.9850.99b64       1GPUb1000   4GPUb2000   4GPUb3000   4GPUideal speedupSeconds0100200300400500Validation Accuracy0.70.710.720.730.740.750.76b100     1GPUb200     4GPUb500     4GPUb2000   4GPUb10000 4GPUideal speedupHours051015202530354045Top 1 Accuracy0.40.420.440.460.480.50.520.540.560.580.6b256   1GPUb256   4GPUb1000 4GPUb1536 4GPUb3400 4GPUideal speedup(a) MNIST
+
+(b) CIFAR
+
+(c) ImageNet
+
+Figure 7: The GPU saturation at diﬀerent batch sizes on 2 TITAN X using Caﬀe. The latency is the average time for
+processing 1000 images; then we normalize it to [0,1]. Please note the latency includes both tcomp and tcomm.
+
+Figure 8: The GPU occupancy at diﬀerent batch sizes on
+4 TITAN X using Caﬀe. The percentage is calculated by
+tcomm/(tcomm + tcomp).
+
+tion may lead the worse performance than the single GPU
+training. This is most obvious on Fig.6c due to the size
+of AlexNet. Secondly, a unwieldy batch size also decreases
+the scalability. Increasing the batch size oﬀsets its beneﬁt
+if tcomp gains faster than the beneﬁt brought forth by the
+convergence rate. For example, assuming a model needs 20
+iteration to converge at the batch size of 100. For each it-
+eration, it takes 1 second. Now we increase the batch size
+to 200; and it takes 18 iterations to converge. However, the
+100 batch case only takes 20 seconds while the 200 batch
+case needs 2*18 (assuming the latency of an iteration is pro-
+portional to the batch size). Fig.6a, Fig.6b and Fig.6c also
+demonstrate an extremely large batch needs more time to
+converge than the smaller bathes. Therefore, our claim is
+valid.
+5.4 System Performance and Batch Size
+
+tcomm and tcomp are the metrics to measure the system
+performance. Eq.19 indicates an iteration consists of tcomp
+and tcomm. tcomp includes a forward and backward propaga-
+tion and a weight update while tcomm includes a reduce and
+a broadcast. tcomp is contigent upon the network architec-
+ture, the batch size and the system processing power. tcomm
+depends on the weight vector and network latency. tcomm
+and tcomp enable us to independently evaluate the overhead
+of communication and computation, which provides useful
+information to the system occupancy.
+
+Fig.8 demonstrates increasing batch size improves the sys-
+tem occupancy. If the size of network is small, tcomp dom-
+inates. Thereby the synchronization cost of Caﬀe-Quick
+(0.58 MB) always stays low. Enlarging the network also in-
+creases tcomm. It is undesired to stay a small batch as tcomp
+is small in terms of tcomm. At the batch size of 500, the syn-
+chronization cost of LeNet (1.72MB) and AlexNet(243.86
+MB) accounts for 23% and 45% total execution time; while
+the number is 10% and 16% at batch size of 3000. Increasing
+the batch size improves tcomp to oﬀset tcomm. The trend is
+more obvious on bigger networks.
+
+Fig.7 demonstrates the batch size is also important to the
+saturation of computing units. In this experiment set, we
+measure the average latency of processing 1000 images in
+MNIST, CIFAR, and ImageNet on 2 TITAN-X at diﬀerent
+batch size. An image in MNIST, CIFAR, and ImageNet is
+the size of 32× 32, 3× 32× 32 and 3× 256× 256 respectively.
+Therefore the required images to fully saturate 4 GPUs is
+M N IST > CIF AR > ImageN et. Fig.7 indicates a GPU
+requires 500, 300 and 150 batch size to achieve full saturation
+on MNIST, CIFAR and ImageNet. And the numbers for
+2 GPUs are 2500, 600, and 500. Please note the latency
+includes both tcomm and tcomp. Therefore the batch size for
+2 GPUs is higher than 2× the single GPU case. These results
+substantiate an appropriate large batch size is necessary to
+fully saturate computing devices.
+
+6. RELATED WORK
+
+In terms of algorithm, a variety of approches has been dis-
+cussed to accelerate CNN training. Batch normalization [17]
+is a method to reduce the internal covariance shift within a
+network. This method has proved to be an eﬀective ap-
+proach to alleviate the changes in the distribution of net-
+work activations, which is an important factor to increase
+the convergence speed [18]. As discussed in the section 3.4,
+reducing the gradient variance is critical to the convergence
+speed of SGD. Peilin [19] and Chong [20] adopt the method
+of importance sampling and control variate, widely used in
+monte carol simulation, to reduce the gradient variance re-
+spectively. Rie [21] also proposed an explicit variance reduc-
+tion method for SGD referred to as SVRG.
+
+Both datasets and networks are growing bigger and bigger.
+This trend has initiated active research in parallelizing the
+DNN training on the distributed or multiGPU system [22]
+[23] [24]. Tensor Flow [25], MALT [27], and Petuum [26] are
+popular distributed ML frameworks. In section 5.3, we have
+presented nontrivial synchronization cost involved in train-
+ing. These frameworks address the issue by Asynchronous
+SGD (ASGD) [28], which overlaps the gradient computa-
+tion with the communication by relaxing the math of SGD.
+Another approach to address the synchronization problem
+while ensuring the mathematic rigorousness is using a large
+batch size. However, an increase in batch size decreases the
+convergence rate of SGD. Mu propose solving a conserva-
+tively regularized objective function on within each batch to
+counteract the decreasing convergence rate [29].
+
+ISGD is fundamentally diﬀerent from existing approaches
+by considering the learning dynamics on batches. We have
+demonstrated Sampling Bias, Intrinsic Images and FCPR
+Sampling result in distintive learning speeds on batches.
+Whereas SGD fails to consider these factors. ISGD rebal-
+
+Batch Size050010001500200025003000Norm Latency0.150.20.250.31 GPU2 GPUBatch Size050010001500200025003000Norm Latency0.20.30.40.51 GPU2 GPUBatch Size050010001500200025003000Norm Latency0.20.30.40.51 GPU2 GPUBatch Size50010001500200025003000Synchronization Cost (%)00.10.20.30.40.5ImageNet AlexNetCIFAR Caffe-QuickMNIST LeNetances the training eﬀort on batches with respect to their
+learning statuses. Therefore it is more eﬃcient than SGD.
+
+environment for machine learning.” BigLearn, NIPS
+Workshop. No. EPFL-CONF-192376. 2011.
+
+7. CONCLUSIONS
+
+In this paper, we consider the unbiased treatment of batches
+
+involved in SGD as a problem. Factors such as Sampling
+Bias, Intrinsic Image Diﬀerence and FCPR sampling dif-
+ferentiate batches in training. Such diﬀerences propagate
+iteration by iteration rendering diﬀerent learning speeds on
+batches. Whereas SGD fails to consider such learning vari-
+ation by spending identical training eﬀort on each batch.
+Speciﬁcally it trains every batch once in an epoch. Then we
+propose Inconsistent SGD to rebalance the training eﬀort
+according to the learning status of batches.
+ISGD adopts
+techniques in Stochastic Process Control to identify a un-
+dertrained batch in the process of training.
+If a batch is
+under trained, ISGD solves a subproblem including a chase
+logic and a conservative constraint to accelerate the train-
+ing on this particular batch without drastic model parame-
+ter changes. Experiments on a variety dataset demonstrate
+ISGD converges faster than SGD.
+
+8. REFERENCES
+
+[1] Gimpel, Kevin, Dipanjan Das, and Noah A. Smith.
+
+”Distributed asynchronous online learning for natural
+language processing.” Proceedings of the Fourteenth
+Conference on Computational Natural Language
+Learning. Association for Computational Linguistics,
+2010.
+
+[2] Donahue, Jeﬀ, et al. ”Long-term recurrent
+
+convolutional networks for visual recognition and
+description.” arXiv preprint arXiv:1411.4389 (2014).
+[3] Sarwar, Badrul M., et al. ”Recommender systems for
+
+large-scale e-commerce: Scalable neighborhood
+formation using clustering.” Proceedings of the ﬁfth
+international conference on computer and
+information technology. Vol. 1. 2002.
+
+[4] Byrd, Richard H., et al. ”Sample size selection in
+
+optimization methods for machine learning.”
+Mathematical programming 134.1 (2012): 127-155.
+
+[5] Lo ˜A´lve, M. ”Probability theory. 1977.” (1977).
+[6] Bottou, L ˜Al’on. ”Online learning and stochastic
+
+approximations.” On-line learning in neural networks
+17.9 (1998): 25.
+
+[7] De Boer, Pieter-Tjerk, et al. ”A tutorial on the
+
+cross-entropy method.” Annals of operations research
+134.1 (2005): 19-67.
+
+[8] Zhou, Bolei, et al. ”Learning deep features for scene
+
+recognition using places database.” Advances in
+Neural Information Processing Systems. 2014.
+
+[9] Deng, Jia, et al. ”Imagenet: A large-scale hierarchical
+
+image database.” Computer Vision and Pattern
+Recognition, 2009. CVPR 2009. IEEE Conference on.
+IEEE, 2009.
+
+[10] Jia, Yangqing, et al. ”Caﬀe: Convolutional
+
+architecture for fast feature embedding.” Proceedings
+of the ACM International Conference on Multimedia.
+ACM, 2014.
+
+[11] Collobert, Ronan, Koray Kavukcuoglu, and
+Cl ˜Al’ment Farabet. ”Torch7: A matlab-like
+
+[12] Sanders, Peter, Jochen Speck, and Jesper Larsson
+Tr ˜Ad’ﬀ. ”Two-tree algorithms for full bandwidth
+broadcast, reduction and scan.” Parallel Computing
+35.12 (2009): 581-594.
+
+[13] LeCun, Yann, et al. ”Gradient-based learning applied
+
+to document recognition.” Proceedings of the IEEE
+86.11 (1998): 2278-2324.
+
+[14] Krizhevsky, Alex, and Geoﬀrey Hinton. ”Learning
+
+multiple layers of features from tiny images.” (2009).
+
+[15] Dekel, Ofer, et al. ”Optimal distributed online
+prediction using mini-batches.” The Journal of
+Machine Learning Research 13.1 (2012): 165-202.
+
+[16] https://github.com/BVLC/caﬀe/wiki/Models-
+
+accuracy-on-ImageNet-2012-val
+
+[17] Ioﬀe, Sergey, and Christian Szegedy. ”Batch
+
+Normalization: Accelerating Deep Network Training
+by Reducing Internal Covariate Shift.” Proceedings of
+The 32nd International Conference on Machine
+Learning. 2015.
+
+[18] Orr, Genevieve B., and Klaus-Robert M ˜Aijller, eds.
+Neural networks: tricks of the trade. Springer, 2003.
+
+[19] Zhao, Peilin, and Tong Zhang. ”Stochastic
+
+Optimization with Importance Sampling for
+Regularized Loss Minimization.” Proceedings of the
+32nd International Conference on Machine Learning
+(ICML-15). 2015.
+
+[20] Wang, Chong, et al. ”Variance reduction for
+
+stochastic gradient optimization.” Advances in
+Neural Information Processing Systems. 2013.
+[21] Johnson, Rie, and Tong Zhang. ”Accelerating
+
+stochastic gradient descent using predictive variance
+reduction.” Advances in Neural Information
+Processing Systems. 2013.
+
+[22] Wang, Linnan, et al. ”BLASX: A High Performance
+
+Level-3 BLAS Library for Heterogeneous Multi-GPU
+Computing.” arXiv preprint arXiv:1510.05041 (2015).
+
+[23] Wang, Linnan, et al. ”Large Scale Artiﬁcial Neural
+
+Network Training Using Multi-GPUs.”
+Supercomputing, (2015).
+
+[24] Coates, Adam, et al. ”Deep learning with COTS
+
+HPC systems.” Proceedings of the 30th international
+conference on machine learning. 2013.
+
+[25] Abadi, Mart ¨A´sn, et al. ”TensorFlow: Large-scale
+
+machine learning on heterogeneous systems, 2015.”
+Software available from tensorﬂow. org.
+
+[26] Xing, Eric P., et al. ”Petuum: a new platform for
+
+distributed machine learning on big data.” Big Data,
+IEEE Transactions on 1.2 (2015): 49-67.
+
+[27] Li, Hao, et al. ”Malt: distributed data-parallelism for
+
+existing ml applications.” Proceedings of the Tenth
+European Conference on Computer Systems. ACM,
+2015.
+
+[28] Dean, Jeﬀrey, et al. ”Large scale distributed deep
+
+networks.” Advances in Neural Information
+Processing Systems. 2012.
+
+[29] Li, Mu, et al. ”Eﬃcient mini-batch training for
+
+stochastic optimization.” Proceedings of the 20th
+ACM SIGKDD international conference on
+Knowledge discovery and data mining. ACM, 2014.
+
+

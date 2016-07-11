@@ -1,0 +1,3708 @@
+Diﬀerentially Private Policy Evaluation∗
+
+Borja Balle1, Maziar Gomrokchi2, and Doina Precup2
+
+1Department of Mathematics and Statistics, Lancaster University, UK
+
+2School of Computer Science, McGill University, Canada
+
+6
+1
+0
+2
+
+ 
+r
+a
+
+M
+7
+
+ 
+
+ 
+ 
+]
+
+G
+L
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+0
+1
+0
+2
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+X
+r
+a
+
+Abstract
+
+We present the ﬁrst diﬀerentially private algorithms for reinforcement learning, which apply
+to the task of evaluating a ﬁxed policy. We establish two approaches for achieving diﬀerential
+privacy, provide a theoretical analysis of the privacy and utility of the two algorithms, and show
+promising results on simple empirical examples.
+
+1 Introduction
+
+Learning how to make decisions under uncertainty is becoming paramount in many practical ap-
+plications, such as medical treatment design, energy management, adaptive user interfaces, rec-
+ommender systems etc. Reinforcement learning [Sutton and Barto, 1998] provides a variety of
+algorithms capable of handling such tasks. However, in many practical applications, aside from
+obtaining good predictive performance, one might also require that the data used to learn the
+predictor be kept conﬁdential. This is especially true in medical applications, where patient conﬁ-
+dentiality is very important, and in other applications which are user-centric (such as recommender
+systems). Diﬀerential privacy (DP) [Dwork, 2006] is a very active research area, originating from
+cryptography, but which has now been embraced by the machine learning community. DP is a
+formal model of privacy used to design mechanisms that reduce the amount of information leaked
+by the result of queries to a database containing sensitive information about multiple users [Dwork,
+2006]. Many supervised learning algorithms have diﬀerentially private versions, including logis-
+tic regression [Chaudhuri and Monteleoni, 2009, Chaudhuri et al., 2011], support vector machines
+[Chaudhuri et al., 2011, Rubinstein et al., 2012, Jain and Thakurta, 2013], and the lasso [Thakurta
+and Smith, 2013]. However, diﬀerential privacy for reinforcement learning tasks has not been tack-
+led yet, except for the simpler case of bandit problems [Smith and Thakurta, 2013, Mishra and
+Thakurta, 2015, Tossou and Dimitrakakis, 2016].
+
+In this paper, we tackle diﬀerential privacy for reinforcement learning algorithms for the full
+Markov Decision Process (MDP) setting. We develop diﬀerentially private algorithms for the prob-
+lem of policy evaluation, in which a given way of behaving has to be evaluated quantitatively. We
+start with the batch, ﬁrst-visit Monte Carlo approach to policy evaluation, which is well understood
+and closest to regression algorithms, and provide two diﬀerentially private versions, which come
+with formal privacy proofs as well as guarantees on the quality of the solution obtained. Both
+
+∗Corresponding e-mail: b.deballepigem@lancaster.ac.uk
+
+1
+
+algorithms work by injecting Gaussian noise into the parameters vector for the value functions, but
+they diﬀer in the deﬁnition of the noise amount. Our privacy analysis techniques are related to
+previous output perturbation for empirical risk minimization (ERM), but there are some domain
+speciﬁc challenges that need to be addressed. Our utility analysis identiﬁes parameters of the MDP
+that control how easy it is to maintain privacy in each case. The theoretical utility analysis, as well
+as some illustrative experiments, show that the accuracy of the private algorithms does not suﬀer
+(compared to usual Monte Carlo) when the data set is large.
+
+The rest of the paper is organized as follows. In Sec. 2 we provide background notation and
+results on diﬀerential privacy and Monte Carlo methods for policy evaluation. Sec. 3 presents our
+proposed algorithms. The privacy analysis and the utility analysis are outlined in Sec. 4 and Sec. 5
+respectively. Detailed proofs for both of these sections are given in the Supplementary Material. In
+Sec. 6 we provide empirical illustrations of the scaling behaviour of the proposal algorithms, using
+synthetic MDPs, which try to mimic characteristics of real applications. Finally, we conclude in
+Sec. 7 with a discussion of related work and avenues for future work.
+
+2 Background
+
+In this section we provide background on diﬀerential privacy and policy evaluation from Monte
+Carlo estimates.
+
+2.1 Diﬀerential Privacy
+
+DP takes a user-centric approach, by providing privacy guarantees based on the diﬀerence of the
+outputs of a learning algorithm trained on two databases diﬀering in a single user. The central goal
+is to bound the loss in privacy that a user can suﬀer when the result of an analysis on a database
+with her data is made public. This can incentivize users to participate in studies using sensitive
+data, e.g. mining of medical records.
+In the context of machine learning, diﬀerentially private
+algorithms are useful because they allow learning models in such a way that their parameters do
+not reveal information about the training data [McSherry and Talwar, 2007]. For example, one
+can think of using historical medical records to learn prognostic and diagnostic models which can
+then be shared between multiple health service providers without compromising the privacy of the
+patients whose data was used to train the model.
+To formalize the above discussion, let X be an input space and Y an output space. Suppose A is
+a randomized algorithm that takes as input a tuple X = (x1, . . . , xm) of elements from X for some
+m ≥ 1 and outputs a (random) element A(X) of Y. We interpret X ∈ X m as a dataset containing
+data from m individuals and deﬁne its neighbouring datasets as those that diﬀer from X in their
+last1 element: X(cid:48) = (x1, . . . , xm−1, x(cid:48)
+m. We denote this (symmetric) relation by
+X (cid:39) X(cid:48). A is (ε, δ)-diﬀerentially private for some ε, δ > 0 if for every m ≥ 1, every pair of datasets
+X, X(cid:48) ∈ X m, X (cid:39) X(cid:48), and every measurable set Ω ⊆ Y we have
+
+m) with xm (cid:54)= x(cid:48)
+
+P[A(X) ∈ Ω] ≤ eεP[A(X(cid:48)) ∈ Ω] + δ .
+
+(1)
+
+1Formally, we should deﬁne neighbouring datasets as those which diﬀer in one element, not necessarily the last.
+But we are implicitly assuming here that the order of the elements in X does not aﬀect the distribution of A(X),
+so we can assume without loss of generality that the diﬀerence between neighbouring datasets is always in the last
+element.
+
+2
+
+This deﬁnition means that the distribution over possible outputs of A on inputs X and X(cid:48) is very
+similar, so revealing this output leaks almost no information on whether xm or x(cid:48)
+m was in the
+dataset.
+A simple way to design a DP algorithm for a given function f : X m → Y is the output per-
+turbation mechanism, which releases A(X) = f (X) + η, where η is noise sampled from a properly
+calibrated distribution. For real outputs Y = Rd, the Laplace (resp. Gaussian) mechanism (see e.g.
+Dwork and Roth [2014]) samples each component of the noise η = (η1, . . . , ηd) i.i.d. from a Laplace
+(resp. Gaussian) distribution with standard deviation O(GS1(f )/ε) (resp. O(GS2(f ) ln(1/δ)/ε)),
+where GSp(f ) is the global sensitivity of f given by
+
+GSp(f ) =
+
+sup
+
+X,X(cid:48)∈X m,X(cid:39)X(cid:48)
+
+(cid:107)f (X) − f (X(cid:48))(cid:107)p .
+
+Calibrating noise to the global sensitivity is a worst-case approach that requires taking the supre-
+mum over all possible pairs of neighbouring datasets, and in general does not account for the fact
+that in some datasets privacy can be achieved with substantially smaller perturbations. In fact,
+for many applications (like the one we consider in this paper) the global sensitivity is too large
+to provide useful mechanisms.
+Ideally one would like to add perturbations proportional to the
+potential changes around the input dataset X, as measured, for example by the local sensitivity
+LSp(f, X) = supX(cid:48)(cid:39)X (cid:107)f (X) − f (X(cid:48))(cid:107)p. Nissim et al. [2007] showed that approaches based on LSp
+do not lead to diﬀerentially private algorithms, and then proposed an alternative framework for DP
+mechanisms with data-dependent perturbations based on the idea of smoothed sensitivity. This is
+the approach we use in this paper; see Section 4 for further details.
+
+2.2 Policy Evaluation
+
+Policy evaluation is the problem of obtaining (an approximation to) the value function of a Markov
+reward process deﬁned by an MDP M and a policy π [Sutton and Barto, 1998, Szepesv´ari, 2010]. In
+many cases of interest M is unknown but we have access to trajectories containing state transitions
+and immediate rewards sampled from π. When the state space of M is relatively small, tabular
+methods that represent the value of each state can be used individually. However, in problems
+with large (or even continuous) state spaces, parametric representations for the value function are
+typically needed in order to defeat the curse of dimensionality and exploit the fact that similar
+states will have similar values. In this paper we focus on policy evaluation with linear function
+approximation in the batch case, where we have access to a set of trajectories sampled from the
+policy of interest.
+Let M be an MDP over a ﬁnite state space S with N = |S| and π a policy on M . Given
+an initial state s0 ∈ S, the interaction of π with M is described by a sequence ((st, at, rt))t≥0 of
+state–action–reward triplets. Suppose 0 < γ < 1 is the discount factor of M . The value function
+V π : S → R of π assigns to each state the expected discounted cumulative reward obtained by a
+trajectory following policy π from that state:
+
+(cid:104)(cid:80)
+
+(cid:12)(cid:12)(cid:12) s0 = s
+
+(cid:105)
+
+V π(s) = EM,π
+
+t≥0 γtrt
+
+.
+
+(2)
+
+The value function can be considered a vector V π ∈ RS. We make the usual assumption that any
+reward r generated by M is bounded: 0 ≤ r ≤ Rmax, so 0 ≤ V π(s) ≤ Rmax/(1 − γ) for all s ∈ S.
+
+3
+
+Let Φ ∈ RS×d be a feature representation that associates each state s ∈ S to a d-dimensional
+s = Φ(s, :) ∈ Rd. The goal is to ﬁnd a parameter vector θ ∈ Rd such that
+feature vector φ(cid:62)
+ˆV π = Φθ is a good approximation to V π. To do so, we assume that we have access to a collection
+X = (x1, . . . , xm) of ﬁnite trajectories sampled from M by π, where each xi is a sequence of states,
+actions and rewards.
+
+We will use a Monte Carlo approach, in which the returns of the trajectories in X are used
+as regression targets to ﬁt the parameters in ˆV π via a least squares approach [Sutton and Barto,
+1998]. In particular, we consider ﬁrst-visit Monte Carlo estimates obtained as follows. Suppose
+x = ((s1, a1, r1), . . . , (sT , aT , rT )) is a trajectory that visits s and ix,s is the time of the ﬁrst visit to
+s; that is, six,s = s, and st (cid:54)= s for all t < ix,s. The return collected from this ﬁrst visit is given by
+
+T(cid:88)
+
+T−ix,s(cid:88)
+
+Fx,s =
+
+rtγt−ix,s =
+
+rt+ix,sγt ,
+
+and provides an unbiased estimate of V π(s). For convenience, when state s is not visited by
+trajectory x we assume Fx,s = 0.
+
+t=ix,s
+
+t=0
+
+Given the returns from all ﬁrst visits corresponding to a dataset X with m trajectories, we can
+ﬁnd a parameter vector for the estimator ˆV π by solving the optimization problem argminθ JX (θ),
+where
+
+ρs(Fxi,s − φ(cid:62)
+
+s θ)2 ,
+
+(3)
+
+m(cid:88)
+
+(cid:88)
+
+i=1
+
+s∈Sxi
+
+JX (θ) =
+
+1
+m
+
+and Sx is the set of states visited by trajectory x. The regression weights 0 ≤ ρs ≤ 1 are given
+as an input to the problem and capture the user’s believe that some states are more relevant than
+others. It is obvious that JX (θ) is a convex function of θ. However, in general it is not strongly
+convex and therefore the optimum of argminθ JX (θ) is not necessarily unique. On the other hand,
+it is known that diﬀerential privacy is tightly related to certain notions of stability [Thakurta and
+Smith, 2013], and optimization problems with non-unique solutions generally pose a problem to
+stability. In order to avoid this problem, the private policy evaluation algorithms that we propose
+in Section 3 are based on optimizing slightly modiﬁed versions of JX (θ) which promote stability in
+their solutions. Note that the notions of stability related to DP are for worst-case situations: that
+is, they need to hold for every possible pair of neighbouring input dataset X (cid:39) X(cid:48), regardless of
+any generative model assumed for the trajectories in those datasets. In particular, these stability
+considerations are not directly related to the variance of the estimates in ˆV π.
+
+We end this section with a discussion of the main obstruction to stability, i.e. the cases where
+argminθ JX (θ) fails to have a unique solution. Given a dataset X with m trajectories we deﬁne
+a vector FX ∈ RS containing the average ﬁrst visit returns from all trajectories in X that visit a
+particular state. In particular, if Xs represents the multiset of trajectories from X that visit state
+s at some point, then we have
+
+FX (s) = FX,s =
+
+1
+|Xs|
+
+Fx,s .
+
+(4)
+
+If s is not visited by any trajectory in X we set FX,s = 0. To simplify notation, let FX ∈ RS be
+the vector collecting all these estimates. We also deﬁne a diagonal matrix ΓX ∈ RS×S with entries
+given by the product of the regression weight on each state and the fraction of trajectories in X
+
+4
+
+(cid:88)
+
+x∈Xs
+
+visiting that state: ΓX (s, s) = ρs|Xs|/m. Solving for θ in ∇θJX (θ) = 0, it is easy to see that any
+optimal θX ∈ argminθ JX (θ) must satisfy
+
+Φ(cid:62)ΓX ΦθX = Φ(cid:62)ΓX FX .
+
+(5)
+Thus, this optimization has a unique solution if and only if the matrix Φ(cid:62)ΓX Φ is invertible. Since
+it is easy to ﬁnd neighbouring datasets X (cid:39) X(cid:48) where at most one of Φ(cid:62)ΓX Φ and Φ(cid:62)ΓX(cid:48)Φ
+is invertible, optimizing JX (θ) directly poses a problem to the design diﬀerentially private policy
+evaluation algorithms with small perturbations. Next we present two DP algorithm based on stable
+policy evaluation algorithms.
+
+3 Private First-Visit Monte Carlo Algorithms
+
+In this section we give the details of two diﬀerentially private policy evaluation algorithms based
+on ﬁrst-visit Monte Carlo estimates. Each of these algorithms corresponds to a diﬀerent stable
+version of the minimization argminθ JX (θ) described in previous section. A formal privacy analysis
+of these algorithms is given in Section 4. Bounds showing how the privacy requirement aﬀects the
+utility of the value estimates are presented in Section 5.
+
+3.1 Algorithm DP-LSW
+
+One way to make the optimization argminθ JX (θ) more stable to changes in the dataset X is to
+consider a similar least-squares optimization where the optimization weights do not change with X,
+and guarantee that the optimization problem is always strongly convex. Thus, we consider a new
+objective function given in terms of a new set of positive regression weights ws > 0. Let Γ ∈ RS×S
+be a diagonal matrix with Γ(s, s) = ws. We deﬁne the objective function as:
+
+J w
+X (θ) =
+
+ws(FX,s − φ(cid:62)
+
+s θ)2 = (cid:107)FX − Φθ(cid:107)2
+
+2,Γ ,
+
+(6)
+
+(cid:88)
+
+s∈S
+
+2,Γ = (cid:107)Γ1/2v(cid:107)2
+
+where (cid:107)v(cid:107)2
+optimizations over JX and J w
+X ∈ argminθ J w
+θw
+
+X (θ) must satisfy
+
+2 = v(cid:62)Γv is the weighted L2 norm. To see the relation between the
+X (θ) to 0 we see that a minimum
+
+X , note that equating the gradient of J w
+
+(7)
+Thus, the optimization problem is well-posed whenever Φ(cid:62)ΓΦ is invertible, which henceforth will
+be our working assumption. Note that this is a mild assumption, since it is satisﬁed by choosing a
+feature matrix Φ with full column rank. Under this assumption we have:
+
+Φ(cid:62)ΓΦθw
+
+X = Φ(cid:62)ΓFX .
+
+(cid:16)
+
+(cid:17)−1
+
+(cid:16)
+
+(cid:17)†
+
+θw
+X =
+
+Φ(cid:62)ΓΦ
+
+Φ(cid:62)ΓFX =
+
+Γ1/2Φ
+
+Γ1/2FX ,
+
+(8)
+
+where M† denotes the Moore–Penrose pseudo-inverse. The diﬀerence between optimizing JX (θ)
+or J w
+X (θ) is reﬂected in the diﬀerences between (5) and (7). In particular, if the trajectories in X
+are i.i.d. and ps denotes the probability that state s is visited by a trajectory in X, then taking
+ws = EX [ρs|Xs|/m] = ρsps yields a loss function J w
+X (θ) that captures the eﬀect of each state
+s in JX (θ) in the asymptotic regime m → ∞. However, we note that knowledge of these visit
+probabilities is not required for running our algorithm or for our analysis.
+
+5
+
+X of argminθ J w
+
+Our ﬁrst DP algorithm for policy evaluation applies a carefully calibrated output perturbation
+mechanism to the solution θw
+X (θ). We call this algorithm DP-LSW, and its full
+pseudo-code is given in Algorithm 1. It receives as input the dataset X, the regression weights w,
+the feature representation Φ, and the MDP parameters Rmax and γ. Additionally, the algorithm is
+parametrized by the privacy parameters ε and δ. Its output is the result of adding a random vector
+η drawn from a multivariate Gaussian distribution N (0, σ2
+X . In order
+to compute the variance of η the algorithm needs to solve the discrete optimization problem ψw
+X =
+X (k), where KX = maxs∈S |Xs|, β is a parameter computed in the algorithm,
+max0≤k≤KX e−kβϕw
+and ϕw
+
+X I) to the parameter vector θw
+
+X (k) is given by the following expression:
+
+ϕw
+
+X (k) =
+
+ws
+
+max{|Xs| − k, 1}2 .
+
+(9)
+
+(cid:88)
+
+s∈S
+
+Note that ψw
+
+X can be computed in time O(KX N ).
+
+Algorithm 1: DP-LSW
+
+Input: X, Φ, γ, Rmax, w, ε, δ
+Output: ˆθw
+X
+√
+Compute θw
+X ;
+Let α ← 5
+2 ln(2/δ)
+Let ψw
+Let σX ← αRmax(cid:107)(Γ1/2Φ)†(cid:107)
+Sample a d-dimensional vector η ∼ N (0, σ2
+Return ˆθw
+
+and β ←
+4(d+ln(2/δ)) ;
+X ← max0≤k≤KX e−kβϕw
+X (k) ;
+X ;
+
+(cid:112)ψw
+
+1−γ
+
+ε
+
+X = θw
+
+X + η;
+
+ε
+
+X I);
+
+// cf. (8)
+
+// cf. (9)
+
+The variance of the noise in DP-LSW is proportional to the upper bound Rmax/(1 − γ) on the
+return from any state. This bound might be excessively pessimistic in some applications, leading
+to unnecessary large perturbation of the solution θw
+X . Fortunately, it is possible to replace the term
+Rmax/(1 − γ) with any smaller upper bound Fmax on the returns generated by the target MDP on
+any state. In practice this leads to more useful algorithms, but it is important to keep in mind that
+for the privacy guarantees to remain unaﬀected, one needs to assume that Fmax is a publicly known
+quantity (i.e. it is not based on an estimate made from private data). These same considerations
+apply to the algorithm in the next section.
+
+3.2 Algorithm DP-LSL
+
+The second DP algorithm for policy evaluation we propose is also an output perturbation mech-
+anism. It diﬀers from DP-LSW in they way stability of the unperturbed solutions is promoted.
+In this case, we choose to optimize a regularized version of JX (θ). In particular, we consider the
+objective function J λ
+
+X (θ) obtained by adding a ridge penalty to the least-squares loss from (3):
+
+J λ
+X (θ) = JX (θ) +
+
+(cid:107)θ(cid:107)2
+2 ,
+
+λ
+2m
+
+(10)
+
+where λ > 0 is a regularization parameter. The introduction of the ridge penalty makes the
+objective function J λ
+X (θ) strongly convex, and thus ensures the existence of a unique solution
+
+6
+
+θλ
+X = argminθ J λ
+
+X (θ), which can be obtained in closed-form as:
+
+(cid:18)
+
+(cid:19)−1
+
+θλ
+X =
+
+Φ(cid:62)ΓX Φ +
+
+λ
+2m
+
+I
+
+Φ(cid:62)ΓX FX .
+
+(11)
+
+Here ΓX is deﬁned as in Section 2.2.
+
+X (θ); the full pseudo-code is given in Algorithm 2.
+
+We call DP-LSL the algorithm obtained by applying an output perturbation mechanism to
+the minimizer of J λ
+It receives as input the
+privacy parameters ε and δ, a dataset of trajectories X, the regression weights ρ, the feature
+representation Φ, a regularization parameter λ > (cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)∞, and the MDP parameters Rmax and
+γ. After computing the solution θλ
+X + η, where
+η is a d-dimensional noise vector drawn from N (0, σ2
+X I). The variance of η is obtained by solving
+a discrete optimization problem (diﬀerent from the one in DP-LSW). Let cλ = (cid:107)Φ(cid:107)(cid:107)ρ(cid:107)∞/
+2λ and
+for k ≥ 0, deﬁne ϕλ
+
+X (θ), the algorithm outputs ˆθλ
+
+X to argminθ J λ
+
+X = θλ
+
+√
+
+X (k) as: cλ
+
+(cid:115)(cid:88)
+
+s
+
+2
+
+ρs min{|Xs| + k, m} + (cid:107)ρ(cid:107)2
+
+.
+
+(12)
+
+Then DP-LSL computes ψλ
+
+X = max0≤k≤m e−kβϕλ
+
+X (k), which can be done in time O(mN ).
+
+Algorithm 2: DP-LSL
+
+Input: X, Φ, γ, Rmax, ρ, λ, ε, δ
+Output: ˆθλ
+X
+√
+Compute θλ
+X ;
+Let α ← 5
+2 ln(2/δ)
+Let ψλ
+Let σX ← 2αRmax(cid:107)Φ(cid:107)
+Sample a d-dimensional vector η ∼ N (0, σ2
+Return ˆθλ
+
+and β ←
+(cid:113)
+X ← max0≤k≤m e−kβϕλ
+(1−γ)(λ−(cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)∞)
+
+X (k) ;
+ψλ
+X ;
+
+4(d+ln(2/δ)) ;
+
+X = θλ
+
+X + η;
+
+ε
+
+ε
+
+X I);
+
+// cf. (11)
+
+// cf. (12)
+
+4 Privacy Analysis
+
+This section provides a formal privacy analysis for DP-LSW and DP-LSL and shows that both
+algorithms are (ε, δ)-diﬀerentially private. We use the smooth sensitivity framework of [Nissim
+et al., 2007, 2011], which provides tools for the design of DP mechanisms with data-dependent
+output perturbations. We rely on the following lemma, which provides suﬃcient conditions for
+calibrating Gaussian output perturbation mechanisms with variance proportional to smooth upper
+bounds of the local sensitivity.
+Lemma 1 (Nissim et al. [2011]). Let A be an algorithm that on input X computes a vector µX ∈ Rd
+deterministically and then outputs ZX ∼ N (µX , σ2
+X is a variance that depends on
+δ are such that the following are satisﬁed for every pair of neighbouring datasets X (cid:39) X(cid:48): (a)
+σX ≥ α(cid:107)µX − µX(cid:48)(cid:107)2, and (b) | ln(σ2
+
+X. Let α = α(ε, δ) = 5(cid:112)2 ln(2/δ)/ε and β = β(ε, δ, d) = ε/(4d + 4 ln(2/δ)). Suppose ε and
+
+X(cid:48))| ≤ β. Then A is (ε, δ)-diﬀerentially private.
+
+X ) − ln(σ2
+
+X I), where σ2
+
+7
+
+Condition (a) says we need variance at least proportional to the local sensitivity LS2(f, X).
+Condition (b) asks that the variance does not change too fast between neighbouring datasets, by
+X(cid:48) ≤ eβ. This is precisely the spirit of the smoothed sensitivity
+imposing the constraint σ2
+principle: calibrate the noise to a smooth upper bound of the local sensitivity. We acknowledge
+Lemma 1 is only available in pre-print form, and thus provide an elementary proof in Appendix A
+for completeness. The remaining proofs from this section are presented Appendices B and C.
+
+X /σ2
+
+4.1 Privacy Analysis of DP-LSW
+We start by providing an upper bound on the norm (cid:107)θw
+X (cid:39) X(cid:48). Using (8) it is immediate that:
+
+X − θw
+
+X(cid:48)(cid:107)2 for any two neighbouring datasets
+
+(cid:107)θw
+
+X − θw
+
+X(cid:48)(cid:107)2 ≤ (cid:107)(Γ1/2Φ)†(cid:107)(cid:107)FX − FX(cid:48)(cid:107)2,Γ .
+
+(13)
+
+Thus, we need to bound (cid:107)FX − FX(cid:48)(cid:107)2,Γ.
+Lemma 2. Let X (cid:39) X(cid:48) be two neighbouring datasets of m trajectories with X = (x1, . . . , xm−1, x)
+and X(cid:48) = (x1, . . . , xm−1, x(cid:48)). Let X◦ = (x1, . . . , xm−1). Let Sx (resp. Sx(cid:48)) denote the set of states
+visited by x (resp. x(cid:48)). Then we have
+
+(cid:107)FX − FX(cid:48)(cid:107)2,Γ ≤ Rmax
+1 − γ
+
+(|X◦
+
+ws
+s| + 1)2 .
+
+(cid:115) (cid:88)
+
+s∈Sx∪Sx(cid:48)
+
+(cid:115)(cid:88)
+
+s∈S
+
+(cid:115)(cid:88)
+
+s∈S
+
+Since the condition in Lemma 1 needs to hold for any dataset X(cid:48) neighbouring X, we take the
+
+supremum of the bound above over all neighbours., which yields the following corollary.
+
+Corollary 3. If X is a dataset of trajectories, then the following holds for every neighbouring
+dataset X(cid:48) (cid:39) X:
+
+(cid:107)FX − FX(cid:48)(cid:107)2,Γ ≤ Rmax
+1 − γ
+
+ws
+
+max{|Xs|, 1}2 .
+
+Using this result we see that in order to satisfy item (a) of Lemma 1 we can choose a noise
+
+variance satisfying:
+
+σX ≥ αRmax(cid:107)(Γ1/2Φ)†(cid:107)
+
+1 − γ
+
+ws
+
+max{|Xs|, 1}2 ,
+
+(14)
+
+expressible as σX ≥ C(cid:112)ϕw
+
+where only the last multiplicative term depends on the dataset X, and the rest can be regarded
+X =(cid:80)
+as a constant that depends on parameters of the problem which are either public or chosen by the
+user, and will not change for a neighbouring dataset X(cid:48). Thus, we are left with a lower bound
+s(ws/ max{|Xs|, 1}2) only depends on the dataset X
+through its signature (cid:104)X(cid:105) ∈ NS given by the number of times each state appears in the trajectories
+(cid:88)
+X = ϕw((cid:104)X(cid:105)), where ϕw : NS → R is the function
+of X: (cid:104)X(cid:105)(s) = |Xs|. Accordingly, we write ϕw
+
+X , where ϕw
+
+ws
+
+(15)
+
+ϕw(v) =
+
+max{vs, 1}2 .
+
+s
+
+The signatures of two neighbouring datasets X (cid:39) X(cid:48) satisfy (cid:107)(cid:104)X(cid:105) − (cid:104)X(cid:48)(cid:105)(cid:107)∞ ≤ 1 because
+replacing a single trajectory can only change by one the number of ﬁrst visits to any particular
+
+8
+
+state. Thus, assuming we have a function ψ : NS → R satisfying ψw(v) ≥ ϕw(v) and | ln(ψw(v)) −
+
+ln(ψw(v(cid:48)))| ≤ β for all v, v(cid:48) ∈ NS with (cid:107)v−v(cid:48)(cid:107)∞ ≤ 1, we can take σX = C(cid:112)ψw((cid:104)X(cid:105)). This variance
+
+clearly satisﬁes the conditions of Lemma 1 since
+
+| ln(σ2
+
+X ) − ln(σ2
+
+X(cid:48))| = | ln(ψw((cid:104)X(cid:105))) − ln(ψw((cid:104)X(cid:48)(cid:105)))| ≤ β .
+
+The function ψw is known as a β-smooth upper bound of ϕw, and the following result provides a
+tool for constructing such functions.
+Lemma 4 (Nissim et al. [2007]). Let ϕ : NS → R. For any k ≥ 0 let ϕk(v) = max(cid:107)v−v(cid:48)(cid:107)∞≤k ϕ(v(cid:48)).
+Given β > 0, the smallest β-smooth upper bound of ϕ is the function
+
+.
+
+(16)
+
+(cid:16)
+
+(cid:17)
+
+ψ(v) = sup
+k≥0
+
+e−kβϕk(v)
+
+(cid:88)
+
+s∈S
+
+ϕw
+
+k (v) =
+
+ws
+
+max{vs − k, 1}2 .
+
+k (v) =(cid:80)
+
+s ws.
+
+For some functions ϕ, the upper bound ψ can be hard to compute or even approximate [Nissim
+et al., 2007]. Fortunately, in our case a simple inspection of (15) reveals that ϕw
+k (v) is easy to
+compute. In particular, the following lemma implies that ψw(v) can be obtained in time O(N(cid:107)v(cid:107)∞).
+Lemma 5. The following holds for every v ∈ NS:
+
+Furthermore, for every k ≥ (cid:107)v(cid:107)∞ − 1 we have ϕw
+
+Combining the last two lemmas, we see that the quantity ψw
+
+X computed in DP-LSW is in fact
+a β-smooth upper bound to ϕw
+X . Because the variance σX used in DP-LSW can be obtained by
+plugging this upper bound into (14), the two conditions of Lemma 1 are satisﬁed. This completes
+the proof of the main result of this section:
+
+Theorem 6. Algorithm DP-LSW is (ε, δ)-diﬀerentially private.
+
+Before proceeding to the next privacy analysis, note that Corollary 3 is the reason why a
+mechanism with output perturbations proportional to the global sensitivity is not suﬃcient in this
+case. The bound there says that if in the worst case we can ﬁnd datasets of an arbitrary size m
+where some states are visited few (or zero) times, then the global sensitivity will not vanish as
+m → ∞. Hence, the utility of such algorithm would not improve with the size of the dataset. The
+smoothed sensitivity approach works around this problem by adding large noise to these datasets,
+but adding much less noise to datasets where each state appears a suﬃcient number of times.
+Corollary 3 also provides the basis for eﬃciently computing smooth upper bounds to the local
+sensitivity. In principle, condition (b) in Lemma 1 refers to any dataset neighbouring X, of which
+there are uncountably many because we consider real rewards. Bounding the local sensitivity in
+terms of the signature reduces this to ﬁnitely many “classes” of neighbours, and the form of the
+bound in Corollary 3 makes it possible to apply Lemma 4 eﬃciently.
+
+4.2 Privacy Analysis of DP-LSL
+
+The proof that DP-LSL is diﬀerentially private follows the same strategy as for DP-LSW. We start
+X for pairs of neighbouring datasets X (cid:39) X(cid:48).
+with a lemma that bounds the local sensitivity of θλ
+We use the notation Is∈x for an indicator variable that is equal to one when state s is visited within
+trajectory x.
+
+9
+
+Lemma 7. Let X (cid:39) X(cid:48) be two neighbouring datasets of m trajectories with X = (x1, . . . , xm−1, x)
+and X(cid:48) = (x1, . . . , xm−1, x(cid:48)). Let Fx ∈ RS (resp. Fx(cid:48) ∈ RS) be the vector given by Fx(s) = Fx,s
+(resp. Fx(cid:48)(s) = Fx(cid:48),s). Deﬁne diagonal matrices Γρ, ∆x,x(cid:48) ∈ RS×S given by Γρ(s, s) = ρs and
+∆x,x(cid:48)(s, s) = Is∈x − Is∈x(cid:48). If the regularization parameter satisﬁes λ > (cid:107)Φ(cid:62)∆x,x(cid:48)ΓρΦ(cid:107), then:
+
+(cid:13)(cid:13)(cid:13)(cid:0)∆x,x(cid:48)Φθλ
+
+X − Fx + Fx(cid:48)(cid:1)(cid:62)
+
+λ − (cid:107)Φ(cid:62)∆x,x(cid:48)ΓρΦ(cid:107)
+
+(cid:13)(cid:13)(cid:13)2
+
+.
+
+ΓρΦ
+
+(cid:107)θλ
+X − θλ
+2
+
+X(cid:48)(cid:107)2
+
+≤
+
+As before, we need to consider the supremum of the bound over all possible neighbours X(cid:48) of
+X. In particular, we would like to get a bound whose only dependence on the dataset X is through
+the signature (cid:104)X(cid:105). This is the purpose of the following corollary:
+Corollary 8. Let X be a dataset of trajectories and suppose λ > (cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)∞. Then the following
+holds for every neighbouring dataset X(cid:48) (cid:39) X:
+
+(cid:107)θλ
+
+X − θλ
+
+X(cid:48)(cid:107)2 ≤
+
+2Rmax(cid:107)Φ(cid:107)
+
+(1 − γ)(λ − (cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)∞)
+
+ϕλ
+
+X ,
+
+(cid:107)Φ(cid:107)(cid:107)ρ(cid:107)∞√
+
+2λ
+
+(cid:115)(cid:88)
+
+s∈S
+
+ρs|Xs| + (cid:107)ρ(cid:107)2
+
+.
+
+(cid:113)
+2
+
+where
+
+ϕλ
+
+X =
+
+By the same reasoning of Section 4.1, as long as the regularization parameter is larger than
+X a Gaussian pertur-
+
+(cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)∞, a diﬀerentially private algorithm can be obtained by adding to θλ
+bation with a variance satisfying
+
+σX ≥
+
+2αRmax(cid:107)Φ(cid:107)
+
+(1 − γ)(λ − (cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)∞)
+
+ϕλ
+X
+
+(cid:113)
+
+and the second condition of Lemma 1. This second requirement can be achieved by computing a
+β-smooth upper bound of the function ϕλ : NS → R given by
+
+(cid:107)Φ(cid:107)(cid:107)ρ(cid:107)∞√
+
+2λ
+
+(cid:115)(cid:88)
+
+s∈S
+
+ϕλ(v) =
+
+ρs max{vs, m} + (cid:107)ρ(cid:107)2
+
+.
+
+2
+
+X to ϕλ(v) we substituted |Xs| by max{vs, m} to reﬂect the fact that any state
+When going from ϕλ
+cannot be visited by more than m trajectories in a dataset X of size m. It turns out that in this
+k(v) = max(cid:107)v−v(cid:48)(cid:107)∞≤k ϕλ(v(cid:48)) arising in Lemma 4 is also easy to compute.
+case the function ϕλ
+Lemma 9. For every v ∈ NS, ϕλ
+
+k(v) is equal to:
+
+(cid:107)Φ(cid:107)(cid:107)ρ(cid:107)∞√
+
+2λ
+
+(cid:115)(cid:88)
+
+s∈S
+
+ρs max{vs + k, m} + (cid:107)ρ(cid:107)2
+
+2
+(cid:112)(cid:80)
+
+m
+
+.
+
+(cid:16)(cid:107)Φ(cid:107)(cid:107)ρ(cid:107)∞
+
+√
+
+2λ
+
+√
+
+(cid:17)2
+
+.
+
+Furthermore, for every k ≥ m − mins vs we have ϕλ
+
+k(v) =
+
+s∈S ρs + (cid:107)ρ(cid:107)2
+
+Finally, in view of Lemma 4, Corollary 8, and Lemma 9, the variance of the noise perturbation
+
+in DP-LSL satisﬁes the conditions of Lemma 1, so we have proved the following.
+
+Theorem 10. Algorithm DP-LSL is (ε, δ)-diﬀerentially private.
+
+10
+
+5 Utility Analysis
+
+Because the promise of diﬀerential privacy has to hold for any possible pair of neighbouring datasets
+X (cid:39) X(cid:48), the analysis in previous section does not assume any generative model for the input dataset
+X. However, in practical applications we expect X = (x1, . . . , xm) to contain multiple trajectories
+sampled from the same policy on the same MDP. The purpose of this section is to show that when
+the trajectories xi are i.i.d. the utility of our diﬀerentially private algorithms increases as m → ∞. In
+other words, when the input dataset grows, the amount of noise added by our algorithms decreases,
+thus leading to more accurate estimates of the value function. This matches the intuition that when
+outputting a ﬁxed number of parameters, using data from more users to estimate these parameters
+leads to a smaller individual contributions from each user, and makes the privacy constraint easier
+to satisfy.
+
+X (ˆθ•
+
+To measure the utility of our DP algorithms we shall bound the diﬀerence in empirical risk
+between the private and non-private parameters learned from a given dataset. That is, we want
+X )] vanishes as |X| = m → ∞, for both • = w
+to show that the quantity EX,η[J•
+and • = λ. The ﬁrst theorem bounds the expected empirical excess risk of DP-LSW. The bound
+contains two terms: one vanishes as m → ∞, and the other reﬂects the fact that states which are
+never visited pose a problem to stability. The proof is deferred to Appendix D.
+Theorem 11. Let S0 = {s ∈ S|ps = 0} and S+ = S\S0. Let C = αRmax(cid:107)(Γ1/2Φ)†(cid:107)(cid:107)Γ1/2Φ(cid:107)F /(1−
+γ). Suppose β ≤ 1/2. Then EX,η[J w
+
+X )] is upper bounded by:
+
+X ) − J•
+
+X (θ•
+
+X (ˆθw
+
+X (θw
+
+(cid:88)
+
+s∈S0
+
+C2
+
+ws + 6
+
+X ) − J w
+(cid:88)
+
+ws
+
+s∈S+
+
+(cid:18)
+
+(cid:18) 1
+sm2 + β2
+p2
+
+1 − βps
+2
+
+(cid:19)m(cid:19) .
+
+Note the above bound depends on the dimension d through β and (cid:107)Γ1/2Φ(cid:107)F . In terms of the
+size of the dataset, we can get excess risk bounds that decreases quadratically with m by assuming
+that either all states are visited with non-zero probability or the user sets the regression weights so
+that such states do not contribute to θw
+X .
+Corollary 12. If ws = 0 for all s ∈ S0, then EX,η[J w
+
+X )] = O(1/m2).
+
+X ) − J w
+
+X (ˆθw
+
+X (θw
+
+A similar theorem can be proved for DP-LSL. However, in this case the statement of the bound
+is complicated by the appearance of co-occurrence probabilities of the form Px[s ∈ x ∧ s(cid:48) ∈ x]
+and Px[s ∈ x ∧ s(cid:48) /∈ x]. Here we only state the main corollary of our result; the full statement
+and the corresponding proofs are presented in Appendix E. This corollary is obtained by assuming
+the regularization parameter is allowed to grow with m, and stresses the tensions in selecting an
+adequate regularization schedule.
+Corollary 13. Suppose λ = ω(1) with respect to m. Then we have EX,η[J λ
+O(1/λm + 1/λ2 + m/λ3).
+
+X ) − J λ
+
+X )] =
+
+X (ˆθλ
+
+X (θλ
+
+Note that taking λ = Θ(m) we get a bound on the excess risk of order O(1/m2). However, if
+X (θ) to vanish as m → ∞ we need λ = o(m). We shall see
+
+we want the regularization term in J λ
+importance of this trade-oﬀ in our experiments.
+
+11
+
+Figure 1: Empirical comparison of diﬀerentially private and non-private algorithms
+
+6 Experiments
+
+In this section we illustrate the behaviour of the proposed algorithms on synthetic examples. The
+domain we use consists of a chain of N states, where in each state the agent has some probability
+p of staying and probability (1 − p) of advancing to its right. There is a reward of 1 when the
+agent reaches the ﬁnal, absorbing state, and 0 for all other states. While this is a toy example,
+it illustrates the typical case of policy evaluation in the medical domain, where patients tend to
+progress through stages of recovery at diﬀerent speeds, and past states are not typically revisited
+(partly because in the medical domain, states contain historic information about past treatments).
+Trajectories are drawn by starting in an initial state distribution and generating state-action-reward
+transitions according to the described probabilities until the absorbing state is reached. Trajectories
+are harvested in a batch, and the same batches are processed by all algorithms.
+
+We experiment with both a tabular representation of the value function, as well as with function
+approximation. In the latter case, we simply aggregate pairs of adjacent states, which are hence
+forced to take the same value. We compared the proposed private algorithms DP-LSW and DP-
+LSL with their non-private equivalents LSW and LSL. The performance measure used is average
+root mean squared error over the state space. The error is obtained by comparing the state values
+estimated by the learning algorithms against the exact values obtained by exact, tabular dynamic
+programming. Standard errors computed over 20 independent runs are included.
+
+The main results are summarized in Fig. 1, for an environment with N = 40 states, p = 0.5,
+discount γ = 0.99, and for the DP algorithms, ε = 0.1 and δ = 0.1. In general, these constants
+should be chosen depending on the privacy constraints of the domain. Our theoretical results
+explain the expected eﬀect of these choices on the privacy-utility trade-oﬀ so we do not provide
+extensive experiments with diﬀerent values.
+
+The left plot in Fig. 1 compares the non-private LSL and LSW versions of Monte Carlo evalu-
+ation, in the tabular and function approximation case. As can be seen, both algorithms are very
+stable and converge to the same solution, but LSW converges faster. The second plot compares the
+performance of all algorithms in the tabular case, over a range of regularization parameters, for two
+diﬀerent batch sizes. The third plot compares the expected RMSE of the algorithms when run with
+state aggregation, as a function of batch size. As can be seen, the DP algorithms converge to the
+same solutions as the non-private corresponding versions for large enough batch sizes. Interestingly,
+the two proposed approaches serve diﬀerent needs. The LSL algorithms work better with small
+batches of data, whereas the LSW approach is preferable with large batches. From an empirical
+point of view, the trade-oﬀ between accuracy and privacy in the DP-LSL algorithm should be done
+by setting a regularization schedule proportional to
+m. While the theory suggests it is not the
+
+√
+
+12
+
+best schedule in terms of excess empirical risk, it achieves the best overall accuracy.
+
+Finally, the last ﬁgure shows excess empirical risk as a function of the batch size. Interestingly,
+more aggressive function approximation helps both diﬀerentially private algorithms converge faster.
+This is intuitive, since using the same data to estimate fewer parameters means the eﬀect of each
+individual trajectory is already obscured by the function approximation. Decreasing the number
+of parameters of the function approximator, d, increases β, which lowers the smooth sensitivity
+bounds. In medical applications, one expects to have many attributes measured about patients,
+and to need aggressive function approximation in order to provide generalization. This result tells
+us that diﬀerentially private algorithms should be favoured in this case as well.
+
+Overall, the empirical results are very promising, showing that especially as batch size increases,
+the noise introduced by the DP mechanism decreases rapidly, and these algorithms provide the same
+performance but with the additional privacy guarantees.
+
+7 Conclusion
+
+We present the ﬁrst diﬀerentially private algorithms for policy evaluation in the full MDP setting.
+Our algorithms are built on top of established Monte Carlo methods, and come with utility guar-
+antees showing that the cost of privacy diminishes as training batches get larger. The smoothed
+sensitivity framework is a key component of our analyses, which diﬀer from previous works on
+DP mechanisms for ERM and bandits problems in two substantial ways. The ﬁrst, we consider
+optimizations with non-Lipschitz loss functions, which prevents us from using most of the estab-
+lished techniques for analyzing privacy and utility in ERM algorithms and complicates some parts
+of our analysis. In particular, we cannot leverage the tight utility analysis of [Jain and Thakurta,
+2014] to get dimension independent bounds. Second, and more importantly, the natural model
+of neighbouring datasets for policy evaluation involves replacing a whole trajectory. This implies
+that neighbouring datasets can diﬀer in multiple regression targets, which is quite diﬀerent from the
+usual supervised learning approach where neighbouring datasets can only change a single regression
+target. Our approach is also diﬀerent from the on-line learning and bandits setting, where there is
+a single stream of experience and neighbouring datasets diﬀer in one element of the stream. Note
+that this setting cannot be used naturally in the full MDP setup, because successive observations
+in a single stream are inherently correlated.
+
+In future work we plan to extend our techniques in two directions. First, we would like to design
+DP policy evaluation methods based on temporal-diﬀerence learning [Sutton, 1988]. Secondly, we
+will tackle the control case, where policy evaluation is often used as a sub-routine, e.g. as in actor-
+critic methods. We also plan to evaluate the current algorithms on patient data from an ongoing
+clinical study (in which case, errors cannot be estimated precisely, because the right answer is not
+known).
+
+References
+
+Kamalika Chaudhuri and Claire Monteleoni. Privacy-preserving logistic regression. In Advances in
+
+Neural Information Processing Systems, pages 289–296, 2009.
+
+Kamalika Chaudhuri, Claire Monteleoni, and Anand D Sarwate. Diﬀerentially private empirical
+
+risk minimization. volume 12. JMLR. org, 2011.
+
+13
+
+Cynthia Dwork. Diﬀerential privacy. In Proceedings of the 33rd international conference on Au-
+
+tomata, Languages and Programming-Volume Part II, pages 1–12, 2006.
+
+Cynthia Dwork and Aaron Roth. The algorithmic foundations of diﬀerential privacy. Foundations
+
+and Trends in Theoretical Computer Science, 9(3-4):211–407, 2014.
+
+Prateek Jain and Abhradeep Thakurta. Diﬀerentially private learning with kernels. In Proceedings
+
+of the 30th International Conference on Machine Learning (ICML-13), pages 118–126, 2013.
+
+Prateek Jain and Abhradeep Guha Thakurta. (near) dimension independent risk bounds for dif-
+In Proceedings of The 31st International Conference on Machine
+
+ferentially private learning.
+Learning, pages 476–484, 2014.
+
+Beatrice Laurent and Pascal Massart. Adaptive estimation of a quadratic functional by model
+
+selection. Annals of Statistics, pages 1302–1338, 2000.
+
+Frank McSherry and Kunal Talwar. Mechanism design via diﬀerential privacy.
+
+In Foundations
+of Computer Science, 2007. FOCS’07. 48th Annual IEEE Symposium on, pages 94–103. IEEE,
+2007.
+
+Nikita Mishra and Abhradeep Thakurta. Nearly optimal diﬀerentially private stochastic multi-arm
+
+bandits. In UAI, 2015.
+
+Kobbi Nissim, Sofya Raskhodnikova, and Adam Smith. Smooth sensitivity and sampling in private
+data analysis. In Proceedings of the thirty-ninth annual ACM symposium on Theory of computing,
+pages 75–84. ACM, 2007.
+
+Kobbi Nissim, Sofya Raskhodnikova, and Adam Smith. Smooth sensitivity and sampling in private
+
+data analysis, 2011. URL http://www.cse.psu.edu/~ads22/pubs/NRS07/.
+
+Benjamin IP Rubinstein, Peter L Bartlett, Ling Huang, and Nina Taft. Learning in a large function
+space: Privacy-preserving mechanisms for svm learning. Journal of Privacy and Conﬁdentiality,
+4(1):4, 2012.
+
+Adam Smith and Abhradeep Thakurta. Nearly optimal algorithms for private online learning in
+
+full-information and bandit settings. In NIPS, 2013.
+
+Richard S. Sutton. Learning to predict by the methods of temporal diﬀerences. Machine Learning,
+
+3(1):9–44, 1988.
+
+Richard S Sutton and Andrew G Barto. Reinforcement learning: An introduction. MIT press,
+
+1998.
+
+Csaba Szepesv´ari. Algorithms for reinforcement learning. Morgan & Claypool Publishers, 2010.
+
+Abhradeep Guha Thakurta and Adam Smith. Diﬀerentially private feature selection via stability
+arguments, and the robustness of the lasso. In Conference on Learning Theory, pages 819–850,
+2013.
+
+Aristide C. Y. Tossou and Christos Dimitrakakis. Algorithms for diﬀerentially private multi-armed
+
+bandits. In International Conference on Artiﬁcial Intelligence (AAAI 2016), 2016.
+
+14
+
+A Smoothed Gaussian Perturbation
+
+A proof of Lemma 1 in the paper can be found in the pre-print Nissim et al. [2011]. For the sake
+of completeness, we provide here an elementary proof (albeit with slightly worse constants). In
+particular, we are going to prove the following.
+Lemma 14. Let A be an algorithm that on input X computes a vector µX ∈ Rd deterministically
+and then outputs ZX ∼ N (µX , σ2
+X is a variance that depends on X. Let α = α(ε, δ) =
+are such β ≤ ln 2, and the following are satisﬁed for every pair of neighbouring datasets X (cid:39) X(cid:48):
+
+15(cid:112)2 ln(4/δ)/ε and β = β(ε, δ, d) = (2 ln 2)ε/5(
+
+d +(cid:112)2 ln(4/δ))2. Suppose that ε ≤ 5, δ and d
+
+X I), where σ2
+
+√
+
+1. σX ≥ α(cid:107)µX − µX(cid:48)(cid:107)2,
+2. | ln(σ2
+
+X ) − ln(σ2
+
+X(cid:48))| ≤ β.
+
+Then A is (ε, δ)-diﬀerentially private.
+
+We start with a simple characterization of (ε, δ)-diﬀerential privacy that will be useful for our
+
+proof.
+Lemma 15. Let A(X) = θX ∈ Rd be the output of a randomized algorithm on input X. Write
+fθX (θ) for the probability density of the output of A on input X. Suppose that for every pair of
+neighbouring datasets X (cid:39) X(cid:48) there exists a measurable set ΘX,X(cid:48) ⊂ Rd such that the following are
+satisﬁed:
+
+1. P[θX /∈ ΘX,X(cid:48)] ≤ δ;
+2. for all θ ∈ ΘX,X(cid:48) we have fθX (θ) ≤ eεfθX(cid:48) (θ).
+
+Then A is (ε, δ)-diﬀerentially private.
+Proof. Fix a pair of neighbouring datasets X (cid:39) X(cid:48) and let E ⊆ Rd be any measurable set. Let
+X,X(cid:48) = Rd \ ΘX,X(cid:48). Using the assumptions on ΘX,X(cid:48) we
+ΘX,X(cid:48) be as in the statement and write Θc
+see that
+
+P[θX ∈ E] = P[θX ∈ E ∩ ΘX,X(cid:48)] + P[θX ∈ E ∩ Θc
+
+X,X(cid:48)]
+
+≤ eεP[θX(cid:48) ∈ E ∩ ΘX,X(cid:48)] + δ
+≤ eεP[θX(cid:48) ∈ E] + δ .
+
+Now we proceed with the proof of Lemma 14. Let X (cid:39) X(cid:48) be two neighbouring datasets and
+let us write Z1 = ZX and Z2 = ZX(cid:48) for simplicity. Thus, for i = 1, 2 we have that Zi ∼ N (µi, σ2
+i I)
+are d-dimensional independent Gaussian random variables whose means and variances satisfy the
+assumptions of Lemma 14 for some ε, δ > 0. The density function of Zi is denoted by fZi(z). In
+order to be able to apply Lemma 15 we want to show that the privacy loss between Z1 and Z2
+deﬁned as
+
+(17)
+is bounded by ε for all z ∈ Ω, where Ω ⊂ Rd is an event with probability at least 1 − δ under Z1.
+We can start by identifying a candidate Ω. Since Ω has to have high probability w.r.t. Z1, it
+should contain µ1 because a ball around the mean is the event with the highest probability under
+
+L(z) = ln
+
+fZ1(z)
+fZ2(z)
+
+15
+
+a spherical Gaussian distribution (among those with the same Lebesgue measure). For technical
+reasons, instead of a ball we will take a slightly more complicated region, which for now we will
+parametrize by two quantities a, b > 0. The deﬁnition of this region will depend on the diﬀerence
+of means ∆ = µ2 − µ1:
+
+Ω = Ωa ∩ Ωb = {z + µ1 ∈ Rd | |(cid:104)z, ∆(cid:105)| ≤ a} ∩ {z + µ1 ∈ Rd | (cid:107)z(cid:107) ≤ b} .
+
+(18)
+We need to choose a and b such that the probability P[Z1 /∈ Ω] ≤ δ, and for that we shall combine
+two diﬀerent tail bounds. On the one hand, note that Z = (cid:104)Z1 − µ1, ∆(cid:105) /(σ1(cid:107)∆(cid:107)) ∼ N (0, 1) is a
+one dimensional standard Gaussian random variable and recall that for any t ≥ 0:
+
+P[|Z| > t] ≤ 2e−t2/2 .
+1 ∼ χ2
+
+(19)
+
+On the other hand, X = (cid:107)Z1 − µ1(cid:107)2/σ2
+freedom, for which is known Laurent and Massart [2000] that for all t ≥ 0:
+
+d follows a chi-squared distribution with d degrees of
+√
+
+(20)
+To make our choices for a and b we can take them such that P[Z1 /∈ Ωa], P[Z1 /∈ Ωb] ≤ δ/2, since
+then by a union bound we will get
+
+dt + 2t] ≤ e−t .
+
+P[X > d + 2
+
+P[Z1 /∈ Ω] ≤ P[Z1 /∈ ΩA] + P[Z1 /∈ ΩB] ≤ δ .
+
+Since Z satisﬁes |Z| ≤(cid:112)2 ln(4/δ) with probability at least 1 − δ/2, we can take
+For X we have that d+2(cid:112)d ln(2/δ)+2 ln(2/δ) ≤ d+2(cid:112)2d ln(2/δ)+2 ln(2/δ) = (
+
+a = σ1(cid:107)∆(cid:107)
+
+4
+δ
+
+2 ln
+
+= σ1(cid:107)∆(cid:107)Cδ .
+
+(cid:114)
+d +(cid:112)2 ln(2/δ)) = σ1Dδ .
+
+√
+b = σ1(
+
+Hence, we choose
+
+√
+
+(21)
+
+(22)
+
+d+(cid:112)2 ln(2/δ))2.
+
+(23)
+
+Fixing this choice of Ω, we now proceed to see under what conditions on σ1 and σ2 we can get
+
+L(z) ≤ ε for all z ∈ Ω. We start by expanding the deﬁnition of L(z) to get
+
+L(z) =
+
+d
+2
+
+ln
+
+σ2
+2
+σ2
+1
+
++
+
+(cid:107)µ2 − z(cid:107)2
+
+2σ2
+2
+
+− (cid:107)µ1 − z(cid:107)2
+
+2σ2
+1
+
+.
+
+(24)
+
+The easiest thing to do is to separate this quantity into several parts and insist on each part being
+at most a fraction of ε. To simplify calculations we will just require that each part is at most
+ = ε/5. This reasoning applied to the ﬁrst term shows that we must satisfy
+
+≤ e2/d .
+
+σ2
+2
+σ2
+1
+
+(25)
+
+Note that this becomes more restrictive as  ≈ 0 or d → ∞, in which case we have e/d ≈ 1.
+
+Next we look at the second part and write z = z(cid:48) + µ1 because this is the form of the vectors
+
+in Ω. With some algebra we get:
+
+(cid:107)µ2 − (z(cid:48) + µ1)(cid:107)2
+
+2σ2
+2
+
+− (cid:107)µ1 − (z(cid:48) + µ1)(cid:107)2
+
+2σ2
+1
+
+=
+
+(cid:107)∆(cid:107)2 + (cid:107)z(cid:48)(cid:107)2 − 2(cid:104)z(cid:48), ∆(cid:105)
+
+2σ2
+2
+
+− (cid:107)z(cid:48)(cid:107)2
+
+2σ2
+1
+
+.
+
+(26)
+
+16
+
+To further decompose this quantity we write z(cid:48) ∈ Rd as z(cid:48) = zp + zo, where zp = ∆(cid:104)z(cid:48), ∆(cid:105) /(cid:107)∆(cid:107)2 is
+the orthogonal projection of z onto the line spanned by the vector ∆, and zo is the corresponding
+orthogonal complement. Pythagora’s Theorem implies (cid:107)z(cid:48)(cid:107)2 = (cid:107)zp(cid:107)2 + (cid:107)zo(cid:107)2, and the RHS in the
+above expression is equal to
+
+(cid:107)∆(cid:107)2
+2σ2
+2
+
+− (cid:104)z(cid:48), ∆(cid:105)
+
+σ2
+2
+
+|(cid:104)z(cid:48), ∆(cid:105)|2
+2(cid:107)∆(cid:107)2
+
++
+
+− 1
+σ2
+1
+
+σ2
+2
+
+(cid:107)zo(cid:107)2
+2
+
++
+
+− 1
+σ2
+1
+
+σ2
+2
+
+(cid:18) 1
+
+(cid:19)
+
+(cid:18) 1
+
+(cid:19)
+
+.
+
+(27)
+
+Now note that the last two terms can be upper bounded by zero if σ1 ≤ σ2, but need to be taken
+into account otherwise. Furthermore, if it were the case that σ1 (cid:29) σ2 ≈ 0, then these terms could
+grow unboundedly. Thus we shall require that a bound of the form
+
+holds for some γ ≥ 1 to be speciﬁed later. Nonetheless, we observe that under this assumption
+
+≤ γ ,
+
+σ2
+1
+σ2
+2
+
+(28)
+
+Furthermore, z ∈ Ω implies (cid:107)zo(cid:107)2 ≤ (cid:107)z(cid:48)(cid:107)2 = (cid:107)z − µ1(cid:107) ≤ b2 and |(cid:104)z(cid:48), ∆(cid:105)|2 = |(cid:104)z − µ1, ∆(cid:105)|2 ≤ a2.
+Thus we see that
+
+.
+
+(29)
+
+and
+
+By requiring that each of these bounds is at most  we obtain the following constraint for γ:
+
+(30)
+
+(31)
+
+(32)
+
+(33)
+
+σ2
+1
+
+≤ γ − 1
+(cid:19)
+
+1
+σ2
+2
+
+− 1
+σ2
+1
+
+(cid:18) 1
+(cid:18) 1
+
+σ2
+2
+
+|(cid:104)z(cid:48), ∆(cid:105)|2
+2(cid:107)∆(cid:107)2
+(cid:107)zo(cid:107)2
+2
+
+− 1
+σ2
+1
+
+σ2
+2
+
+− 1
+σ2
+1
+
+(cid:19)
+
+δ (γ − 1)
+
+≤ C2
+
+,
+
+2
+
+δ (γ − 1)
+
+≤ D2
+
+2
+
+.
+
+γ = 1 +
+
+2
+
+γ ≤ 1 +
+
+2
+max{C2
+δ , D2
+
+(cid:16)√
+
+δ} ,
+(cid:17)2 .
+d +(cid:112)2 ln(4/δ)
+d +(cid:112)2 ln(4/δ))2 ≤ 1 and
+
+d +(cid:112)2 ln(4/δ)
+
+2/σ2
+
+which can be satisﬁed by taking, for example:
+
+Note that for ﬁxed δ, small  and/or large d this choice of γ will make (28) behave much like the
+1. In fact, using that 1 + x ≥ ex ln 2 for all 0 ≤ x ≤ 1 we see
+√
+bound (25) we assumed above for σ2
+that (28) can be satisﬁed if 2/(
+(cid:16)√
+
+ .
+
+≤ exp
+
+(cid:17)2
+
+(2 ln 2)
+
+(34)
+
+σ2
+1
+σ2
+2
+
+From here it is immediate to see that if the second condition | ln(σ2
+satisﬁed, then (25) and (34) are both satisﬁed.
+
+1) − ln(σ2
+
+2)| ≤ β in Lemma 14 is
+
+17
+
+The missing ingredient to show that L(z) ≤ ε for all z ∈ Ω is an absolute lower bound on σ1.
+
+This will follow from bounding the remaining terms in L(z) as follows:
+
+(cid:107)∆(cid:107)2
+2σ2
+2
+
+− (cid:104)z(cid:48), ∆(cid:105)
+
+σ2
+2
+
+2σ2
+2
+
+≤ (cid:107)∆(cid:107)2 + 2σ1(cid:107)∆(cid:107)Cδ
+(cid:107)∆(cid:107)2 + 2σ1(cid:107)∆(cid:107)Cδ
+≤ γ
+2
+≤ 3
+2
+3(cid:107)∆(cid:107)2
+2σ2
+1
+
+(cid:107)∆(cid:107)2 + 2σ1(cid:107)∆(cid:107)Cδ
+
+σ2
+1
+3(cid:107)∆(cid:107)Cδ
+
+σ2
+1
+
+,
+
+(cid:40)(cid:114) 3
+
+(cid:41)
+
+3Cδ
+
+
+3(cid:107)∆(cid:107)Cδ
+
+(35)
+
+(36)
+
+(37)
+
+(38)
+where we used that  ≤ 1 implies γ ≤ 3. If we require each of these two terms to be at most , we
+obtain the constraint:
+
+σ1
+
+=
+
++
+
+σ1 ≥ (cid:107)∆(cid:107) max
+
+(39)
+To conclude the proof just note that the above bound can be rewritten as σ1 ≥ α(cid:107)∆(cid:107), which is
+precisely the ﬁrst condition in Lemma 14.
+
+2
+
+=
+
+
+
+.
+
+,
+
+B Privacy Analysis of DP-LSW
+Lemma 16. Let X (cid:39) X(cid:48) be two neighbouring datasets of m trajectories with X = (x1, . . . , xm−1, x)
+and X(cid:48) = (x1, . . . , xm−1, x(cid:48)). Let X◦ = (x1, . . . , xm−1). Let Sx (resp. Sx(cid:48)) denote the set of states
+visited by x (resp. x(cid:48)). Then we have
+
+(cid:107)FX − FX(cid:48)(cid:107)2,Γ ≤ Rmax
+1 − γ
+
+(|X◦
+
+ws
+s| + 1)2 .
+
+(cid:115) (cid:88)
+
+s∈Sx∪Sx(cid:48)
+
+Proof. We start by noting that if s ∈ S \ (Sx ∪ Sx(cid:48)), then FX,s = FX(cid:48),s. In the case s ∈ Sx ∪ Sx(cid:48)
+we can write FX,s = (|X◦
+s| + 1). Using a symmetric expression for FX(cid:48),s we see
+that in this case
+
+s|FX◦,s + Fx,s)/(|X◦
+
+|FX,s − FX(cid:48),s| =
+
+1
+|X◦
+s| + 1
+
+|Fx,s − Fx(cid:48),s| ≤
+
+1
+|X◦
+s| + 1
+
+max{Fx,s, Fx(cid:48),s} ≤
+
+1
+|X◦
+s| + 1
+
+Rmax
+1 − γ
+
+,
+
+where we used that 0 ≤ Fx,s ≤ Rmax/(1 − γ) for all s and x. When s ∈ Sx \ Sx(cid:48) we can use the
+same expression as before for FX,s and write FX(cid:48),s = FX◦,s. A similar argument as in the previous
+case then yields
+
+|FX,s − FX(cid:48),s| =
+
+1
+s| + 1
+|X◦
+
+|Fx,s − FX◦,s| ≤
+
+1
+s| + 1
+|X◦
+
+Rmax
+1 − γ
+
+.
+
+Note the same bound also holds for the case s ∈ Sx(cid:48) \Sx. Finally, since we have seen that the same
+bound holds for all s ∈ Sx ∪ Sx(cid:48), we obtain
+
+(cid:88)
+
+s∈S
+
+ws(FX,s − FX(cid:48),s)2 ≤ R2
+
+max
+
+(1 − γ)2
+
+(|X◦
+
+ws
+s| + 1)2 ,
+
+(cid:88)
+
+s∈Sx∪Sx(cid:48)
+
+which yields the desired bound.
+
+18
+
+Corollary 17. If X is a dataset of trajectories, then the following holds for every neighbouring
+dataset X(cid:48) (cid:39) X:
+
+(cid:107)FX − FX(cid:48)(cid:107)2,Γ ≤ Rmax
+1 − γ
+
+ws
+
+max{|Xs|, 1}2 .
+
+(cid:115)(cid:88)
+
+s∈S
+
+Proof. Using the notation from Lemma 16 we observe that |Xs| = |X◦
+if s /∈ Sx. Therefore, the following holds for any trajectories x, x(cid:48):
+ws
+
+(cid:88)
+
+(cid:88)
+
+(cid:88)
+
+s| + 1)2 ≤(cid:88)
+
+ws
+
+(|X◦
+
+(|X◦
+
+ws
+s| + 1)2 =
+
+ws
+|Xs|2 +
+
+s|+1 if s ∈ Sx, and |Xs| = |X◦
+s|
+
+(cid:88)
+
+ws
+|Xs|2 +
+
+ws ,
+
+s∈S
+
+s∈Sx∪Sx(cid:48)
+where SX denotes the set of states visited by at least one trajectory from X. Since s /∈ SX implies
+|Xs| = 0, we can plug this bound into the result of Lemma 16 as follows:
+
+s∈S\SX
+
+s∈S\Sx
+
+s∈SX
+
+s∈Sx
+
+(|Xs| + 1)2 ≤ (cid:88)
+(cid:115)(cid:88)
+
+(cid:107)FX − FX(cid:48)(cid:107)2,Γ ≤ Rmax
+1 − γ
+
+ws
+|Xs|2 +
+
+ws =
+
+Rmax
+1 − γ
+
+ws
+
+max{|Xs|, 1}2 .
+
+s∈S
+
+Lemma 18. The following holds for every v ∈ NS:
+
+(cid:88)
+
+s∈S\SX
+
+(cid:115)(cid:88)
+
+s∈SX
+
+(cid:88)
+
+s∈S
+
+ϕw
+
+k (v) =
+
+ws
+
+max{vs − k, 1}2 .
+
+k (v) =(cid:80)
+
+Furthermore, for every k ≥ (cid:107)v(cid:107)∞ − 1 we have ϕw
+Proof. Recall that ϕw
+the result follows immediately because
+
+k (v) = max(cid:107)v(cid:48)−v(cid:107)∞≤k ϕw(v(cid:48)) with ϕw(v) = (cid:80)
+
+s ws.
+
+s ws/ max{vs, 1}2 and observe
+
+ϕw
+
+k (v) =
+
+ws
+
+min−k≤l≤k max{vs + l, 1}2 =
+
+ws
+
+max{vs − k, 1}2 .
+
+(cid:88)
+
+s∈S
+
+(cid:88)
+
+s∈S
+
+C Privacy Analysis of DP-LSL
+Lemma 19. Let X (cid:39) X(cid:48) be two neighbouring datasets of m trajectories with X = (x1, . . . , xm−1, x)
+and X(cid:48) = (x1, . . . , xm−1, x(cid:48)). Let Fx ∈ RS (resp. Fx(cid:48) ∈ RS) be the vector given by Fx(s) = Fx,s
+(resp. Fx(cid:48)(s) = Fx(cid:48),s). Deﬁne the diagonal matrices Γρ, ∆x,x(cid:48) ∈ RS×S given by Γρ(s, s) = ρs and
+∆x,x(cid:48)(s, s) = Is∈x − Is∈x(cid:48). If the regularization parameter satisﬁes λ > (cid:107)Φ(cid:62)∆x,x(cid:48)ΓρΦ(cid:107), then the
+following holds:
+
+(cid:13)(cid:13)(cid:13)2
+Given a trajectory x and a vector θ ∈ Rd we shall also write (cid:96)(x, θ) =(cid:80)
+
+Proof. In order to simplify our notation we write ¯θ = θλ
+
+X − Fx + Fx(cid:48)(cid:1)(cid:62)
+
+(cid:80)m
+i=1 (cid:96)(xi, θ). Now we proceed with the proof.
+Let us start by noting that because J λ
+2m(cid:107)θ1−θ2(cid:107)2
+X (θ2), θ1−θ2(cid:105)+ λ
+
+ρs(Fx,s − φ(cid:62)
+X (θ1) − J λ
+2 for any θ1, θ2 ∈ Rd. Thus, using that optimality implies ∇J λ
+
+X(cid:48) for the rest of the proof.
+s θ)2 so
+X (θ2) ≥
+X (¯θ) =
+
+X (θ) is λ/m-strongly convex, we have J λ
+
+that JX (θ) = 1
+m
+(cid:104)∇J λ
+
+(cid:13)(cid:13)(cid:13)(cid:0)∆x,x(cid:48)Φθλ
+
+λ − (cid:107)Φ(cid:62)∆x,x(cid:48)ΓρΦ(cid:107)
+
+X and ¯θ(cid:48) = θλ
+
+(cid:107)θλ
+X − θλ
+2
+
+X(cid:48)(cid:107)2
+
+s∈Sx
+
+ΓρΦ
+
+(40)
+
+≤
+
+.
+
+19
+
+∇J λ
+
+X(cid:48)(¯θ(cid:48)) = 0, we get
+
+λ
+m
+
+(cid:107)¯θ − ¯θ(cid:48)(cid:107)2
+
+where the equalities follows from deﬁnitions of X, X(cid:48), J λ
+of (cid:96)(x, θ) we see that
+
+X and JX . If we now expand the deﬁnition
+
+=
+
+1
+m
+
+X (¯θ(cid:48)) − J λ
+
+2 ≤ J λ
+X(cid:48)(¯θ(cid:48))
+= JX (¯θ(cid:48)) − JX (¯θ) + JX(cid:48)(¯θ) − JX(cid:48)(¯θ(cid:48))
+
+X(cid:48)(¯θ) − J λ
+
+X (¯θ) + J λ
+
+(cid:0)(cid:96)(x, ¯θ(cid:48)) − (cid:96)(x, ¯θ) + (cid:96)(x(cid:48), ¯θ) − (cid:96)(x(cid:48), ¯θ(cid:48))(cid:1) ,
+(cid:16)
+(cid:88)
+(cid:16)
+(cid:88)
+
+¯θ)2 − 2Fx,sφ(cid:62)
+
+¯θ(cid:48))2 − (φ(cid:62)
+
+(φ(cid:62)
+
+s∈Sx
+
+ρs
+
+s
+
+s
+
+¯θ(cid:48))2 − 2Fx(cid:48),sφ(cid:62)
+
+ρs
+
+(φ(cid:62)
+
+s
+
+¯θ)2 − (φ(cid:62)
+
+s
+
+s∈Sx(cid:48)
+
+,
+
+.
+
+(cid:17)
+s (¯θ(cid:48) − ¯θ)
+(cid:17)
+s (¯θ − ¯θ(cid:48))
+(cid:105)
+
+(cid:96)(x, ¯θ(cid:48)) − (cid:96)(x, ¯θ) =
+
+(cid:96)(x(cid:48), ¯θ) − (cid:96)(x(cid:48), ¯θ(cid:48)) =
+
+Using the identity (φ(cid:62)
+
+(cid:96)(x(cid:48), ¯θ(cid:48)) as (cid:88)
+
+s
+
+s
+
+(cid:104)
+
+¯θ(cid:48))2 − (φ(cid:62)
+
+¯θ)2 = (¯θ(cid:48) + ¯θ)(cid:62)φsφ(cid:62)
+(Is∈x − Is∈x(cid:48))(¯θ(cid:48) + ¯θ)(cid:62)φsφ(cid:62)
+
+s (¯θ(cid:48) − ¯θ), we rewrite (cid:96)(x, ¯θ(cid:48))− (cid:96)(x, ¯θ) + (cid:96)(x(cid:48), ¯θ)−
+s − 2(Fx,s − Fx(cid:48),s)φ(cid:62)
+
+(¯θ(cid:48) − ¯θ) ,
+
+(41)
+
+s
+
+where we implicitly used that Fx,s = 0 whenever s /∈ x. Finally, using the deﬁnitions in the
+statement we can rearrange the above expression to show that
+
+ρs
+
+s∈S
+
+(¯θ(cid:48) + ¯θ)(cid:62)Φ(cid:62)∆x,x(cid:48) − 2(Fx − Fx(cid:48))(cid:62)(cid:17)
+(cid:16)
+(cid:16)¯θ(cid:62)Φ(cid:62)∆x,x(cid:48) − (Fx − Fx(cid:48))(cid:62)(cid:17)
+(cid:107)(cid:16)¯θ(cid:62)Φ(cid:62)∆x,x(cid:48) − (Fx − Fx(cid:48))(cid:62)(cid:17)
+
+λ
+m
+
+(cid:107)¯θ − ¯θ(cid:48)(cid:107)2
+
+2 ≤ 1
+m
+2
+=
+m
+≤ 2
+m
+
+ΓρΦ(¯θ(cid:48) − ¯θ)
+
+ΓρΦ(¯θ(cid:48) − ¯θ) +
+1
+m
+ΓρΦ(cid:107)2(cid:107)¯θ(cid:48) − ¯θ(cid:107)2 +
+
+(¯θ(cid:48) − ¯θ)(cid:62)Φ(cid:62)∆x,x(cid:48)ΓρΦ(¯θ(cid:48) − ¯θ)
+(cid:107)Φ(cid:62)∆x,x(cid:48)ΓρΦ(cid:107)(cid:107)¯θ(cid:48) − ¯θ(cid:107)2
+2 ,
+
+1
+m
+
+where we used the Cauchy–Schwartz inequality and the deﬁnition of operator norm. The result
+now follows by solving for (cid:107)¯θ − ¯θ(cid:48)(cid:107)2 in the above inequality.
+Corollary 20. Let X be a dataset of trajectories and suppose λ > (cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)∞. Then the following
+holds for any neighbouring dataset X(cid:48) (cid:39) X:
+
+(cid:107)θλ
+
+X − θλ
+
+X(cid:48)(cid:107)2 ≤
+
+2Rmax(cid:107)Φ(cid:107)
+
+(1 − γ)(λ − (cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)∞)
+
+ϕλ
+
+X ,
+
+where
+
+ϕλ
+
+X =
+
+ρs|Xs| + (cid:107)ρ(cid:107)2
+
+.
+
+(cid:113)
+2
+
+Proof. We start by noting that (cid:107)∆x,x(cid:48)(cid:107) ≤ 1 and (cid:107)Γρ(cid:107) = (cid:107)ρ(cid:107)∞, hence submultiplicativity of matrix
+operator norms yields (cid:107)Φ(cid:62)∆x,x(cid:48)ΓρΦ(cid:107) ≤ (cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)∞. On the other hand, for the numerator in (40)
+
+∆x,x(cid:48)Φθλ
+
+X − Fx + Fx(cid:48)
+
+ΓρΦ
+
+X(cid:107)2(cid:107)Φ(cid:107)(cid:107)ρ(cid:107)∞ + (cid:107)(Fx − Fx(cid:48))(cid:62)Γρ(cid:107)2
+
+(42)
+
+(cid:17)(cid:107)Φ(cid:107) .
+
+we have (cid:13)(cid:13)(cid:13)(cid:13)(cid:16)
+
+(cid:107)Φ(cid:107)(cid:107)ρ(cid:107)∞√
+
+2λ
+
+(cid:115)(cid:88)
+
+s∈S
+
+(cid:17)(cid:62)
+
+≤(cid:16)(cid:107)θλ
+
+(cid:13)(cid:13)(cid:13)(cid:13)2
+
+20
+
+(cid:107)θλ
+
+λ
+2m
+
+Bounding the individual entries in Fx and Fx(cid:48) by Rmax/(1 − γ) we get (cid:107)(Fx − Fx(cid:48))(cid:62)Γρ(cid:107)2 ≤
+Rmax(cid:107)ρ(cid:107)2/(1 − γ). The last step is to bound the norm (cid:107)θλ
+X(cid:107)2, for which we use the closed-form
+solution to argminθ J λ
+
+X (θ) given in the paper and write:
+
+To bound the last remaining norm let use write U ΣV (cid:62) for the SVD of Γ1/2
+with V (cid:62)V = V V (cid:62) = I. With this we can write:
+
+X(cid:107)2 ≤
+
+I)−1Φ(cid:62)Γ1/2
+
+(cid:13)(cid:13)(cid:13)(cid:13)(Φ(cid:62)ΓX Φ +
+
+(cid:13)(cid:13)(cid:13)(cid:13)(cid:107)FX(cid:107)2,ΓX ≤
+
+(cid:13)(cid:13)(cid:13)(cid:13)(Φ(cid:62)ΓX Φ +
+(cid:18)
+(λ/2m)I)−1ΣU(cid:62)(cid:107) ≤(cid:112)m/2λ. Thus we get a bound for (cid:107)θλ
+
+(Φ(cid:62)ΓX Φ +
+
+λ
+2m
+√
+a) for any x ≥ 0 to get (cid:107)V (Σ2 +
+Now we use that (cid:107)U(cid:107) = (cid:107)V (cid:107) = 1 and x/(x2 + a) ≤ 1/(2
+X(cid:107)2 that when plugged into (42) yields
+
+I)−1Φ(cid:62)Γ1/2
+
+ΣU(cid:62) .
+
+X = V
+
+X Φ, where V ∈ Rd×d
+
+λ
+2m
+
+I)−1Φ(cid:62)Γ1/2
+
+X
+
+(cid:115)(cid:88)
+
+(cid:19)−1
+
+Rmax
+1 − γ
+
+λ
+2m
+
+(cid:13)(cid:13)(cid:13)(cid:13)
+
+(cid:32)
+
+Σ2 +
+
+(43)
+
+s∈S
+
+X
+
+I
+
+(cid:33)
+
+.
+
+ρs|Xs|
+m
+
+the desired result.
+Lemma 21. The following holds for every v ∈ NS:
+
+(cid:107)Φ(cid:107)(cid:107)ρ(cid:107)∞√
+
+2λ
+
+(cid:115)(cid:88)
+
+s∈S
+
+ϕλ
+
+k(v) =
+
+ρs max{vs + k, m} + (cid:107)ρ(cid:107)2
+
+.
+
+2
+(cid:112)(cid:80)
+
+(cid:16)(cid:107)Φ(cid:107)(cid:107)ρ(cid:107)∞
+
+√
+
+2λ
+
+√
+
+m
+
+(cid:17)2
+
+.
+
+Furthermore, for every k ≥ m − mins vs we have ϕλ
+
+k(v) =
+
+s∈S ρs + (cid:107)ρ(cid:107)2
+
+Proof. The proof is similar to that of Lemma 18 and is omitted.
+
+D Utility Analysis of DP-LSW
+
+The goal of this section is to show that as the size m of the dataset X grows, the diﬀerentially
+private solution θw
+X provided by algorithm DP-LSW is not much worse than the one obtained by
+directly minimizing J w
+X (θ). In other words, for large datasets the noise introduced by the privacy
+constraint is negligible. We do so by proving a O(1/m2) bound for the expected empirical excess
+X ) − J w
+risk given by EX,η[J w
+X )]. Our analysis starts with a lemma that leverages the law of
+total expectation in order to reduce the bound to a quantity that only depends on EX [σ2
+
+X (ˆθw
+
+X (θw
+
+X ].
+
+Lemma 22.
+
+EX,η[J w
+
+X (ˆθw
+
+X ) − J w
+
+X (θw
+
+X )] = (cid:107)Γ1/2Φ(cid:107)2
+
+F
+
+EX [σ2
+
+X ] .
+
+Proof. By the law of total expectation it is enough to show that
+
+Eη[J w
+
+X (ˆθw
+
+X ) − J w
+
+X (θw
+
+X )|X] = σ2
+
+X(cid:107)Γ1/2Φ(cid:107)2
+
+F .
+
+(44)
+
+(45)
+
+Let X be an arbitrary dataset. Expanding the deﬁnition of J w
+X ΓFX + θ(cid:62)Φ(cid:62)ΓΦθ − 2F (cid:62)
+
+X (θ) = F (cid:62)
+J w
+
+X ΓΦθ .
+
+X (θ) we have that for any θ ∈ Rd
+
+(46)
+
+21
+
+On the other hand, since ∇θJ w
+ˆθw
+X = θw
+
+X + η, a simple algebraic calculation yields
+
+X (θw
+
+X ) = 0, we have θw
+X
+
+(cid:62)Φ(cid:62)ΓΦ = F (cid:62)
+
+X ΓΦ. Thus, using the deﬁnition
+
+X (ˆθw
+J w
+
+X ) − J w
+
+X (θw
+
+X ) = η(cid:62)Φ(cid:62)ΓΦη − F (cid:62)
+
+X ΓΦη − η(cid:62)Φ(cid:62)ΓΦθw
+X .
+
+Finally, taking the expectation over η ∼ N (0, σ2
+
+Eη[J w
+
+X (ˆθw
+
+X ) − J w
+
+X (θw
+
+X )] = Eη[η(cid:62)Φ(cid:62)ΓΦη] = σ2
+
+X I) of the above expression we get
+X(cid:107)Γ1/2Φ(cid:107)2
+
+X Tr(Φ(cid:62)ΓΦ) = σ2
+
+F .
+
+(47)
+
+(48)
+
+X ] we recall the variance has the form σ2
+
+X = C2ψw
+
+X , where C is a
+
+In order to bound EX [σ2
+constant independent of X and
+
+e−kβ(cid:88)
+
+max{|Xs| − k, 1}2 ≤(cid:88)
+
+ws
+
+ψw
+
+X = max
+k≥0
+
+(cid:18)
+
+s∈S
+X ] = C2EX [ψw
+Thus, we can bound EX [σ2
+individual maximum in (49). The two following technical lemmas will prove useful.
+Lemma 23. Let b > 0 and a ≥ 1. Then the following holds:
+
+s
+
+X ] by providing a bound for the expectation of each
+
+ws
+
+max
+k≥0
+
+max{|Xs| − k, 1}2
+
+.
+
+(49)
+
+(cid:19)
+
+e−kβ
+
+ 1
+
+a2
+
+e1−ab
+4 b2e−ab
+e2
+
+e−bx
+(a − x)2 =
+
+max
+
+0≤x≤a−1
+
+b < 2/a
+b > 2
+otherwise
+
+(50)
+
+Proof. The result follows from a simple calculation.
+
+Lemma 24. Suppose Bm,p is a binomial random variable with m trials and success probability p.
+Then the following hold:
+
+(cid:20)
+(cid:20) 1
+
+E
+
+E
+
+B2
+
+m,p
+
+(cid:21)
+(cid:21)
+
+1
+
+Bm,p + 1
+IBm,p≥1
+
+1 − (1 − p)m+1
+
+,
+
+(cid:18) 1 − (1 − p)m+2
+
+p(m + 1)
+6
+
+p(m + 1)
+
+p(m + 2)
+
+=
+
+≤
+
+− (1 − p)m+1 − p(m + 1)
+
+2
+
+(1 − p)m
+
+(cid:19)
+
+.
+
+Proof. The ﬁrst expectation is a classical exercise in probability textbooks. The second one can be
+
+22
+
+proved as follows:
+
+(cid:20) 1
+
+E
+
+B2
+
+m,p
+
+IBm,p≥1
+
+(cid:18)m
+(cid:19)
+
+k
+
+(cid:21)
+
+=
+
+m(cid:88)
+m(cid:88)
+
+k=1
+
+1
+k2
+
+k=1
+
+6
+
+≤ 6
+
+=
+
+=
+
+=
+
+=
+
+=
+
+p(m + 1)
+
+6
+
+p(m + 1)
+
+6
+
+p(m + 1)
+
+6
+
+p(m + 1)
+
+6
+
+pk(1 − p)m−k
+
+(cid:18)m
+
+(cid:19)
+
+1
+
+1
+
+1
+
+k
+
+k=1
+
+k + 2
+
+k + 2
+
+m(cid:88)
+m(cid:88)
+m+1(cid:88)
+(cid:18)
+(cid:20)
+(cid:21)
+(cid:18) 1 − (1 − p)m+2
+
+Bm+1,p + 1
+
+j=2
+E
+
+j + 1
+
+k=1
+
+1
+
+1
+
+(k + 1)(k + 2)
+
+pk(1 − p)m−k
+
+(m + 1)!
+
+(k + 1)!(m − k)!
+
+pk+1(1 − p)m−k
+
+P[Bm+1,p = k + 1]
+
+P[Bm+1,p = j]
+
+− P[Bm+1,p = 0] − 1
+2
+
+P[Bm+1,p = 1]
+
+− (1 − p)m+1 − p(m + 1)
+
+(1 − p)m
+
+,
+
+(cid:19)
+(cid:19)
+
+p(m + 1)
+
+p(m + 2)
+
+2
+
+where we used the ﬁrst equation in the last step, and the bound (k + 1)(k + 2)/k2 ≤ 6 for k ≥ 1 in
+the ﬁrst inequality.
+
+Recall that ps denotes the probability that a trajectory from X visits states s. Because these
+trajectories are i.i.d. we have that |Xs| = Bm,ps is a binomial random variable. Therefore, we can
+combine the last two lemmas to prove the following.
+Lemma 25. Suppose β ≤ 2. Then we have:
+
+EX
+
+max
+k≥0
+
+e−kβ
+
+max{|Xs| − k, 1}2
+
+≤
+
+p2
+1
+
+6
+
+s(m+1)(m+2) + e2β2
+
+4 (1 − (1 − e−β)ps)m ps > 0 ,
+ps = 0 .
+
+(51)
+
+(cid:21)
+
+(cid:40)
+
+(cid:20)
+
+Proof. Note in the ﬁrst place that Lemma 23 implies
+
+e−kβ
+
+max
+k≥0
+
+max{|Xs| − k, 1}2 = I|Xs|=0 + I1≤|Xs|<2/β
+
+(52)
+where we used that in the case |Xs| = 0 the maximum is 1. If ps = 0, then obviously |Xs| = 0 almost
+surely and the expectation of (52) equals 1. On the other hand, when ps > 0 we use the linearity
+of expectation and bound each term separately. Clearly, EX [I|Xs|=0] = PX [Bm,ps = 0] = (1 − ps)m.
+On the other hand, by looking up the moment generating function of a binomial distribution we
+have
+
+|Xs|2 + I|Xs|≥2/β
+
+β2e−β|Xs| ,
+
+1
+
+e2
+4
+
+EX [I|Xs|≥2/β
+
+e2
+4
+
+β2e−β|Xs|] ≤ e2
+4
+
+β2EX [e−β|Xs|] =
+
+β2(1 − (1 − e−β)ps)m .
+
+e2
+4
+
+The remaining term is bounded by
+
+(cid:20)
+
+EX
+
+I1≤|Xs|<2/β
+
+1
+|Xs|2
+
+≤ EX
+
+I1≤|Xs|
+
+1
+|Xs|2
+
+.
+
+(cid:21)
+
+(cid:20)
+
+(cid:21)
+
+23
+
+(53)
+
+(54)
+
+(cid:20)
+
+(cid:21)
+
+Therefore, applying Lemma 24 and upper bounding some negative terms by zero, we get
+
+EX
+
+max
+k≥0
+
+e−kβ
+
+max{|Xs| − k, 1}2
+
+≤
+
+6
+
+p2
+s(m + 1)(m + 2)
+
++
+
+e2β2
+
+4
+
+(1 − (1 − e−β)ps)m .
+
+(55)
+
+(cid:19) .
+
+(cid:88)
+
+s∈S0
+
+(cid:18)
+
+(cid:88)
+
+s∈S+
+
+Now we can combine Lemmas 22 and 25 using Equation 49 to get our ﬁnal result.
+
+Theorem 26. Let S0 = {s ∈ S|ps = 0} and S+ = S\S0. Let C = αRmax(cid:107)(Γ1/2Φ)†(cid:107)(cid:107)Γ1/2Φ(cid:107)F /(1−
+γ). Suppose β ≤ 2. Then we have the following:
+
+EX,η[J w
+
+X (ˆθw
+
+X )−J w
+
+X (θw
+
+X )] ≤ C2
+
+ws +
+
+ws
+
+6
+
+p2
+s(m + 1)(m + 2)
+
++
+
+e2β2
+
+4
+
+(1 − (1 − e−β)ps)m
+
+The following version is the one given in the paper for reasons of space. It is easily obtained by
+noting that e2/4 ≤ 6, m2 ≤ (m + 1)(m + 2), and when β ≤ 1/2 then 1 − (1 − e−β)ps ≤ 1 − βps/2.
+Corollary 27. Let S0 = {s ∈ S|ps = 0} and S+ = S\S0. Let C = αRmax(cid:107)(Γ1/2Φ)†(cid:107)(cid:107)Γ1/2Φ(cid:107)F /(1−
+γ). Suppose β ≤ 1/2. Then EX,η[J w
+
+X )] is upper bounded by:
+
+X (ˆθw
+
+X (θw
+
+(cid:88)
+
+s∈S0
+
+C2
+
+ws + 6
+
+X ) − J w
+(cid:88)
+
+ws
+
+(cid:18) 1
+sm2 + β2
+p2
+
+s∈S+
+
+(cid:18)
+
+1 − βps
+2
+
+(cid:19)m(cid:19) .
+
+The following is an immediate consequence of these results.
+X ) − J w
+
+Corollary 28. If ws = 0 for all s ∈ S0, then EX,η[J w
+
+X (ˆθw
+
+X (θw
+
+X )] = O(1/m2).
+
+E Utility Analysis of DP-LSL
+
+The analysis in this section follows a scheme similar to the previous one. We start by taking the
+expectation of the excess empirical risk with respect to the Gaussian perturbation η.
+
+Proof. Let X be an arbitrary dataset with m trajectories. Recalling that ˆθλ
+
+X = θλ
+
+X + η we get:
+
+Lemma 29.
+
+EX,η[J λ
+
+X (ˆθλ
+
+X ) − J λ
+
+X (θλ
+
+X )] = EX
+
+(cid:34)(cid:32)
+
+(cid:88)
+
+s∈S
+
+λd
+2m
+
++
+
+1
+m
+
+X (ˆθλ
+J λ
+
+X ) − J λ
+
+X (θλ
+
+X ) =
+
+=
+
+1
+m
+
+1
+m
+
+(cid:16)
+(cid:16)
+
+ρs
+
+ρs
+
+m(cid:88)
+m(cid:88)
+
+i=1
+
+(cid:88)
+(cid:88)
+
+s∈Sxi
+
+i=1
+
+s∈Sxi
+
+(φ(cid:62)
+
+s
+
+X )2 − (φ(cid:62)
+ˆθλ
+
+s θλ
+
+X )2 − 2Fxi,sφ(cid:62)
+s η
+
+η(cid:62)φsφ(cid:62)
+
+s η + 2η(cid:62)φsφ(cid:62)
+
+s θλ
+
+X − 2Fxi,sφ(cid:62)
+s η
+
+24
+
+ρs(cid:107)φs(cid:107)2
+
+σ2
+X
+
+.
+
+(56)
+
+(cid:35)
+
+(cid:33)
+2|Xs|
+(cid:17)
+
++
+
+λ
+2m
+
+(cid:17)
+
++
+
+(cid:17)
+
+2 − (cid:107)θλ
+
+X(cid:107)2
+
+2
+
+X(cid:107)2
+
+(cid:16)(cid:107)ˆθλ
+(cid:16)(cid:107)η(cid:107)2
+
+λ
+2m
+
+(cid:17)
+
+.
+
+2 + 2η(cid:62)θλ
+
+X
+
+Taking the expectation over η ∼ N (0, σ2
+
+X I) in the above expression we get
+
+(cid:88)
+
+s∈Sxi
+
+m(cid:88)
+(cid:80)
+
+i=1
+
+s∈Sxi
+
+ρs Tr(φsφ(cid:62)
+
+ρs Tr(φsφ(cid:62)
+
+s )σ2
+
+X +
+
+s ) =(cid:80)
+
+λ
+2m
+
+dσ2
+
+X .
+
+s∈S ρs(cid:107)φs(cid:107)2
+
+2|Xs|.
+
+Eη[J λ
+
+X (ˆθλ
+
+X ) − J λ
+
+X (θλ
+
+X )] =
+
+The result now follows from noting that(cid:80)m
+(cid:113)
+
+1
+m
+
+i=1
+
+Cλ
+bound (a + b)2 ≤ 2a2 + 2b2 we have:
+
+In order to bound the expression given by previous lemma we will expand the deﬁnition of σX =
+X , with Cλ = 2Rmax(cid:107)Φ(cid:107)/(1 − γ)(λ − (cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)∞), and note that using the straightforward
+ψλ
+
+(cid:107)ρ(cid:107)2 +
+
+2
+(cid:115)(cid:88)
+e−2kβ min{|Xs| + k, m}(cid:17)
+(cid:16)
+
+ρs min{|Xs| + k, m}
+
+s∈S
+
+.
+
+(cid:107)Φ(cid:107)(cid:107)ρ(cid:107)∞√
+(cid:88)
+
+2λ
+
+ρs max
+k≥0
+
+ψλ
+
+X = max
+k≥0
+
+e−kβ
+
+≤ 2(cid:107)ρ(cid:107)2
+
+2 +
+
+(cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)2∞
+
+λ
+
+s∈S
+
+The following lemma can be used to bound the maximums inside this sum.
+Lemma 30. Suppose a ≥ 0 and b > 0. Then the following holds:
+
+a
+
+b < a/2
+b > m/2
+otherwise
+
+(57)
+
+me−2b(m−a)
+1
+2eb e2ab
+Assuming we have 2β < 1 ≤ m, previous lemma yields:
+
+e−2bx(a + x) =
+
+0≤x≤m−a
+
+max
+
+(cid:16)
+
+e−2kβ min{|Xs| + k, m}(cid:17)
+
+max
+k≥0
+
+= |Xs|I|Xs|>2β +
+
+1
+2eβ
+
+e2β|Xs|I|Xs|≤2β ≤ |Xs| +
+
+1
+2eβ
+
+I|Xs|=0 .
+
+(58)
+
+When taking the expectation of the upper bound for (56) obtained by plugging in (58), several
+quantities involving products of correlated binomial random variables will appear. Next lemma
+gives expressions for all these expectations.
+Lemma 31. Recall that ps = P[s ∈ x] and |Xs| is a binomial random variable with m trials and
+success probability ps. Deﬁne ps,s(cid:48) = P[s ∈ x∧ s(cid:48) ∈ x] and ¯ps,s(cid:48) = P[s ∈ x∧ s(cid:48) /∈ x] for any s, s(cid:48) ∈ S.
+Then we have the following:
+
+1. E[|Xs|] = mps,
+2. E[I|Xs|=0] = (1 − ps)m,
+3. E[|Xs|2] = m2p2
+4. E[|Xs||Xs(cid:48)|] = m(m − 1)psps(cid:48) + mps,s(cid:48),
+5. E[|Xs|I|Xs(cid:48)|=0] = m¯ps,s(cid:48)(1 − ps(cid:48))m−1.
+
+s + m(ps − p2
+s),
+
+Proof. All equations follow from straightforward calculations.
+
+25
+
+Theorem 32. Suppose β < 1/2 and λ > (cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)∞. Let Cλ = 2αRmax(cid:107)Φ(cid:107)/(1−γ)(λ−(cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)∞).
+Then we have
+
+EX,η[J λ
+
+X (ˆθλ
+
+X ) − J λ
+
+X (θλ
+
++
+
+λ
+m
+
+d(cid:107)ρ(cid:107)2
+
+2 +
+
+1
+m
+
+(cid:40)(cid:88)
+(cid:88)
+
+s∈S
+
+λ
+
+X )] ≤ C2
+s∈S
+d(cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)2∞
+
+4eβ
+
+ρsps
+
+(cid:18) d(cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)2∞
+
+2
+
+ρs(1 − ps)m +
+
+(cid:19)
+2(cid:107)φs(cid:107)2
+(cid:88)
+
+2
+
+s,s(cid:48)∈S
+
++ 2(cid:107)ρ(cid:107)2
+
+m
+λ
+
+(cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)2∞
+(cid:18)
+
++
+
+1
+λ
+
+(cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)2∞
+
+s(cid:107)φs(cid:107)2
+ρ2
+
+2(ps − p2
+
+s) +
+
+ρsρs(cid:48)(cid:107)φs(cid:107)2
+
+2
+
+ps,s(cid:48) − psps(cid:48) +
+
+¯ps,s(cid:48)(1 − ps(cid:48))m−1
+
+1
+2eβ
+
+ρsρs(cid:48)psps(cid:48)(cid:107)φs(cid:107)2
+
+2
+
+ .
+(cid:19)
+
+(cid:34)(cid:32)
+
+Proof. Combining Lemma 29 with (58) and the deﬁnition of σ2
+for EX,η[J λ
+
+X ) − J λ
+
+X (ˆθλ
+
+X (θλ
+
+X )]:
+
+X yields the following upper bound
+
+EX
+
+C2
+λ
+
+λd
+2m
+
++
+
+1
+m
+
+ρs(cid:107)φs(cid:107)2
+
+(cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)2∞
+
+2(cid:107)ρ(cid:107)2
+
+2 +
+
+λ
+
+s∈S
+
+|Xs| +
+
+ρs
+
+1
+2eβ
+
+I|Xs|=0
+
+Terms that do not involve products of the form |Xs||Xs(cid:48)| or |Xs|I|Xs(cid:48)|=0 can be straightforwardly
+
+reduced to linear combinations of expectations in Lemma 31. The remaining term yields the
+following:
+
+(cid:18)
+
+(cid:88)
+
+(cid:19)(cid:33)(cid:35)
+
+.
+
+EX
+
+ρsρs(cid:48)(cid:107)φs(cid:107)2
+
+|Xs(cid:48)| +
+
+1
+2eβ
+
+I|Xs(cid:48)|=0
+
+(cid:19)
+(cid:19)(cid:21)
+
+EX
+
+|Xs|
+
+|Xs| +
+
+I|Xs|=0
+
+(cid:18)
+
+1
+2eβ
+|Xs(cid:48)| +
+
+(cid:19)(cid:21)
+
+1
+2eβ
+
+I|Xs(cid:48)|=0
+
+ρsρs(cid:48)(cid:107)φs(cid:107)2
+
+2
+
+EX
+
+|Xs|
+
+(cid:0)m2p2
+s + m(ps − p2
+(cid:18)
+
+s)(cid:1)
+
+ρsρs(cid:48)(cid:107)φs(cid:107)2
+
+2
+
+m(m − 1)psps(cid:48) + mps,s(cid:48) +
+
+(cid:19)
+
+,
+
+m¯ps,s(cid:48)(1 − ps(cid:48))m−1
+
+1
+2eβ
+
+(cid:88)
+
+s∈S
+
+(cid:88)
+
+s∈S
+
+=
+
+s,s(cid:48)∈S
+
+ (cid:88)
+(cid:88)
+s(cid:107)φs(cid:107)2
+ρ2
+(cid:88)
+(cid:88)
+s,s(cid:48)∈S
+s(cid:54)=s(cid:48)
+s(cid:107)φs(cid:107)2
+ρ2
+(cid:88)
+
+s∈S
+
+s∈S
+
++
+
+=
+
+2
+
+2
+
++
+
+s,s(cid:48)∈S
+s(cid:54)=s(cid:48)
+
+(cid:33)(cid:32)
+2|Xs|
+
+2|Xs|
+(cid:20)
+
+(cid:18)
+(cid:18)
+(cid:20)
+
+(cid:88)
+
+s,s(cid:48)∈S
+s(cid:54)=s(cid:48)
+
+26
+
+where we used Lemma 31 again. Thus we get:
+
+EX,η[J λ
+
+X (ˆθλ
+
+X ) − J λ
+
+X (θλ
+
+X )] ≤ C2
+
+λ
+
+λd(cid:107)ρ(cid:107)2
+
+2
+
+d(cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)2∞
+
++
+
+2m
+
+ρsps(cid:107)φs(cid:107)2
+
+2m +
+
+(cid:40)
+
+m
+
+(cid:88)
+
+2(cid:107)ρ(cid:107)2
+m
+
+2
+
+s∈S
+(cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)2∞
+
+λm
+
++
+
++
+
+(cid:88)
+
+s,s(cid:48)∈S
+s(cid:54)=s(cid:48)
+
+(cid:19)
+
+1
+2eβ
+s(cid:107)φs(cid:107)2
+ρ2
+
+2
+
+(1 − ps)m
+
+(cid:0)m2p2
+
+mps +
+
+(cid:88)
+
+s∈S
+
+s)(cid:1)
+
+s + m(ps − p2
+
+s∈S
+
+(cid:18)
+(cid:88)
+ρs
+(cid:107)Φ(cid:107)2(cid:107)ρ(cid:107)2∞
+(cid:18)
+
+λm
+
+ρsρs(cid:48)(cid:107)φs(cid:107)2
+
+2
+
+m(m − 1)psps(cid:48) + mps,s(cid:48) +
+
+m¯ps,s(cid:48)(1 − ps(cid:48))m−1
+
+1
+2eβ
+
+(cid:19)
+
+The ﬁnal result is obtained by grouping the terms in this expression by their dependence in λ and
+m.
+
+Note that if we take λ = ω(1) with respect to m in the above theorem, then Cλ = O(1/λ) and
+
+we get the following corollary.
+
+Corollary 33. Suppose λ = ω(1) with respect to m. Then we have
+
+(cid:18) 1
+
++
+
+1
+λ2 +
+
+m
+λ3
+
+λm
+
+(cid:19)
+
+.
+
+(59)
+
+EX,η[J λ
+
+X (ˆθλ
+
+X ) − J λ
+
+X (θλ
+
+X )] = O
+
+27
+
+
