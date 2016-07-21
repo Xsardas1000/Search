@@ -50,7 +50,7 @@ def range_search(request, corpus):
     return distances
 
 def find_similar(file, processed_files, request_key_words, n):
-    model =  models.LdaModel.load('./models/lda4.model')
+    model = models.LdaModel.load('./models/lda4.model')
     index = similarities.MatrixSimilarity.load('./models/lda_MatrixSimilarity4.index')
     dictionary = corpora.Dictionary.load_from_text('./models/dictionary.dict')
     vec = dictionary.doc2bow(re.split(' ', file))

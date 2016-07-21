@@ -14,8 +14,8 @@ setenv PATH "$VIRTUAL_ENV/bin:$PATH"
 
 
 
-if ("(Search_project)" != "") then
-    set env_name = "(Search_project)"
+if ("(Search)" != "") then
+    set env_name = "(Search)"
 else
     set env_name = `basename "$VIRTUAL_ENV"`
 endif

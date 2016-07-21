@@ -61,8 +61,8 @@ if test -z "$VIRTUAL_ENV_DISABLE_PROMPT"
 
         # Prompt override provided?
         # If not, just prepend the environment name.
-        if test -n "(Search_project)"
-            printf '%s%s' "(Search_project)" (set_color normal)
+        if test -n "(Search)"
+            printf '%s%s' "(Search)" (set_color normal)
         else
             printf '%s(%s) ' (set_color normal) (basename "$VIRTUAL_ENV")
         end
