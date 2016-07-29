@@ -7,19 +7,47 @@ from nltk.corpus import stopwords, wordnet
 from nltk.stem import SnowballStemmer
 from gensim import corpora, models, similarities
 from textblob import TextBlob
+import requests
 import scipy as sp
+import urllib
+import json
 
-def prepare_doc(doc):
-    blob = TextBlob(doc)
-    if blob.detect_language() != "en":
-        doc = blob.translate(to="en")
-    doc = re.sub(r"(\n)", " ", doc.string.lower())
-    doc = re.sub(r"(-\n)", "", doc)
-    doc = re.split("[^a-z0-9]", doc)
+def translate(doc, to_language = 'en'):
+    url = 'http://translate.google.com/translate_a/t'
+    params = {
+        "text": doc,
+        "sl": TextBlob(doc).detect_language(),
+        "tl": to_language,
+        "client": "p"
+    }
+    return requests.get(url, params=params).content
+
+'''
+def translate(text, src = '', to = 'en'):
+  parameters = ({'langpair': '{0}|{1}'.format(src, to), 'v': '1.0' })
+  translated = ''
+
+  for text in (text[index:index + 4500] for index in range(0, len(text), 4500)):
+    parameters['q'] = text
+    response = json.loads(urllib.request.urlopen('http://ajax.googleapis.com/ajax/services/language/translate',
+                                                 data=urllib.parse.urlencode(parameters).encode('utf-8')).read().decode('utf-8'))
+    try:
+      translated += response['responseData']['translatedText']
+    except:
+      pass
+  return translated '''
+
+def prepare_request(request, synonyms = False):
+    #request = translate(request)
+    request = re.sub(r"(\n)", " ", request.lower())
+    request = re.sub(r"(-\n)", "", request)
+    request = re.split("[^a-z0-9]", request)
     stop_words = stopwords.words('english')
     stemmer = SnowballStemmer('english')
-    doc = [stemmer.stem(word) for word in doc if word not in stop_words & len(word) > 1 & len(word) < 20]
-    return ' '.join(doc)
+    if synonyms == True:
+        request = add_synonyms([word for word in request if word not in stop_words])
+    request = [stemmer.stem(word) for word in request if (word not in stop_words) & (len(word) > 1) & (len(word) < 20)]
+    return ' '.join(request)
 
 
 def dist_raw(v1, v2):
@@ -29,45 +57,32 @@ def dist_raw(v1, v2):
 def cos_raw(v1, v2):
     return sp.spatial.distance.cosine(v1.toarray(), v2.toarray())
 
-def prepare_request(request):
-    blob = TextBlob(request)
-    if blob.detect_language() != "en":
-        request = blob.translate(to="en").string
-    request = re.split("[^a-z0-9]", request.lower())
-    stop_words = stopwords.words('english')
-    stemmer = SnowballStemmer('english')
-    #request = add_synonyms([word for word in request if word not in stop_words])
-    request = [stemmer.stem(word) for word in request if word not in stop_words]
-
-    return ' '.join(request)
-
-
-def range_search(request, corpus):
+def range_search(vec_request, corpus):
     distances = []
     for i, doc in enumerate(corpus):
         vec = corpus.getrow(i)
-        distances.append((cos_raw(vec, request), i))
+        distances.append((cos_raw(vec, vec_request), i))
     return distances
 
-def find_similar(file, processed_files, request_key_words, n):
-    model = models.LdaModel.load('./models/lda4.model')
-    index = similarities.MatrixSimilarity.load('./models/lda_MatrixSimilarity4.index')
-    dictionary = corpora.Dictionary.load_from_text('./models/dictionary.dict')
-    vec = dictionary.doc2bow(re.split(' ', file))
+def lda_search(request, dictionary_path, model_number):
+    model_path = "./models/lda" + str(model_number) + ".model"
+    index_path = "./models/lda_MatrixSimilarity" + str(model_number) + ".index"
+
+    dictionary = corpora.Dictionary.load_from_text(dictionary_path)
+    model = models.LdaModel.load(model_path)
+    index = similarities.MatrixSimilarity.load(index_path)
+
+    vec = dictionary.doc2bow(re.split(' ', request))
     topics = model[vec]
-    #print(topics)
-    #print(model.show_topic(46, topn = 30))
     key_words = set()
-    [key_words.update([key[0] for key in model.show_topic(topic_index, topn=20)]) for topic_index in [topic[0] for topic in topics]]
+    [key_words.update([key[0] for key in model.show_topic(topic_index, topn=20)])
+     for topic_index in [topic[0] for topic in topics]]
 
     sims = index[topics]
     sims = sorted(enumerate(sims), key=lambda item: -item[1])
-    min_weight = 0.1
-    for i in range(n):
-        if sims[i][1] > min_weight:
-            print("Weight: ", sims[i][1])
-            print_highlighted_doc(processed_files[sims[i][0]], ' '.join(list(key_words)))
-    return sims
+
+    return sims, key_words
+
 
 def print_highlighted_doc(doc, key_words):
     highlighted_doc = ""
@@ -83,13 +98,13 @@ def print_highlighted_doc(doc, key_words):
                 highlighted_doc += "\n"
     print(highlighted_doc + "\n")
 
-def print_n_docs(files, distances, keywords, n):
-    for i in range(n):
+def print_n_docs(files, distances, key_words, num_sims = 1):
+    for i in range(num_sims):
         print("Distance: ", distances[i][0])
         print_highlighted_doc(files[distances[i][1]], key_words)
 
 
-def get_ngrams(doc, n, amount = 0):
+def get_ngrams(doc, n):
     blob = TextBlob(doc)
     ngrams = blob.ngrams(n = n)
     return ngrams
@@ -102,38 +117,30 @@ def add_synonyms(request):
             extended_request.update(syn.lemma_names())
     return list(extended_request)
 
+def vec_search(vectorizer, corpus, request):
+
+    request = prepare_request(request)
+    key_words = request
+    request = vectorizer.transform([request])
+    distances = range_search(request, corpus)
+    distances = sorted(distances, key=lambda item: item[0])
+    return distances, key_words
 
 
-#Main
-start_time = cur_time = time.time()
+def create_vectorizer(processed_files_path):
+    processed_files = np.load(processed_files_path)
+    vectorizer = TfidfVectorizer(min_df=1)
+    corpus = vectorizer.fit_transform(processed_files)
+    return vectorizer, corpus, processed_files
 
 
-processed_files = np.load("./processed_files.npy")
-vectorizer = TfidfVectorizer(min_df=1)
+if __name__ == '__main__':
+    processed_files_path = "./processed_files.npy"
+    request = "apple"
 
-corpus = vectorizer.fit_transform(processed_files)
-num_samples, num_features = corpus.shape
+    vectorizer, corpus, processed_files = create_vectorizer(processed_files_path)
+    distances, key_words = vec_search(vectorizer, corpus, request)
+    print_n_docs(processed_files, distances, key_words, num_sims=5)
 
-print("Number of features: ", num_features)
-print("Number of samples: ", num_samples)
-
-
-request = "apple music"
-print("Request: ", request)
-request = prepare_request(request)
-key_words = request
-print("Prepared request: ", request, "\n")
-request = vectorizer.transform([request])
-
-
-distances = range_search(request, corpus)
-distances = sorted(distances, key=lambda item: item[0])
-num_vec_sim = 5
-print_n_docs(processed_files, distances, key_words, num_vec_sim)
-
-num_vec_sim = 5
-sim_docs = find_similar(processed_files[distances[0][1]], processed_files, key_words, num_vec_sim)
-
-print("Total processing time: ", time.time() - start_time)
-
+    sims, key_words = lda_search(processed_files[distances[0][1]], './models/dictionary.dict', 9)
 
